@@ -7,13 +7,26 @@
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 
+import { existsSync } from "node:fs";
+
+/**
+ * This container ships a Chromium that Playwright's own version lookup does not
+ * match, so it has to be pointed at explicitly. Anywhere else — a laptop with
+ * `npx playwright install chromium` — Playwright resolves its own, and forcing a
+ * path that does not exist would just fail.
+ */
+function launchOptions() {
+  const pinned = process.env.PLAYWRIGHT_CHROMIUM ?? "/opt/pw-browsers/chromium";
+  return {
+    ...(existsSync(pinned) ? { executablePath: pinned } : {}),
+    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--use-gl=angle"],
+  };
+}
+
 const OUT = process.argv[2] ?? "shots";
 mkdirSync(OUT, { recursive: true });
 
-const browser = await chromium.launch({
-  executablePath: "/opt/pw-browsers/chromium",
-  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--use-gl=angle"],
-});
+const browser = await chromium.launch(launchOptions());
 // SwiftShader runs ~15 full-screen post passes at maybe 30 Mpix/s, so a
 // 1280x800 frame costs it half a second and the game's dt clamp puts logic
 // into slow motion. Assertions therefore run small and unadorned; the beauty
