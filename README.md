@@ -5,6 +5,9 @@ Currently at the research-and-concepts stage; no code yet.
 
 ## Docs
 
+- [docs/status.md](docs/status.md) — **start here.** Full writeup: where the design
+  came from, what is built, the decisions that are locked and why, the bugs found
+  along the way, and the roadmap.
 - [docs/prior-art.md](docs/prior-art.md) — what's already been made, from the 1971 BASIC
   *Star Trek* through Star Raiders, the vector arcades, the Interplay/Totally Games era,
   and the modern indie school. Includes what's worth taking from each, and where the gap
