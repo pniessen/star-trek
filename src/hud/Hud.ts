@@ -13,6 +13,9 @@ import { appendText, measure } from "./strokeFont.js";
 
 const MAX_SEGMENTS = 6000;
 
+/** Instruments are composed against this height and scaled to the window. */
+const DESIGN_HEIGHT = 800;
+
 /**
  * Everything the player reads is something the ship is drawing. The HUD lives
  * in an orthographic overlay measured in pixels, built from the same stroke
@@ -53,12 +56,25 @@ export class Hud {
     this.scene.add(lines);
   }
 
+  /**
+   * The HUD is drawn in a fixed design space 800 units tall, and the projection
+   * scales that to whatever the window actually is. Laying instruments out in
+   * raw pixels means they collide the moment the window is small — panels
+   * overlap the scanner and the readouts become unreadable — whereas a virtual
+   * space keeps the composition identical at every size and only changes how
+   * big it appears.
+   *
+   * Width follows the aspect ratio rather than being fixed, so a wide window
+   * gets more room between the left and right instrument clusters instead of
+   * stretched glyphs.
+   */
   setSize(width: number, height: number): void {
-    this.width = width;
-    this.height = height;
+    this.height = DESIGN_HEIGHT;
+    this.width = DESIGN_HEIGHT * (width / Math.max(height, 1));
+
     this.camera.left = 0;
-    this.camera.right = width;
-    this.camera.top = height;
+    this.camera.right = this.width;
+    this.camera.top = this.height;
     this.camera.bottom = 0;
     this.camera.updateProjectionMatrix();
   }

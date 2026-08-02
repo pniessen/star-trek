@@ -25,6 +25,13 @@ export class Ship {
   angularVelocity = 0;
 
   energy = 1;
+  hull = 1;
+  torpedoes = 12;
+  phaserCooldown = 0;
+  torpedoCooldown = 0;
+  /** Non-zero briefly after a hit; drives the HUD flash and the shake. */
+  impact = 0;
+
   readonly shields: Record<ShieldFacing, number> = {
     fore: 1,
     starboard: 1,
@@ -56,7 +63,9 @@ export class Ship {
     this.angularVelocity = MathUtils.clamp(this.angularVelocity, -Ship.MAX_TURN, Ship.MAX_TURN);
     this.heading -= this.angularVelocity * dt;
 
-    const target = -this.angularVelocity * 0.42;
+    // Enough lean to sell the turn, not enough to tip the horizon over. At the
+    // old gain a sustained turn held ~50° of roll and the world went sideways.
+    const target = -this.angularVelocity * 0.15;
     this.bank += (target - this.bank) * Math.min(1, dt * 5);
 
     const forward = this.forward();
@@ -67,6 +76,10 @@ export class Ship {
     }
     this.position.addScaledVector(this.velocity, dt);
     this.position.y = 0;
+
+    this.phaserCooldown = Math.max(0, this.phaserCooldown - dt);
+    this.torpedoCooldown = Math.max(0, this.torpedoCooldown - dt);
+    this.impact = Math.max(0, this.impact - dt * 3);
 
     // Drains first, then whatever is left trickles back into the reserve.
     this.energy -= Math.abs(thrust) * Ship.THRUST_DRAIN * dt;
@@ -94,6 +107,38 @@ export class Ship {
   /** Compass bearing in degrees, 0 = +Z, clockwise. */
   get bearing(): number {
     return (MathUtils.radToDeg(this.heading) % 360 + 360) % 360;
+  }
+
+  /**
+   * Route a hit. The facing pointed at the shooter absorbs what it can and the
+   * remainder reaches the hull — so turning a fresh quarter toward whatever is
+   * shooting is the defensive skill, and neglecting to is what kills you.
+   *
+   * @returns true if any of it reached the hull.
+   */
+  takeHit(amount: number, source: Vector3): boolean {
+    const facing = this.facingFrom(source);
+    const absorbed = Math.min(this.shields[facing], amount);
+    this.shields[facing] -= absorbed;
+    this.impact = 1;
+
+    const throughput = amount - absorbed;
+    if (throughput <= 0) return false;
+    this.hull = Math.max(0, this.hull - throughput);
+    return true;
+  }
+
+  reset(): void {
+    this.position.set(0, 0, 0);
+    this.velocity.set(0, 0, 0);
+    this.heading = 0;
+    this.angularVelocity = 0;
+    this.bank = 0;
+    this.energy = 1;
+    this.hull = 1;
+    this.torpedoes = 12;
+    this.impact = 0;
+    for (const facing of FACINGS) this.shields[facing] = 1;
   }
 
   /** Which shield eats a hit arriving from `source`. */

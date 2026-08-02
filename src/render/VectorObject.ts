@@ -50,6 +50,13 @@ export class VectorObject {
   readonly edges: LineSegments2;
   readonly hull: Mesh;
 
+  /**
+   * The flat stroke list this object is drawn from, kept so an explosion can
+   * fling the actual segments that drew the ship rather than a particle system
+   * standing in for them.
+   */
+  readonly edgePositions: readonly number[];
+
   private readonly lineMaterial: LineMaterial;
   private readonly fillMaterial: MeshBasicMaterial;
   private readonly baseWidth: number;
@@ -76,6 +83,7 @@ export class VectorObject {
     const edgeGeometry = new EdgesGeometry(geometry, opts.creaseAngle ?? 18);
     const positions = Array.from(edgeGeometry.getAttribute("position").array as Float32Array);
     edgeGeometry.dispose();
+    this.edgePositions = positions;
 
     this.baseWidth = opts.linewidth ?? 1.6;
     this.lineMaterial = new LineMaterial({

@@ -86,6 +86,28 @@ export function buildInterceptor(): BufferGeometry {
 }
 
 /**
+ * The heavy: a slab. Where the interceptor is a thin dart, this is wide and
+ * blunt, so at scanner range the two are told apart by outline alone — colour
+ * cannot do that job when a contact is a dozen pixels across.
+ */
+export function buildBrawler(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  parts.push(placed(new BoxGeometry(2.2, 0.8, 3.0), at(0, 0, 0)));
+  parts.push(placed(new CylinderGeometry(0.0, 0.9, 1.4, 4), alongZ(0, 0, 2.0)));
+
+  for (const side of [-1, 1]) {
+    parts.push(placed(new BoxGeometry(0.7, 0.5, 2.2), at(side * 1.5, 0, -0.4)));
+    parts.push(
+      placed(new CylinderGeometry(0.22, 0.28, 1.6, 6), alongZ(side * 1.5, 0.45, 0.6)),
+    );
+  }
+  parts.push(placed(new BoxGeometry(1.1, 0.9, 1.0), at(0, 0.55, -1.1)));
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
  * Starbase: a drum inside a docking ring. The ring matters — docking is a skill
  * test, so the approach corridor has to be legible from a long way out.
  */

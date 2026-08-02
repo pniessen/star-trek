@@ -12,7 +12,10 @@ Currently at the research-and-concepts stage; no code yet.
 - [docs/concept-options.md](docs/concept-options.md) — four concepts (Deep Black,
   Kobayashi, Watch Officer, Long Survey), a recommendation, and the technical direction
   for the vector look.
-- [docs/pitch.html](docs/pitch.html) — the same material as a visual dossier, with a live
+- [docs/strategy-layer.md](docs/strategy-layer.md) — how empire building attaches to an
+  arcade run: the chart, build costs, refit tradeoffs, how the enemy expands, and
+  the rules that keep it from becoming homework.
+- [docs/pitch.html](docs/pitch.html) — the research as a visual dossier, with a live
   wireframe demo of the target aesthetic. Open it in a browser.
 
 ## Running it
@@ -24,20 +27,41 @@ npm run typecheck
 node tools/shots.mjs shots   # headless screenshots of every mode
 ```
 
-Arrows or WASD to turn and thrust. Toggles: `G` geometry (wireframe ↔ occluded),
-`B` bloom, `F` phosphor, `V` CRT glass, `H` HUD, `1`/`2`/`3` cockpit/chase/orbit,
-`[` `]` trail length, `-` `=` bloom strength.
+Arrows or WASD to fly, `Space` phasers, `X` torpedoes, `R` to restart.
+Toggles: `G` geometry (wireframe ↔ occluded), `B` bloom, `F` phosphor,
+`V` CRT glass, `H` diagnostics, `1`/`2`/`3` cockpit/chase/orbit, `[` `]` trail
+length, `-` `=` bloom strength.
+
+`tools/playtest.mjs` drives a whole run headlessly and asserts the combat rules
+fire — waves, kills, salvage, the multiplier, docking, death, restart.
+
+> Note for headless runs: SwiftShader takes roughly half a second per frame for
+> the post chain at 1280×800, and the loop's `dt` clamp then puts game logic
+> into slow motion. The playtest therefore runs its assertions at 640×400 with
+> post disabled and only turns everything back on for screenshots. On real
+> hardware the same chain costs under 2ms.
 
 ## Status
 
-Milestone one — the renderer — is in. Wireframe/occluded toggle, bloom, phosphor
-persistence, CRT glass, a stroke-drawn HUD with no DOM text in it, planar flight
-on a single energy pool, and four shield facings displayed. No combat yet.
+**Milestone one — renderer.** Wireframe/occluded toggle, bloom, phosphor
+persistence, CRT glass, output encode, stroke-drawn HUD with no DOM text in it.
 
-Locked design decisions: play space is a plane (so the tactical scanner never
-lies), one energy pool for thrust/shields/weapons, four separately-depleting
-shield facings, phasers that weaken with distance versus limited-ammo torpedoes.
-See [docs/concept-options.md](docs/concept-options.md).
+**Milestone two — combat.** Phasers (hitscan, energy-draining, weaker with
+distance) and torpedoes (limited, must be led); three hostiles that each punish
+one habit; shield facings that absorb by quarter; ships that explode into the
+line segments that drew them; waves; docking as a skill test; and the greed
+multiplier that ties it together.
+
+**The overhead scanner is in** — heading-up, contacts glyphed by class, off-range
+contacts pinned to the rim. It is the reason the play space is a plane.
+
+Not yet: audio, mouse aim, leaderboards, the strategy layer.
+
+Locked design decisions: play space is a plane (so the scanner never lies), one
+energy pool for thrust/shields/weapons, four separately-depleting shield
+facings, phasers that weaken with distance versus limited-ammo torpedoes, and no
+win state within a run. See [docs/concept-options.md](docs/concept-options.md)
+and [docs/strategy-layer.md](docs/strategy-layer.md).
 
 ## The short version
 
