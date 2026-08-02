@@ -15,6 +15,30 @@ Currently at the research-and-concepts stage; no code yet.
 - [docs/pitch.html](docs/pitch.html) — the same material as a visual dossier, with a live
   wireframe demo of the target aesthetic. Open it in a browser.
 
+## Running it
+
+```
+npm install
+npm run dev          # http://127.0.0.1:5173
+npm run typecheck
+node tools/shots.mjs shots   # headless screenshots of every mode
+```
+
+Arrows or WASD to turn and thrust. Toggles: `G` geometry (wireframe ↔ occluded),
+`B` bloom, `F` phosphor, `V` CRT glass, `H` HUD, `1`/`2`/`3` cockpit/chase/orbit,
+`[` `]` trail length, `-` `=` bloom strength.
+
+## Status
+
+Milestone one — the renderer — is in. Wireframe/occluded toggle, bloom, phosphor
+persistence, CRT glass, a stroke-drawn HUD with no DOM text in it, planar flight
+on a single energy pool, and four shield facings displayed. No combat yet.
+
+Locked design decisions: play space is a plane (so the tactical scanner never
+lies), one energy pool for thrust/shields/weapons, four separately-depleting
+shield facings, phasers that weaken with distance versus limited-ammo torpedoes.
+See [docs/concept-options.md](docs/concept-options.md).
+
 ## The short version
 
 Build **Kobayashi** (pure vector arcade, Sega-1982 split screen) as milestone one, then

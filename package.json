@@ -1,0 +1,22 @@
+{
+  "name": "kobayashi",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Vector arcade starship combat — renderer prototype",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.3",
+    "playwright": "^1.62.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0"
+  }
+}

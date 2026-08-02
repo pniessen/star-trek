@@ -1,0 +1,162 @@
+import {
+  AdditiveBlending,
+  BufferAttribute,
+  BufferGeometry,
+  Color,
+  LineBasicMaterial,
+  LineSegments,
+  OrthographicCamera,
+  Scene,
+} from "three";
+import { PALETTE } from "../render/palette.js";
+import { appendText, measure } from "./strokeFont.js";
+
+const MAX_SEGMENTS = 6000;
+
+/**
+ * Everything the player reads is something the ship is drawing. The HUD lives
+ * in an orthographic overlay measured in pixels, built from the same stroke
+ * vocabulary as the hulls and fed through the same bloom.
+ *
+ * One preallocated buffer, rewritten each frame — text changes every frame
+ * (speed, heading, energy), so rebuilding geometry would churn the heap.
+ */
+export class Hud {
+  readonly scene = new Scene();
+  readonly camera: OrthographicCamera;
+
+  private readonly geometry = new BufferGeometry();
+  private readonly positions = new Float32Array(MAX_SEGMENTS * 6);
+  private readonly colors = new Float32Array(MAX_SEGMENTS * 6);
+  private count = 0;
+  private overflowed = false;
+
+  private width = 1;
+  private height = 1;
+
+  constructor() {
+    this.camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
+
+    this.geometry.setAttribute("position", new BufferAttribute(this.positions, 3));
+    this.geometry.setAttribute("color", new BufferAttribute(this.colors, 3));
+
+    const material = new LineBasicMaterial({
+      vertexColors: true,
+      blending: AdditiveBlending,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+    });
+
+    const lines = new LineSegments(this.geometry, material);
+    lines.frustumCulled = false;
+    this.scene.add(lines);
+  }
+
+  setSize(width: number, height: number): void {
+    this.width = width;
+    this.height = height;
+    this.camera.left = 0;
+    this.camera.right = width;
+    this.camera.top = height;
+    this.camera.bottom = 0;
+    this.camera.updateProjectionMatrix();
+  }
+
+  begin(): void {
+    this.count = 0;
+    this.overflowed = false;
+  }
+
+  /** Flat pairs of (x0,y0,x1,y1) in pixels, origin bottom-left. */
+  segments(flat: readonly number[], color: Color): void {
+    for (let i = 0; i + 3 < flat.length; i += 4) {
+      if (this.count >= MAX_SEGMENTS) {
+        this.overflowed = true;
+        return;
+      }
+      const p = this.count * 6;
+      this.positions[p] = flat[i];
+      this.positions[p + 1] = flat[i + 1];
+      this.positions[p + 2] = 0;
+      this.positions[p + 3] = flat[i + 2];
+      this.positions[p + 4] = flat[i + 3];
+      this.positions[p + 5] = 0;
+      for (const offset of [p, p + 3]) {
+        this.colors[offset] = color.r;
+        this.colors[offset + 1] = color.g;
+        this.colors[offset + 2] = color.b;
+      }
+      this.count++;
+    }
+  }
+
+  text(value: string, x: number, y: number, scale = 2, color: Color = PALETTE.trace): number {
+    const flat: number[] = [];
+    appendText(flat, value, x, y, scale);
+    this.segments(flat, color);
+    return measure(value, scale);
+  }
+
+  /** Right-aligned to `x`. */
+  textRight(value: string, x: number, y: number, scale = 2, color: Color = PALETTE.trace): void {
+    this.text(value, x - measure(value, scale), y, scale, color);
+  }
+
+  rect(x: number, y: number, w: number, h: number, color: Color): void {
+    this.segments(
+      [x, y, x + w, y, x + w, y, x + w, y + h, x + w, y + h, x, y + h, x, y + h, x, y],
+      color,
+    );
+  }
+
+  /** A labelled level bar — the readout shape used for every ship system. */
+  gauge(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    fraction: number,
+    color: Color,
+    ticks = 4,
+  ): void {
+    this.rect(x, y, w, h, PALETTE.traceDim);
+    const filled = Math.max(0, Math.min(1, fraction)) * (w - 4);
+    const flat: number[] = [];
+    for (let i = 0; i < h - 3; i += 2) {
+      flat.push(x + 2, y + 2 + i, x + 2 + filled, y + 2 + i);
+    }
+    for (let i = 1; i < ticks; i++) {
+      const tx = x + (w * i) / ticks;
+      flat.push(tx, y, tx, y + h * 0.28);
+    }
+    this.segments(flat, color);
+  }
+
+  /** Corner brackets — frames a panel without boxing it in. */
+  brackets(x: number, y: number, w: number, h: number, size: number, color: Color): void {
+    this.segments(
+      [
+        x, y + size, x, y, x, y, x + size, y,
+        x + w - size, y, x + w, y, x + w, y, x + w, y + size,
+        x + w, y + h - size, x + w, y + h, x + w, y + h, x + w - size, y + h,
+        x + size, y + h, x, y + h, x, y + h, x, y + h - size,
+      ],
+      color,
+    );
+  }
+
+  /** Call once per frame after all drawing. */
+  end(): void {
+    this.geometry.setDrawRange(0, this.count * 2);
+    this.geometry.getAttribute("position").needsUpdate = true;
+    this.geometry.getAttribute("color").needsUpdate = true;
+    if (this.overflowed) {
+      console.warn(`HUD segment budget exceeded (${MAX_SEGMENTS}); output truncated.`);
+    }
+  }
+
+  get size(): { width: number; height: number } {
+    return { width: this.width, height: this.height };
+  }
+}

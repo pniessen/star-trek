@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KOBAYASHI — renderer prototype</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #04070b;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      /* Shown only if the renderer fails to start; everything else is drawn in-canvas. */
+      #fault {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-content: center;
+        padding: 40px;
+        color: #f2a63b;
+        font: 14px/1.6 ui-monospace, Menlo, Consolas, monospace;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="fault"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
