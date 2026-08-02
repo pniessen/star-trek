@@ -1,0 +1,798 @@
+<title>Deep Black — vector starship game, concept options</title>
+
+<style>
+  :root{
+    --void:#04070b;
+    --panel:#080d13;
+    --rule:#12303a;
+    --rule-hot:#1d5464;
+    --trace:#56e7e0;
+    --trace-dim:#2c8f92;
+    --amber:#f2a63b;
+    --magenta:#e45fa0;
+    --ink:#b9d3d8;
+    --ink-dim:#6d8c93;
+    --mono:ui-monospace,"SFMono-Regular","JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+    --sans:"Helvetica Neue",Helvetica,"Segoe UI",system-ui,sans-serif;
+  }
+
+  *{box-sizing:border-box}
+
+  body{
+    margin:0;
+    background:var(--void);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:16px;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+
+  /* faint scan texture over everything, non-interactive */
+  body::after{
+    content:"";
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    z-index:80;
+    background:repeating-linear-gradient(
+      to bottom,
+      rgba(86,231,224,.030) 0px,
+      rgba(86,231,224,.030) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    mix-blend-mode:screen;
+  }
+
+  .wrap{max-width:1120px;margin:0 auto;padding:0 28px}
+
+  /* ── status bar ───────────────────────────────────────────── */
+  .statusbar{
+    position:sticky;top:0;z-index:60;
+    background:rgba(4,7,11,.88);
+    backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--rule);
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--ink-dim);
+  }
+  .statusbar .wrap{
+    display:flex;align-items:center;gap:20px;
+    height:38px;
+    justify-content:space-between;
+  }
+  .statusbar b{color:var(--trace);font-weight:400}
+  .statusbar .right{display:flex;gap:18px}
+  .statusbar .right span::before{content:"◦ ";color:var(--rule-hot)}
+  @media (max-width:720px){ .statusbar .right span:nth-child(-n+2){display:none} }
+
+  /* ── hero ─────────────────────────────────────────────────── */
+  .hero{position:relative;border-bottom:1px solid var(--rule)}
+  #scope{display:block;width:100%;height:min(72vh,640px);background:var(--void)}
+  .hero-overlay{
+    position:absolute;inset:0;
+    display:flex;flex-direction:column;justify-content:flex-end;
+    pointer-events:none;
+  }
+  .hero-overlay .wrap{padding-bottom:38px;width:100%}
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;letter-spacing:.28em;
+    text-transform:uppercase;color:var(--trace-dim);margin:0 0 14px;
+  }
+  h1{
+    font-family:var(--sans);
+    font-size:clamp(38px,7.4vw,86px);
+    line-height:.92;
+    letter-spacing:-.02em;
+    font-weight:700;
+    text-transform:uppercase;
+    margin:0;
+    color:#e8fbfa;
+    text-wrap:balance;
+    text-shadow:0 0 26px rgba(86,231,224,.45),0 0 70px rgba(86,231,224,.18);
+  }
+  h1 em{font-style:normal;color:var(--trace);display:block}
+  .standfirst{
+    max-width:60ch;margin:18px 0 0;
+    font-size:17px;color:var(--ink);
+  }
+
+  /* ── sections ─────────────────────────────────────────────── */
+  section{padding:74px 0;border-bottom:1px solid var(--rule)}
+  .sect-head{display:flex;align-items:baseline;gap:16px;margin-bottom:34px;flex-wrap:wrap}
+  .sect-head h2{
+    font-size:26px;margin:0;font-weight:700;
+    letter-spacing:.01em;color:#dcf3f2;text-transform:uppercase;
+  }
+  .sect-head .tag{
+    font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--ink-dim);
+  }
+  .lede{max-width:66ch;margin:0 0 34px;color:var(--ink)}
+
+  /* ── pillars ──────────────────────────────────────────────── */
+  .pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--rule)}
+  .pillars > div{background:var(--panel);padding:24px}
+  .pillars h3{
+    margin:0 0 8px;font-size:13px;font-family:var(--mono);
+    letter-spacing:.16em;text-transform:uppercase;color:var(--trace);font-weight:400;
+  }
+  .pillars p{margin:0;font-size:14.5px;color:var(--ink-dim)}
+  @media (max-width:760px){.pillars{grid-template-columns:1fr}}
+
+  /* ── lineage table ────────────────────────────────────────── */
+  .scroller{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px}
+  th{
+    text-align:left;font-family:var(--mono);font-weight:400;
+    font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--ink-dim);padding:0 16px 10px 0;border-bottom:1px solid var(--rule-hot);
+    white-space:nowrap;
+  }
+  td{padding:15px 16px 15px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+  td.yr{font-family:var(--mono);color:var(--amber);font-variant-numeric:tabular-nums;white-space:nowrap}
+  td.name{color:#dcf3f2;font-weight:600;width:24%}
+  td.name small{display:block;font-weight:400;color:var(--ink-dim);font-size:12.5px;margin-top:3px}
+  td.steal{color:var(--ink-dim)}
+  td.steal b{color:var(--trace);font-weight:400}
+  tr:hover td{background:rgba(86,231,224,.035)}
+
+  /* ── option cards ─────────────────────────────────────────── */
+  .options{display:grid;grid-template-columns:repeat(2,1fr);gap:22px}
+  @media (max-width:840px){.options{grid-template-columns:1fr}}
+  .opt{
+    background:var(--panel);
+    border:1px solid var(--rule);
+    position:relative;
+    display:flex;flex-direction:column;
+    transition:border-color .25s ease;
+  }
+  .opt:hover{border-color:var(--rule-hot)}
+  .opt::before,.opt::after{
+    content:"";position:absolute;width:9px;height:9px;
+    border:1px solid var(--trace-dim);pointer-events:none;
+  }
+  .opt::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+  .opt::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+  .opt.pick{border-color:var(--trace-dim);box-shadow:0 0 0 1px rgba(86,231,224,.10),0 0 44px rgba(86,231,224,.07)}
+  .opt canvas{display:block;width:100%;height:150px;border-bottom:1px solid var(--rule)}
+  .opt-body{padding:22px 24px 26px;display:flex;flex-direction:column;gap:12px;flex:1}
+  .opt-id{
+    font-family:var(--mono);font-size:11px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--ink-dim);
+    display:flex;justify-content:space-between;align-items:center;gap:12px;
+  }
+  .badge{color:var(--void);background:var(--trace);padding:2px 8px;letter-spacing:.14em}
+  .opt h3{margin:0;font-size:22px;text-transform:uppercase;letter-spacing:.01em;color:#e4f8f6}
+  .opt .pitch{margin:0;font-size:15px;color:var(--ink)}
+  .opt dl{margin:6px 0 0;display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font-size:14px}
+  .opt dt{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-dim);padding-top:3px;
+  }
+  .opt dd{margin:0;color:var(--ink-dim)}
+  .opt dd.risk{color:var(--amber)}
+
+  /* ── recommendation ───────────────────────────────────────── */
+  .rec{
+    display:grid;grid-template-columns:1fr 1fr;gap:0;
+    border:1px solid var(--rule-hot);background:var(--panel);
+  }
+  @media (max-width:840px){.rec{grid-template-columns:1fr}}
+  .rec > div{padding:30px 32px}
+  .rec > div + div{border-left:1px solid var(--rule)}
+  @media (max-width:840px){.rec > div + div{border-left:0;border-top:1px solid var(--rule)}}
+  .rec h3{margin:0 0 12px;font-size:19px;text-transform:uppercase;color:var(--trace)}
+  .rec p{margin:0 0 12px;font-size:15px}
+  .rec p:last-child{margin-bottom:0}
+  .steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
+  .steps li{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:baseline;font-size:14.5px}
+  .steps .wk{
+    font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--amber);
+    font-variant-numeric:tabular-nums;white-space:nowrap;
+  }
+  .steps b{color:#dcf3f2;font-weight:600}
+
+  /* ── tech recipe ──────────────────────────────────────────── */
+  .recipe{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--rule)}
+  @media (max-width:760px){.recipe{grid-template-columns:1fr}}
+  .recipe > div{background:var(--panel);padding:20px 22px}
+  .recipe dt{
+    font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--trace);margin-bottom:6px;
+  }
+  .recipe dd{margin:0;font-size:14.5px;color:var(--ink-dim)}
+  .stack{
+    font-family:var(--mono);font-size:13px;color:var(--ink);
+    border:1px dashed var(--rule-hot);padding:14px 18px;margin:0 0 26px;
+    overflow-x:auto;white-space:nowrap;
+  }
+  .stack span{color:var(--amber)}
+
+  /* ── footer ───────────────────────────────────────────────── */
+  footer{padding:46px 0 70px;font-size:13.5px;color:var(--ink-dim)}
+  footer h3{
+    font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--magenta);margin:0 0 10px;font-weight:400;
+  }
+  footer p{max-width:74ch;margin:0 0 14px}
+  footer a{color:var(--trace-dim)}
+  footer a:hover{color:var(--trace)}
+  .srcs{display:flex;flex-wrap:wrap;gap:8px 18px;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em}
+
+  a:focus-visible,canvas:focus-visible{outline:2px solid var(--trace);outline-offset:3px}
+</style>
+
+<div class="statusbar">
+  <div class="wrap">
+    <div><b>DEEP&nbsp;BLACK</b> &nbsp;· &nbsp;concept dossier</div>
+    <div class="right">
+      <span>prior art surveyed</span>
+      <span>4 options</span>
+      <span id="clock">stardate ——</span>
+    </div>
+  </div>
+</div>
+
+<div class="hero">
+  <canvas id="scope" aria-label="Animated wireframe starship rotating over a tactical grid"></canvas>
+  <div class="hero-overlay">
+    <div class="wrap">
+      <p class="eyebrow">Research &amp; concept options — August 2026</p>
+      <h1>A starship game<em>drawn in light</em></h1>
+      <p class="standfirst">
+        First-person combat, a galaxy that moves while you're busy, and the phosphor-glow
+        vector look the arcades left behind in 1983. Here's what's already been built,
+        what's worth taking from it, and four ways to make the thing.
+      </p>
+    </div>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <div class="sect-head">
+      <h2>The brief, in three parts</h2>
+      <span class="tag">what has to be true</span>
+    </div>
+    <div class="pillars">
+      <div>
+        <h3>01 · Battle, first person</h3>
+        <p>You're behind the glass. Aim, manage shield facings, feel the hull take a hit —
+        not a top-down icon exchanging numbers with another icon.</p>
+      </div>
+      <div>
+        <h3>02 · Navigate &amp; decide</h3>
+        <p>A map with pressure on it. Where you go costs energy and time, and the situation
+        degrades while you're heads-down in a fight somewhere else.</p>
+      </div>
+      <div>
+        <h3>03 · Vector, not retro</h3>
+        <p>Glowing strokes, additive blending, beam overshoot at the corners. Nostalgic in
+        recipe, 2026 in execution — this is a shader problem, not a pixel-art one.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sect-head">
+      <h2>What's already been made</h2>
+      <span class="tag">fifty-five years of prior art</span>
+    </div>
+    <p class="lede">
+      This genre has been solved in pieces, repeatedly, by people working under severe
+      constraints — and the pieces have never been assembled with modern rendering. The
+      right-hand column is the shortlist of what to take.
+    </p>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Year</th><th>Title</th><th>What it solved</th><th>Take</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="yr">1971</td>
+            <td class="name">Star Trek<small>Mike Mayfield, BASIC</small></td>
+            <td>8×8 quadrants of 8×8 sectors, a stardate deadline, energy and torpedoes as
+                scarce currency, starbases to dock at.</td>
+            <td class="steal"><b>The deadline.</b> Exploring is a gamble against a clock, not a free action.</td>
+          </tr>
+          <tr>
+            <td class="yr">1979</td>
+            <td class="name">Star Raiders<small>Atari 8-bit · Doug Neubauer</small></td>
+            <td>The fusion: 3D cockpit for combat, 2D Galactic Chart for strategy, hyperwarp
+                between them, subsystem damage, enemy fleets that advance in real time.</td>
+            <td class="steal"><b>The whole loop.</b> This is the brief, already proven — and nobody has remade it.</td>
+          </tr>
+          <tr>
+            <td class="yr">1980–83</td>
+            <td class="name">Battlezone · Tempest · Star Wars<small>Atari, true vector CRT</small></td>
+            <td>First-person wireframe combat with a radar; the colour XY monitor; the
+                trench run. The entire visual vocabulary.</td>
+            <td class="steal"><b>Phosphor bloom.</b> Overdriven lines, halo, beam overshoot — a post-process, not a model.</td>
+          </tr>
+          <tr>
+            <td class="yr">1982</td>
+            <td class="name">Strategic Operations Simulator<small>Sega arcade · Captain's Chair cabinet</small></td>
+            <td>Split screen: forward view below for aiming, overhead scanner above for
+                awareness. First licensed Trek arcade game, true vector.</td>
+            <td class="steal"><b>The split display.</b> Solves "first-person needs spatial awareness" and looks superb.</td>
+          </tr>
+          <tr>
+            <td class="yr">1984</td>
+            <td class="name">Elite<small>Braben &amp; Bell</small></td>
+            <td>Wireframe 3D across eight procedural galaxies on 32K. Docking as a skill
+                test worth failing.</td>
+            <td class="steal"><b>Scale from nothing.</b> Lines carry a huge world cheaply.</td>
+          </tr>
+          <tr>
+            <td class="yr">1992</td>
+            <td class="name">25th Anniversary<small>Interplay · episodic</small></td>
+            <td>Away mission bookended by ship combat, then scored on how diplomatically
+                you handled it. Shooting cost you points.</td>
+            <td class="steal"><b>Rewarding restraint.</b> Almost nobody ships this, and it's the most on-theme mechanic there is.</td>
+          </tr>
+          <tr>
+            <td class="yr">1999–02</td>
+            <td class="name">Starfleet Command · Bridge Commander<small>Interplay / Totally Games</small></td>
+            <td>Tabletop-grade tactical combat — per-facing shields, energy allocation each
+                tick — and giving orders to a crew instead of flying yourself.</td>
+            <td class="steal"><b>Energy budget &amp; shield facings.</b> A real decision every few seconds.</td>
+          </tr>
+          <tr>
+            <td class="yr">2010–17</td>
+            <td class="name">Artemis · EmptyEpsilon · Bridge Crew<small>open source &amp; VR</small></td>
+            <td>Six players, one ship, one station each. Proved the bridge-crew fantasy has
+                pull — and that it dies without a populated lobby.</td>
+            <td class="steal"><b>Station design.</b> EmptyEpsilon is open source and worth reading.</td>
+          </tr>
+          <tr>
+            <td class="yr">2012–23</td>
+            <td class="name">FTL · Duskers · NEBULOUS<small>the modern school</small></td>
+            <td>Ship-as-systems-under-pressure; diegetic instruments instead of a HUD;
+                fighting radar contacts rather than ships.</td>
+            <td class="steal"><b>Diegetic UI.</b> Everything you read is something the ship is drawing — which is what vector wants anyway.</td>
+          </tr>
+          <tr>
+            <td class="yr">2018</td>
+            <td class="name">Tempest 4000<small>Llamasoft / Atari</small></td>
+            <td>The vector look rebuilt with shaders at 4K/60. Proof the aesthetic reads as
+                current, not as nostalgia.</td>
+            <td class="steal"><b>The reference render.</b> This is the visual bar.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sect-head">
+      <h2>Four ways to build it</h2>
+      <span class="tag">same pillars, different mixes</span>
+    </div>
+    <div class="options">
+
+      <article class="opt pick">
+        <canvas class="thumb" data-mode="a" aria-label="Sketch: sector chart beside a cockpit reticle"></canvas>
+        <div class="opt-body">
+          <div class="opt-id"><span>Option A</span><span class="badge">Recommended</span></div>
+          <h3>Deep Black</h3>
+          <p class="pitch">A modern <em>Star Raiders</em>. Real-time first-person cockpit
+          combat welded to a live strategic chart, as 30–60 minute roguelike runs. Enemy
+          fleets move on the map while you fight; docking to repair costs you ground.</p>
+          <dl>
+            <dt>Why</dt><dd>Exactly the brief, shape already proven, and no modern version exists.</dd>
+            <dt>Risk</dt><dd class="risk">Two systems that must pressure each other. Mitigated by building B first.</dd>
+            <dt>Scope</dt><dd>10–14 weeks to a strong vertical slice.</dd>
+          </dl>
+        </div>
+      </article>
+
+      <article class="opt">
+        <canvas class="thumb" data-mode="b" aria-label="Sketch: split screen with overhead scanner above a cockpit view"></canvas>
+        <div class="opt-body">
+          <div class="opt-id"><span>Option B</span><span>fastest to fun</span></div>
+          <h3>Kobayashi</h3>
+          <p class="pitch">Pure vector arcade — the Sega 1982 split screen, escalating
+          waves, a docking mini-game, a leaderboard. Five-minute sessions, no meta-layer.
+          The aesthetic showcase, and A's first milestone either way.</p>
+          <dl>
+            <dt>Why</dt><dd>All the feel work, none of the strategy code. Ships in weeks.</dd>
+            <dt>Risk</dt><dd class="risk">Thin. If the feel isn't there, nothing else holds it up.</dd>
+            <dt>Scope</dt><dd>4–5 weeks to genuinely fun.</dd>
+          </dl>
+        </div>
+      </article>
+
+      <article class="opt">
+        <canvas class="thumb" data-mode="c" aria-label="Sketch: bridge station rings and power allocation bars"></canvas>
+        <div class="opt-body">
+          <div class="opt-id"><span>Option C</span><span>deepest systems</span></div>
+          <h3>Watch Officer</h3>
+          <p class="pitch">You command; you don't pilot. Viewscreen forward, stations
+          around it. Order helm to a heading, tactical to target their weapons, engineering
+          to shunt power to shields — and watch it execute with lag. Combat is budget and
+          facing, not aim.</p>
+          <dl>
+            <dt>Why</dt><dd>Strongest captain fantasy; instruments are line drawings already. Co-op later.</dd>
+            <dt>Risk</dt><dd class="risk">"First person" becomes a viewscreen. Interface-heavy games take longer to make readable.</dd>
+            <dt>Scope</dt><dd>12–16 weeks, co-op a separate project.</dd>
+          </dl>
+        </div>
+      </article>
+
+      <article class="opt">
+        <canvas class="thumb" data-mode="d" aria-label="Sketch: quadrant grid with an anomaly contact"></canvas>
+        <div class="opt-body">
+          <div class="opt-id"><span>Option D</span><span>most distinctive</span></div>
+          <h3>Long Survey</h3>
+          <p class="pitch">Exploration-forward. The 1971 quadrant grid as a place to
+          investigate rather than clear: anomalies, derelicts, first contacts, distress
+          calls, resolved as short vector-drawn encounters. Combat is punctuation, and the
+          score rewards restraint.</p>
+          <dl>
+            <dt>Why</dt><dd>Nobody is making this, and encounters are cheap to write forever.</dd>
+            <dt>Risk</dt><dd class="risk">Furthest from "first-person battle". Needs real writing, which is a different production.</dd>
+            <dt>Scope</dt><dd>8 weeks for the frame, then content.</dd>
+          </dl>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sect-head">
+      <h2>The call</h2>
+      <span class="tag">sequencing</span>
+    </div>
+    <div class="rec">
+      <div>
+        <h3>Build B, then grow it into A</h3>
+        <p>They share a renderer, a flight model, a combat model and an art direction —
+        B <em>is</em> A's cockpit with the chart removed. That order puts something
+        playable and good-looking in front of you in about a month, proves the feel before
+        we commit to the strategy layer, and de-risks the only genuinely hard part of A:
+        making two layers apply pressure to each other.</p>
+        <p>Keep D's encounter system in the back pocket. It drops straight into A's chart
+        later as "what you find when you warp into an empty sector" — which is exactly the
+        content A will be short of.</p>
+      </div>
+      <div>
+        <ul class="steps">
+          <li><span class="wk">wk 1–2</span><span><b>Renderer.</b> Wireframe pipeline, bloom, phosphor decay, stroke-drawn HUD glyphs. One ship rotating in a void that already looks right.</span></li>
+          <li><span class="wk">wk 3–5</span><span><b>Kobayashi.</b> Flight model, waves, shield facings, docking, leaderboard. Playable, shareable, honest arcade game.</span></li>
+          <li><span class="wk">wk 6–8</span><span><b>The chart.</b> 8×8 sectors, fleets that advance on a clock, hyperwarp in and out, energy as one shared currency.</span></li>
+          <li><span class="wk">wk 9–12</span><span><b>The run.</b> Starbases that can fall, subsystem damage that persists between fights, a win and a loss condition.</span></li>
+          <li><span class="wk">wk 13+</span><span><b>Encounters.</b> D's content system, seeded into empty sectors.</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sect-head">
+      <h2>How the look is made</h2>
+      <span class="tag">the recipe</span>
+    </div>
+    <p class="stack">TypeScript &nbsp;<span>+</span>&nbsp; Vite &nbsp;<span>+</span>&nbsp; Three.js (WebGL2) &nbsp;<span>+</span>&nbsp; WebAudio synthesis &nbsp;<span>—</span>&nbsp; no game engine, no asset pipeline, runs from a link</p>
+    <div class="recipe">
+      <div><dt>Geometry</dt><dd>Wireframe only, drawn with fat lines (<code>LineSegments2</code>) so strokes keep real width and don't dissolve at distance.</dd></div>
+      <div><dt>Glow</dt><dd>Bloom at a high threshold so only traces bloom, plus a second wide-radius low-strength pass for the halo.</dd></div>
+      <div><dt>Phosphor decay</dt><dd>Feedback buffer — blend the previous frame back at ~0.85 so fast motion smears the way a CRT does.</dd></div>
+      <div><dt>Beam artefacts</dt><dd>Brightness overshoot at line endpoints; corners hold the beam a moment longer than edges, exactly as an XY monitor did.</dd></div>
+      <div><dt>Colour</dt><dd>Additive blending throughout, so overlapping traces bloom to white where they cross. Cyan hull, amber alerts, magenta for the unknown.</dd></div>
+      <div><dt>Explosions</dt><dd>Break the model into its own line segments and fling them. No particles, no sprites — the ship comes apart into the strokes that drew it.</dd></div>
+      <div><dt>Type &amp; HUD</dt><dd>Stroke-drawn glyphs on the same canvas, never DOM text, so every readout lives in one visual world.</dd></div>
+      <div><dt>Audio</dt><dd>Synthesised, not sampled — square-wave bleeps, filtered noise for warp, a drone that rises with alert level. Keeps the download tiny.</dd></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <h3>One caution before we name it</h3>
+    <p>
+      Paramount's published fan guidelines cover films — under 15 minutes, under $50k
+      raised, non-commercial — and there is no games equivalent. Fan games using the marks
+      have been shut down. The genre isn't protectable; the marks are. So: our own name,
+      our own universe, no delta insignia, no LCARS layout, no familiar species. Everything
+      in this dossier is mechanics and rendering, all of it fair game.
+    </p>
+    <p class="srcs">
+      <a href="https://en.wikipedia.org/wiki/Star_Raiders">Star Raiders</a>
+      <a href="https://en.wikipedia.org/wiki/Star_Trek_(1971_video_game)">Star Trek 1971</a>
+      <a href="https://memory-alpha.fandom.com/wiki/Star_Trek:_Strategic_Operations_Simulator">Sega 1982</a>
+      <a href="https://en.wikipedia.org/wiki/Tempest_4000">Tempest 4000</a>
+      <a href="https://github.com/daid/EmptyEpsilon">EmptyEpsilon</a>
+      <a href="https://en.wikipedia.org/wiki/FTL:_Faster_Than_Light">FTL</a>
+      <a href="https://store.steampowered.com/app/887570/NEBULOUS_Fleet_Command/">NEBULOUS</a>
+      <a href="https://tvtropes.org/pmwiki/pmwiki.php/VideoGame/StarTrekBridgeCommander">Bridge Commander</a>
+      <a href="https://www.fastcompany.com/3061242/cbs-and-paramount-have-official-guidelines-for-people-making-star-trek-fan-films">Fan guidelines</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var TRACE = "#56e7e0", AMBER = "#f2a63b", DIM = "#2c8f92", MAG = "#e45fa0";
+
+  /* ── tiny 3D wireframe helpers ─────────────────────────── */
+  function rotY(p, a){ var c=Math.cos(a),s=Math.sin(a); return [p[0]*c+p[2]*s, p[1], -p[0]*s+p[2]*c]; }
+  function rotX(p, a){ var c=Math.cos(a),s=Math.sin(a); return [p[0], p[1]*c-p[2]*s, p[1]*s+p[2]*c]; }
+
+  /* a cruiser: saucer ring, neck, hull, two nacelles — as line pairs */
+  function buildShip(){
+    var E = [], i, a, b, N = 18, R = 1.25;
+    for (i = 0; i < N; i++){                       // saucer rim
+      a = i/N*Math.PI*2; b = (i+1)/N*Math.PI*2;
+      E.push([[Math.cos(a)*R, 0, Math.sin(a)*R + 1.1],[Math.cos(b)*R, 0, Math.sin(b)*R + 1.1]]);
+    }
+    for (i = 0; i < N; i += 3){                    // saucer spokes to dome
+      a = i/N*Math.PI*2;
+      E.push([[Math.cos(a)*R, 0, Math.sin(a)*R + 1.1],[0, .34, 1.1]]);
+      E.push([[Math.cos(a)*R, 0, Math.sin(a)*R + 1.1],[0, -.28, 1.1]]);
+    }
+    E.push([[0,0,1.1],[0,-.15,-.5]]);              // neck
+    var hull = [[-.42,-.22,-.5],[.42,-.22,-.5],[.42,-.22,-2.1],[-.42,-.22,-2.1]];
+    var top  = [[-.42,.16,-.5],[.42,.16,-.5],[.30,.16,-2.1],[-.30,.16,-2.1]];
+    for (i = 0; i < 4; i++){
+      E.push([hull[i], hull[(i+1)%4]]);
+      E.push([top[i],  top[(i+1)%4]]);
+      E.push([hull[i], top[i]]);
+    }
+    [-1, 1].forEach(function (s){                  // nacelles + pylons
+      var x = s*1.15, y = .52;
+      E.push([[x,y,.55],[x,y,-1.75]]);
+      E.push([[x-.16,y-.16,.4],[x-.16,y-.16,-1.6]]);
+      E.push([[x+.16,y-.16,.4],[x+.16,y-.16,-1.6]]);
+      E.push([[x,y,.55],[x-.16,y-.16,.4]]);
+      E.push([[x,y,.55],[x+.16,y-.16,.4]]);
+      E.push([[x,y,-1.75],[x-.16,y-.16,-1.6]]);
+      E.push([[x,y,-1.75],[x+.16,y-.16,-1.6]]);
+      E.push([[s*.38,-.05,-1.2],[x,y-.1,-1.0]]);   // pylon
+    });
+    return E;
+  }
+  var SHIP = buildShip();
+
+  function stroke(ctx, col, w, glow){
+    ctx.strokeStyle = col; ctx.lineWidth = w;
+    ctx.shadowColor = col; ctx.shadowBlur = glow;
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+  }
+
+  /* ── hero scope ────────────────────────────────────────── */
+  var cv = document.getElementById("scope"), cx = cv.getContext("2d");
+  var W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var stars = [];
+  for (var i = 0; i < 130; i++)
+    stars.push({ x: Math.random()*2-1, y: Math.random()*2-1, z: Math.random()*3 + .4 });
+
+  function size(){
+    var r = cv.getBoundingClientRect();
+    W = r.width; H = r.height;
+    cv.width = W*DPR; cv.height = H*DPR;
+    cx.setTransform(DPR,0,0,DPR,0,0);
+    cx.fillStyle = "#04070b"; cx.fillRect(0,0,W,H);
+  }
+  size();
+  window.addEventListener("resize", size);
+
+  var t = 0;
+  function frame(){
+    t += reduced ? 0 : 1/60;
+
+    cx.globalCompositeOperation = "source-over";      // phosphor decay
+    cx.fillStyle = "rgba(4,7,11,0.30)";
+    cx.fillRect(0,0,W,H);
+    cx.globalCompositeOperation = "lighter";
+
+    var cxp = W*0.5, cyp = H*0.52, F = Math.min(W,H)*0.78;
+
+    /* drifting starfield */
+    stroke(cx, DIM, 1, 6);
+    cx.globalAlpha = .55;
+    stars.forEach(function (s){
+      s.z -= reduced ? 0 : 0.006;
+      if (s.z < .35){ s.z = 3.4; s.x = Math.random()*2-1; s.y = Math.random()*2-1; }
+      var px = cxp + s.x*F/s.z, py = cyp + s.y*F/s.z;
+      if (px < -20 || px > W+20 || py < -20 || py > H+20) return;
+      cx.beginPath(); cx.moveTo(px,py); cx.lineTo(px, py+1.4); cx.stroke();
+    });
+    cx.globalAlpha = 1;
+
+    /* tactical grid plane below */
+    stroke(cx, "#0e4a55", 1, 8);
+    var gy = cyp + Math.min(H,560)*0.30, span = 11;
+    for (var i = -span; i <= span; i++){
+      var x0 = cxp + i*(F*0.115), yTop = gy, yBot = H + 60;
+      cx.beginPath();
+      cx.moveTo(cxp + (x0-cxp)*0.16, yTop);
+      cx.lineTo(cxp + (x0-cxp)*2.6,  yBot);
+      cx.stroke();
+    }
+    var drift = reduced ? 0 : (t*0.55) % 1;
+    for (var r = 0; r < 9; r++){
+      var k = (r + drift)/9, yy = gy + Math.pow(k,2.1)*(H - gy + 60);
+      if (yy > H + 10) continue;
+      cx.globalAlpha = .28 + k*0.5;
+      cx.beginPath(); cx.moveTo(0, yy); cx.lineTo(W, yy); cx.stroke();
+    }
+    cx.globalAlpha = 1;
+
+    /* the ship */
+    var ay = t*0.34, ax = Math.sin(t*0.42)*0.24 - 0.28;
+    var scale = Math.min(W,H)*0.20, bob = Math.sin(t*0.8)*6;
+    stroke(cx, TRACE, 1.5, 14);
+    cx.beginPath();
+    SHIP.forEach(function (e){
+      var p = rotX(rotY(e[0], ay), ax), q = rotX(rotY(e[1], ay), ax);
+      var pz = p[2] + 6.2, qz = q[2] + 6.2;
+      if (pz < .4 || qz < .4) return;
+      cx.moveTo(cxp + p[0]/pz*scale*4.2, cyp - p[1]/pz*scale*4.2 + bob);
+      cx.lineTo(cxp + q[0]/qz*scale*4.2, cyp - q[1]/qz*scale*4.2 + bob);
+    });
+    cx.stroke();
+
+    /* reticle + corner ticks */
+    stroke(cx, AMBER, 1.2, 10);
+    cx.globalAlpha = .75;
+    var rr = Math.min(W,H)*0.115;
+    cx.beginPath();
+    for (var q2 = 0; q2 < 4; q2++){
+      var a0 = q2*Math.PI/2 + 0.34, a1 = a0 + Math.PI/2 - 0.68;
+      cx.arc(cxp, cyp + bob, rr, a0, a1);
+      cx.moveTo(cxp + Math.cos(a1+0.34)*rr*0.72, cyp + bob + Math.sin(a1+0.34)*rr*0.72);
+      cx.lineTo(cxp + Math.cos(a1+0.34)*rr*1.05, cyp + bob + Math.sin(a1+0.34)*rr*1.05);
+    }
+    cx.stroke();
+    cx.globalAlpha = 1;
+
+    /* sweep line */
+    if (!reduced){
+      stroke(cx, MAG, 1, 12);
+      cx.globalAlpha = .35;
+      var sw = (t*0.5) % 1, sx = sw*W;
+      cx.beginPath(); cx.moveTo(sx, 0); cx.lineTo(sx, H); cx.stroke();
+      cx.globalAlpha = 1;
+    }
+
+    cx.shadowBlur = 0;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  /* ── option thumbnails ─────────────────────────────────── */
+  document.querySelectorAll(".thumb").forEach(function (c){
+    var g = c.getContext("2d"), mode = c.getAttribute("data-mode");
+    function draw(){
+      var r = c.getBoundingClientRect(), w = r.width, h = r.height;
+      c.width = w*DPR; c.height = h*DPR;
+      g.setTransform(DPR,0,0,DPR,0,0);
+      g.fillStyle = "#080d13"; g.fillRect(0,0,w,h);
+      g.globalCompositeOperation = "lighter";
+      var i, j;
+
+      if (mode === "a"){                              // chart | cockpit
+        stroke(g, DIM, 1, 6);
+        for (i = 0; i <= 6; i++){
+          g.beginPath(); g.moveTo(16 + i*18, 22); g.lineTo(16 + i*18, 130); g.stroke();
+          g.beginPath(); g.moveTo(16, 22 + i*18);  g.lineTo(124, 22 + i*18); g.stroke();
+        }
+        stroke(g, AMBER, 1.4, 10);
+        [[52,58],[88,40],[70,112]].forEach(function (p){
+          g.beginPath(); g.arc(p[0],p[1],3.5,0,7); g.stroke();
+        });
+        stroke(g, TRACE, 1.4, 10);
+        g.beginPath(); g.arc(34,94,4.5,0,7); g.stroke();
+        g.beginPath(); g.moveTo(34,94); g.lineTo(70,112); g.stroke();
+        stroke(g, "#153c47", 1, 4);
+        g.beginPath(); g.moveTo(w*0.52, 10); g.lineTo(w*0.52, h-10); g.stroke();
+        stroke(g, TRACE, 1.3, 12);
+        var ox = w*0.76, oy = h*0.5;
+        g.beginPath();
+        g.moveTo(ox-30, oy+26); g.lineTo(ox, oy+8); g.lineTo(ox+30, oy+26);
+        g.moveTo(ox-16, oy-14); g.lineTo(ox+16, oy-14);
+        g.moveTo(ox-16, oy-14); g.lineTo(ox-22, oy+4);
+        g.moveTo(ox+16, oy-14); g.lineTo(ox+22, oy+4);
+        g.stroke();
+        stroke(g, AMBER, 1.2, 10);
+        g.beginPath(); g.arc(ox, oy-4, 15, 0.5, 2.6); g.arc(ox, oy-4, 15, 3.6, 5.7); g.stroke();
+      }
+
+      else if (mode === "b"){                          // split screen
+        stroke(g, "#153c47", 1, 4);
+        g.beginPath(); g.moveTo(0, h*0.40); g.lineTo(w, h*0.40); g.stroke();
+        stroke(g, DIM, 1, 8);                          // scanner sweep
+        g.beginPath(); g.arc(w/2, h*0.40, 46, Math.PI, 0); g.stroke();
+        g.beginPath(); g.arc(w/2, h*0.40, 24, Math.PI, 0); g.stroke();
+        stroke(g, MAG, 1.2, 10);
+        g.beginPath(); g.moveTo(w/2, h*0.40); g.lineTo(w/2 + 44, h*0.40 - 18); g.stroke();
+        stroke(g, AMBER, 1.4, 10);
+        [[-30,-14],[18,-30],[36,-8]].forEach(function (p){
+          g.beginPath(); g.arc(w/2+p[0], h*0.40+p[1], 2.6, 0, 7); g.stroke();
+        });
+        stroke(g, TRACE, 1.4, 12);                     // cockpit frame + targets
+        g.beginPath();
+        g.moveTo(10, h-8); g.lineTo(34, h*0.52); g.lineTo(w-34, h*0.52); g.lineTo(w-10, h-8);
+        g.stroke();
+        for (j = 0; j < 3; j++){
+          var tx = 46 + j*54, ty = h*0.68 + (j%2)*16, s = 9 - j*2;
+          g.beginPath();
+          g.moveTo(tx-s, ty); g.lineTo(tx, ty-s*0.6); g.lineTo(tx+s, ty);
+          g.lineTo(tx, ty+s*0.5); g.closePath(); g.stroke();
+        }
+      }
+
+      else if (mode === "c"){                          // stations + power
+        stroke(g, DIM, 1, 8);
+        g.beginPath(); g.arc(w/2, h*0.52, 52, 0, 7); g.stroke();
+        g.beginPath(); g.arc(w/2, h*0.52, 34, 0, 7); g.stroke();
+        stroke(g, TRACE, 1.3, 12);
+        for (i = 0; i < 6; i++){
+          var a = i/6*Math.PI*2 - Math.PI/2;
+          g.beginPath();
+          g.arc(w/2 + Math.cos(a)*52, h*0.52 + Math.sin(a)*52, 5, 0, 7);
+          g.stroke();
+        }
+        stroke(g, AMBER, 3, 10);                       // power bars
+        var lv = [0.9, 0.55, 0.75, 0.35];
+        for (i = 0; i < 4; i++){
+          var by = 26 + i*13;
+          g.beginPath(); g.moveTo(w-70, by); g.lineTo(w-70 + 52*lv[i], by); g.stroke();
+        }
+        stroke(g, "#153c47", 1, 4);
+        for (i = 0; i < 4; i++){
+          var by2 = 26 + i*13;
+          g.beginPath(); g.moveTo(w-70, by2); g.lineTo(w-18, by2); g.stroke();
+        }
+      }
+
+      else {                                           // d — quadrant + anomaly
+        stroke(g, DIM, 1, 6);
+        for (i = 0; i <= 8; i++){
+          g.beginPath(); g.moveTo(w/2-72 + i*18, 20); g.lineTo(w/2-72 + i*18, 128); g.stroke();
+          g.beginPath(); g.moveTo(w/2-72, 20 + i*13.5); g.lineTo(w/2+72, 20 + i*13.5); g.stroke();
+        }
+        stroke(g, MAG, 1.5, 16);                       // anomaly
+        var axc = w/2 + 18, ayc = 66;
+        for (i = 0; i < 3; i++){
+          g.globalAlpha = 1 - i*0.28;
+          g.beginPath(); g.arc(axc, ayc, 8 + i*9, 0, 7); g.stroke();
+        }
+        g.globalAlpha = 1;
+        stroke(g, TRACE, 1.4, 12);
+        g.beginPath(); g.arc(w/2-45, 100, 4, 0, 7); g.stroke();
+        g.setLineDash([4,5]);
+        g.beginPath(); g.moveTo(w/2-45, 100); g.lineTo(axc-10, ayc+8); g.stroke();
+        g.setLineDash([]);
+        stroke(g, AMBER, 1.2, 8);
+        g.beginPath(); g.arc(w/2-58, 40, 3, 0, 7); g.moveTo(w/2+58, 112); g.arc(w/2+58, 112, 3, 0, 7); g.stroke();
+      }
+      g.shadowBlur = 0;
+    }
+    draw();
+    window.addEventListener("resize", draw);
+  });
+
+  /* stardate readout, derived from today */
+  var d = new Date();
+  var doy = (d - new Date(d.getFullYear(), 0, 0)) / 86400000;
+  document.getElementById("clock").textContent =
+    "stardate " + ((d.getFullYear() - 2000) * 1000 + Math.floor(doy * 2.74)).toFixed(0) + ".4";
+})();
+</script>
