@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "standalone": "vite build && node tools/build-standalone.mjs",
+    "playtest": "node tools/playtest.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

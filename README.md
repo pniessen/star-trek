@@ -1,7 +1,8 @@
 # Deep Black — working title
 
 A starship game with first-person vector combat and a galaxy that moves while you're busy.
-Currently at the research-and-concepts stage; no code yet.
+Currently a playable arcade run — combat, waves, docking and the greed multiplier —
+with the strategy layer designed but not yet built.
 
 ## Docs
 
