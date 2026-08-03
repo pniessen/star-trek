@@ -17,7 +17,13 @@ export interface Sector {
   control: Control;
   /** 1-5. Drives wave escalation for a run dropped here. */
   threat: number;
-  /** 0-3. Multiplies salvage earned here. Correlates with threat by design. */
+  /**
+   * 0-3. Salvage earned here is scaled by `1 + yield`, not by `yield` itself —
+   * a bare multiply would zero every kill in a yield-0 sector, including the
+   * one every fresh campaign starts in, which is a kill switch on the greed
+   * loop rather than the multiplier it's meant to be. So yield-0 pays the
+   * unscaled rate and yield-3 pays 4x. Correlates with threat by design.
+   */
   yield: number;
   structures: Structure[];
   patrol?: Patrol;

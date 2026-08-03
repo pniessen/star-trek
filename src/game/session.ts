@@ -46,6 +46,11 @@ export class Session {
   readonly docking: Docking;
   readonly death = new DeathSequence();
   readonly hitStop = new HitStop();
+  // Public because the HUD and a headless harness both need to read `.phase`
+  // and `.progress`. Do not call `.begin()` on it directly — it has no idea
+  // what sector it's headed for. `Session.beginHyperwarp` is the one place
+  // that sets `hyperwarpDestination` before starting the charge; going
+  // through the raw object skips that and arrives somewhere stale.
   readonly hyperwarp = new Hyperwarp();
   /** Sector a charge is headed for. -1 when idle — `hyperwarp.phase` is the source of truth for "charging". */
   private hyperwarpDestination = -1;
@@ -189,6 +194,7 @@ export class Session {
   /** Releasing early spends the energy already drained for nothing — that is the price of the gamble. */
   cancelHyperwarp(): void {
     this.hyperwarp.cancel();
+    this.hyperwarpDestination = -1;
   }
 
   private arrive(player: Ship): void {
@@ -335,6 +341,7 @@ export class Session {
     // The dead branch of update() never steps hyperwarp, so a charge caught
     // mid-spin-up would otherwise sit at "charging" forever.
     this.hyperwarp.cancel();
+    this.hyperwarpDestination = -1;
     this.hitStop.strike(HIT_STOP.death);
     this.death.begin(player, this.playerShape, this.debris);
     this.say("SHIP LOST");
