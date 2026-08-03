@@ -247,7 +247,7 @@ because there is no win condition in the loop being measured. Whether the
 pressure formula needs a cap is now an open question, recorded in §7, rather
 than a thing this instrument can quietly settle.
 
-`tools/playtest.mjs` grew from 17 to 35 assertions to cover the in-run half:
+`tools/playtest.mjs` grew from 17 to 34 assertions to cover the in-run half:
 that hyperwarp charges, that weapons are locked while charging, that arrival
 halves the multiplier and costs energy, that the chart raises its own
 opacity and steps the cursor one sector at a time without walking it off the
@@ -266,7 +266,7 @@ command view and its four decisions.
 ### Verification
 
 `tools/playtest.mjs` drives a whole run headlessly and has grown, feature by
-feature, to thirty-five assertions: waves spawn and escalate, phasers draw
+feature, to thirty-four assertions: waves spawn and escalate, phasers draw
 energy and torpedoes deplete, kills bank salvage and climb the multiplier,
 docking banks and resupplies and resets, hit-stop dilates time and always lets
 go, death breaks the player up and reaches the tally, restart is clean, the
