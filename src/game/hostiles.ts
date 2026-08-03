@@ -1,4 +1,4 @@
-import { MathUtils, Vector3 } from "three";
+import { Color, MathUtils, Vector3 } from "three";
 import { VectorObject } from "../render/VectorObject.js";
 import { PALETTE } from "../render/palette.js";
 import { BOLT, type Ordnance } from "./weapons.js";
@@ -10,6 +10,20 @@ import type { Ship } from "./Ship.js";
  * scanner by its outline and know immediately what it will do to you.
  */
 export type HostileKind = "swarmer" | "sniper" | "brawler";
+
+/** Class names as the fiction knows them; the keys stay role-descriptive. */
+export const HOSTILE_NAMES: Record<HostileKind, string> = {
+  swarmer: "RAIDER",
+  sniper: "LANCE",
+  brawler: "BASTION",
+};
+
+/** Hue per class — see the palette for why each is what it is. */
+export const HOSTILE_COLORS: Record<HostileKind, Color> = {
+  swarmer: PALETTE.raider,
+  sniper: PALETTE.lance,
+  brawler: PALETTE.bastion,
+};
 
 export interface HostileSpec {
   readonly hull: number;
@@ -189,7 +203,7 @@ export class Fleet {
     const shape = this.pool[kind].pop() ?? this.makeShape(kind);
     shape.group.visible = true;
     shape.group.scale.setScalar(spec.scale);
-    shape.setColor(PALETTE.amber);
+    shape.setColor(HOSTILE_COLORS[kind]);
 
     const hostile = new Hostile(kind, spec, shape);
     hostile.position.copy(position);

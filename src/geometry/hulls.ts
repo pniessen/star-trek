@@ -62,47 +62,102 @@ export function buildCruiser(): BufferGeometry {
 }
 
 /**
- * The hostile: a forward-swept dart. Angular where the cruiser is round, so the
- * two read apart instantly at a distance — silhouette is doing the work that
- * colour alone cannot when a contact is a dozen pixels wide.
+ * The hostile roster is built from the genre's silhouette grammar rather than
+ * from any particular studio's ships: a stooping raptor, a horseshoe with its
+ * mouth open, and a bulb on a neck between swept wings. Those three outlines
+ * have meant "predator", "elegant capital ship" and "battlecruiser" in screen
+ * science fiction since the sixties, and they are recognisable at the size of a
+ * scanner blip, which is the only size that matters here.
+ *
+ * All three are our own geometry. The archetype is shared vocabulary; the
+ * specific hulls are not.
  */
-export function buildInterceptor(): BufferGeometry {
+
+/**
+ * Raider — the stooping raptor. Forward-swept wings drooping into a dive, a
+ * narrow body, a head thrust out in front on a short neck. Reads as fast and
+ * predatory before you can make out any detail.
+ */
+export function buildRaider(): BufferGeometry {
   const parts: BufferGeometry[] = [];
 
-  parts.push(placed(new CylinderGeometry(0.0, 0.46, 2.2, 3, 1), alongZ(0, 0, 0.3)));
-  parts.push(placed(new CylinderGeometry(0.34, 0.24, 0.9, 3, 1), alongZ(0, 0, -1.1)));
+  parts.push(placed(new BoxGeometry(0.52, 0.36, 2.3), at(0, 0, -0.2)));
+  parts.push(placed(new BoxGeometry(0.28, 0.22, 1.0), at(0, -0.02, 1.3)));
+  // The head: a small faceted wedge out in front.
+  parts.push(placed(new CylinderGeometry(0.0, 0.34, 0.9, 4), alongZ(0, -0.02, 2.1)));
 
   for (const side of [-1, 1]) {
+    // Swept forward and drooped — the dive.
+    const wing = at(side * 1.25, -0.32, 0.05)
+      .multiply(new Matrix4().makeRotationY(side * -0.44))
+      .multiply(new Matrix4().makeRotationZ(side * 0.38));
+    parts.push(placed(new BoxGeometry(2.4, 0.1, 1.05), wing));
+    // Wingtip pods, canted with the wing.
     parts.push(
       placed(
-        new BoxGeometry(1.5, 0.09, 0.62),
-        at(side * 0.82, 0, -0.55).multiply(new Matrix4().makeRotationY(side * 0.42)),
+        new CylinderGeometry(0.15, 0.1, 1.3, 5),
+        at(side * 2.25, -0.72, 0.5).multiply(new Matrix4().makeRotationX(Math.PI / 2)),
       ),
     );
-    parts.push(placed(new CylinderGeometry(0.11, 0.11, 0.8, 6, 1), alongZ(side * 1.34, 0, -0.75)));
   }
+  parts.push(placed(new BoxGeometry(0.3, 0.5, 0.7), at(0, 0.3, -1.1)));
 
   return mergeGeometries(parts, false)!;
 }
 
 /**
- * The heavy: a slab. Where the interceptor is a thin dart, this is wide and
- * blunt, so at scanner range the two are told apart by outline alone — colour
- * cannot do that job when a contact is a dozen pixels across.
+ * Lance — the horseshoe. Two long hulls joined only at the stern, leaving the
+ * bow open around a central spine. Big, slow to turn, and unmistakable in
+ * outline even at extreme range, which suits something that shoots from there.
  */
-export function buildBrawler(): BufferGeometry {
+export function buildLance(): BufferGeometry {
   const parts: BufferGeometry[] = [];
 
-  parts.push(placed(new BoxGeometry(2.2, 0.8, 3.0), at(0, 0, 0)));
-  parts.push(placed(new CylinderGeometry(0.0, 0.9, 1.4, 4), alongZ(0, 0, 2.0)));
-
   for (const side of [-1, 1]) {
-    parts.push(placed(new BoxGeometry(0.7, 0.5, 2.2), at(side * 1.5, 0, -0.4)));
+    parts.push(placed(new CylinderGeometry(0.26, 0.34, 4.4, 6), alongZ(side * 1.2, 0, 0.3)));
+    // A slight inward cant at the bow, so the mouth tapers.
     parts.push(
-      placed(new CylinderGeometry(0.22, 0.28, 1.6, 6), alongZ(side * 1.5, 0.45, 0.6)),
+      placed(
+        new BoxGeometry(0.34, 0.3, 1.2),
+        at(side * 1.05, 0, 2.2).multiply(new Matrix4().makeRotationY(side * 0.16)),
+      ),
     );
   }
-  parts.push(placed(new BoxGeometry(1.1, 0.9, 1.0), at(0, 0.55, -1.1)));
+
+  // Stern yoke joining the two hulls, and the spine down the middle.
+  parts.push(placed(new BoxGeometry(2.9, 0.42, 0.9), at(0, 0, -1.95)));
+  parts.push(placed(new BoxGeometry(0.34, 0.34, 2.6), at(0, 0, -0.8)));
+  parts.push(placed(new CylinderGeometry(0.0, 0.3, 1.1, 5), alongZ(0, 0, 0.9)));
+  parts.push(placed(new CylinderGeometry(0.5, 0.5, 0.4, 8), at(0, 0.36, -1.95)));
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
+ * Bastion — the battlecruiser. A faceted command bulb thrust forward on a long
+ * neck, a heavy body behind it, wings swept back to engine pods. Wide, blunt,
+ * and obviously the thing you should not let get close.
+ */
+export function buildBastion(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  // Command bulb: low-poly on purpose, so its facets catch the light as edges.
+  parts.push(placed(new CylinderGeometry(0.5, 0.86, 0.7, 7), at(0, 0.05, 2.5)));
+  parts.push(placed(new CylinderGeometry(0.86, 0.4, 0.6, 7), at(0, -0.5, 2.5)));
+  parts.push(placed(new BoxGeometry(0.38, 0.34, 2.1), at(0, 0.05, 1.15)));
+
+  parts.push(placed(new BoxGeometry(1.6, 0.72, 2.4), at(0, 0, -1.0)));
+  parts.push(placed(new CylinderGeometry(0.34, 0.5, 0.7, 6), alongZ(0, 0, -2.4)));
+
+  for (const side of [-1, 1]) {
+    parts.push(
+      placed(
+        new BoxGeometry(1.9, 0.16, 1.0),
+        at(side * 1.5, -0.06, -1.35).multiply(new Matrix4().makeRotationY(side * 0.5)),
+      ),
+    );
+    parts.push(placed(new CylinderGeometry(0.24, 0.24, 2.0, 6), alongZ(side * 2.25, -0.12, -1.15)));
+  }
 
   return mergeGeometries(parts, false)!;
 }

@@ -3,7 +3,7 @@ import { PALETTE } from "../render/palette.js";
 import type { Hud } from "./Hud.js";
 import { FACINGS, type Ship } from "../game/Ship.js";
 import type { Session } from "../game/session.js";
-import type { Fleet } from "../game/hostiles.js";
+import { HOSTILE_COLORS, type Fleet } from "../game/hostiles.js";
 import { TORPEDO } from "../game/weapons.js";
 
 export interface HudView {
@@ -66,8 +66,11 @@ export function drawHud(hud: Hud, view: HudView): void {
     drawReticle(hud, width / 2, height / 2, player.impact);
   }
 
-  if (session.state === "docking") {
-    drawDockingPrompt(hud, session.dockProgress, width / 2, height / 2 - 150);
+  if (session.docking.phase !== "none") {
+    // The band between the ship and the scanner is the only reliably clear
+    // strip: the shield cluster owns the bottom, the ship sits in the lower
+    // third in chase view, and the scanner owns the top.
+    drawDockingPanel(hud, view, width / 2, 420);
   }
 
   if (session.messageTimer > 0) {
@@ -177,7 +180,7 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   // not merely that something is.
   for (const hostile of fleet.hostiles) {
     const mark = project(hostile.position);
-    scratch.copy(PALETTE.amber).multiplyScalar(mark.clamped ? 0.45 : 1);
+    scratch.copy(HOSTILE_COLORS[hostile.kind]).multiplyScalar(mark.clamped ? 0.45 : 1);
     const marks: number[] = [];
 
     if (mark.clamped) {
@@ -254,7 +257,7 @@ function drawTally(hud: Hud, view: HudView, width: number): void {
   const right = width - 34;
 
   hud.textRight("SCORE", right, 128, 1.5, PALETTE.traceDim);
-  hud.textRight(pad(session.score, 6), right, 100, 3.2, PALETTE.trace);
+  hud.textRight(pad(session.displayScore, 6), right, 100, 3.2, PALETTE.trace);
 
   // The greed loop, made legible: what is on the table, and what it is worth
   // if you can get it home.
@@ -285,12 +288,66 @@ function drawReticle(hud: Hud, cx: number, cy: number, impact: number): void {
   );
 }
 
-function drawDockingPrompt(hud: Hud, progress: number, cx: number, cy: number): void {
-  const segments: number[] = [];
-  arc(segments, cx, cy, 30, Math.PI / 2, Math.PI / 2 - progress * Math.PI * 2, 26);
-  hud.segments(segments, PALETTE.trace);
-  const label = "DOCKING";
-  hud.text(label, cx - (label.length * 4.2 * 1.6) / 2, cy - 46, 1.6, PALETTE.trace);
+/**
+ * The approach instrument: a lateral needle, a speed bar, and a status line.
+ *
+ * Flying the corridor blind was the problem — you could satisfy the conditions
+ * without ever knowing what they were. This shows the two things being asked of
+ * you and turns green when each is satisfied, so lining up is a thing you do
+ * rather than a thing that happens.
+ */
+function drawDockingPanel(hud: Hud, view: HudView, cx: number, cy: number): void {
+  const { docking } = view.session;
+  const g = docking.info;
+  const centred = (text: string, y: number, scale: number, color: Color) =>
+    hud.text(text, cx - (text.length * 4.2 * scale) / 2, y, scale, color);
+
+  if (docking.phase === "aligning") {
+    const width = 150;
+
+    // Lateral needle: how far off the corridor centreline, clamped to the bar.
+    hud.segments([cx - width, cy, cx + width, cy], PALETTE.traceDim);
+    for (const side of [-1, 1]) {
+      hud.segments([cx + side * 26, cy - 5, cx + side * 26, cy + 5], PALETTE.traceDim);
+    }
+    const offset = MathUtils.clamp(g.lateral * 5.5, -width, width);
+    scratch.copy(Math.abs(g.lateral) < 5 ? PALETTE.trace : PALETTE.amber);
+    hud.segments([cx + offset, cy - 13, cx + offset, cy + 13], scratch);
+    hud.textRight("LATERAL", cx - width - 12, cy - 4, 1.4, PALETTE.traceDim);
+
+    // Speed, with the capture ceiling marked.
+    const barY = cy - 32;
+    hud.gauge(cx - width, barY, width * 2, 12, Math.min(1, g.speed / 40), g.speedOk ? PALETTE.trace : PALETTE.amber, 4);
+    const ceiling = cx - width + (16 / 40) * width * 2;
+    hud.segments([ceiling, barY - 4, ceiling, barY + 16], PALETTE.magenta);
+    hud.textRight("SPEED", cx - width - 12, barY + 2, 1.4, PALETTE.traceDim);
+
+    scratch.copy(g.headingOk && g.speedOk ? PALETTE.trace : PALETTE.amber);
+    centred(docking.status, cy + 26, 1.8, scratch);
+    centred(`RANGE ${pad(g.range, 3)}`, cy - 56, 1.4, PALETTE.traceDim);
+    return;
+  }
+
+  if (docking.phase === "capture") {
+    const segments: number[] = [];
+    arc(segments, cx, cy, 34, Math.PI / 2, Math.PI / 2 - docking.captureProgress * Math.PI * 2, 26);
+    hud.segments(segments, PALETTE.magenta);
+    centred("TRACTOR LOCK", cy + 52, 2.2, PALETTE.magenta);
+    return;
+  }
+
+  // Moored and released: the service readout and the itemised tally.
+  centred(docking.status, cy + 52, 2.0, PALETTE.trace);
+
+  const bank = view.session.lastBank;
+  if (docking.phase === "released" && bank.total > 0) {
+    centred(
+      `${pad(bank.salvage, 5)}  X${bank.multiplier.toFixed(1)}  =  ${pad(bank.total, 6)}`,
+      cy + 22,
+      2.0,
+      PALETTE.amber,
+    );
+  }
 }
 
 function drawDiagnostics(hud: Hud, view: HudView, width: number, height: number): void {

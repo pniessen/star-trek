@@ -3,10 +3,10 @@ import { Stage } from "./render/Stage.js";
 import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { PALETTE } from "./render/palette.js";
-import { buildBrawler, buildCruiser, buildInterceptor, buildStarbase } from "./geometry/hulls.js";
+import { buildBastion, buildCruiser, buildLance, buildRaider, buildStarbase } from "./geometry/hulls.js";
 import { createGrid, createStarfield } from "./scene/environment.js";
 import { Ship } from "./game/Ship.js";
-import { Fleet, type HostileKind } from "./game/hostiles.js";
+import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Session } from "./game/session.js";
 import { drawHud } from "./hud/draw.js";
 
@@ -37,8 +37,9 @@ stage.scene.add(grid.object, createStarfield(), trace.object);
 
 const HULLS = {
   cruiser: buildCruiser(),
-  interceptor: buildInterceptor(),
-  brawler: buildBrawler(),
+  swarmer: buildRaider(),
+  sniper: buildLance(),
+  brawler: buildBastion(),
 };
 
 const player = new Ship();
@@ -48,8 +49,8 @@ const playerHull = new VectorObject(HULLS.cruiser, {
 }).addTo(stage.scene);
 
 const fleet = new Fleet((kind: HostileKind) =>
-  new VectorObject(kind === "brawler" ? HULLS.brawler : HULLS.interceptor, {
-    color: PALETTE.amber,
+  new VectorObject(HULLS[kind], {
+    color: HOSTILE_COLORS[kind],
     linewidth: 1.4,
   }).addTo(stage.scene),
 );
@@ -214,11 +215,19 @@ function frame(now: number): void {
     (held.has("arrowup") || held.has("w") ? 1 : 0) -
     (held.has("arrowdown") || held.has("s") ? 1 : 0);
 
-  if (alive) player.update({ turn, thrust }, dt);
+  // The station takes the helm during capture, and holds you in place while
+  // moored — you can still turn and shoot, which is what stops a wave arriving
+  // mid-dock from being a helpless mauling.
+  const dock = session.docking;
+  if (alive && !dock.controlsLocked) {
+    const departing = dock.clearing ? Math.min(thrust, 0) : thrust;
+    player.update({ turn, thrust: dock.held ? 0 : departing, held: dock.held }, dt);
+  }
 
   session.update(dt, player, {
     firePhaser: alive && (held.has(" ") || pressed.has(" ")),
     fireTorpedo: alive && (held.has("x") || pressed.has("x")),
+    thrust: alive && thrust > 0,
   });
   pressed.clear();
 
@@ -233,6 +242,7 @@ function frame(now: number): void {
   trace.begin();
   session.ordnance.draw(trace);
   session.debris.draw(trace);
+  session.docking.draw(trace, player);
   trace.end();
 
   grid.follow(player.position.x, player.position.z);

@@ -3,6 +3,8 @@ import { MathUtils, Vector3 } from "three";
 export interface ShipInput {
   turn: number; // -1 left … +1 right
   thrust: number; // -1 reverse … +1 forward
+  /** Moored: the ship may turn but cannot translate. */
+  held?: boolean;
 }
 
 export type ShieldFacing = "fore" | "starboard" | "aft" | "port";
@@ -74,7 +76,11 @@ export class Ship {
     if (this.velocity.lengthSq() > Ship.MAX_SPEED ** 2) {
       this.velocity.setLength(Ship.MAX_SPEED);
     }
-    this.position.addScaledVector(this.velocity, dt);
+    if (input.held) {
+      this.velocity.multiplyScalar(1 - Math.min(1, dt * 8));
+    } else {
+      this.position.addScaledVector(this.velocity, dt);
+    }
     this.position.y = 0;
 
     this.phaserCooldown = Math.max(0, this.phaserCooldown - dt);

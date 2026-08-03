@@ -1,25 +1,23 @@
 import { Vector3 } from "three";
 import { DebrisField } from "./debris.js";
-import { Fleet, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
+import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
 import { Ordnance, PHASER, TORPEDO, phaserDamageAt } from "./weapons.js";
+import { Docking } from "./docking.js";
 import type { Ship } from "./Ship.js";
-import { PALETTE } from "../render/palette.js";
 
-export type SessionState = "fighting" | "clear" | "docking" | "docked" | "dead";
+/**
+ * Combat phase only. Docking is tracked separately on `docking`, because the
+ * two are independent: a wave can arrive while you are clamped to the station,
+ * and it should.
+ */
+export type SessionState = "fighting" | "clear" | "dead";
 
 export interface CombatInput {
   readonly firePhaser: boolean;
   readonly fireTorpedo: boolean;
+  /** Thrust doubles as the request to leave the mooring. */
+  readonly thrust: boolean;
 }
-
-/** Docking is a skill test, not a menu: come in slow, lined up, and vulnerable. */
-const DOCK = {
-  radius: 16,
-  maxSpeed: 9,
-  /** How far off the approach bearing you may be, radians. */
-  tolerance: 0.9,
-  duration: 1.9,
-} as const;
 
 const WAVE_BREAK = 2.6;
 const PLAYER_RADIUS = 2.6;
@@ -36,6 +34,7 @@ const PLAYER_RADIUS = 2.6;
 export class Session {
   readonly ordnance = new Ordnance();
   readonly debris = new DebrisField();
+  readonly docking: Docking;
 
   state: SessionState = "clear";
   wave = 0;
@@ -45,7 +44,15 @@ export class Session {
   pending = 0;
   kills = 0;
 
-  dockProgress = 0;
+  /**
+   * The score as displayed, chasing the real one. A number that jumps is a
+   * number nobody watches; an odometer rolling up is the payoff for the whole
+   * greed loop, so it is worth the four lines.
+   */
+  displayScore = 0;
+  /** Frozen at the moment of banking, so the tally can be shown itemised. */
+  lastBank = { salvage: 0, multiplier: 1, total: 0 };
+
   breakTimer = WAVE_BREAK;
   message = "STAND BY";
   messageTimer = 2;
@@ -55,15 +62,20 @@ export class Session {
 
   constructor(
     private readonly fleet: Fleet,
-    private readonly starbase: Vector3,
-  ) {}
+    starbase: Vector3,
+  ) {
+    this.docking = new Docking(starbase);
+  }
 
   get docked(): boolean {
-    return this.state === "docked" || this.state === "docking";
+    return this.docking.held;
   }
 
   update(dt: number, player: Ship, input: CombatInput): void {
     this.messageTimer = Math.max(0, this.messageTimer - dt);
+    // Ease the odometer toward the real score, framerate-independently.
+    this.displayScore += (this.score - this.displayScore) * (1 - Math.pow(0.006, dt));
+    if (Math.abs(this.score - this.displayScore) < 0.6) this.displayScore = this.score;
 
     if (this.state === "dead") {
       this.ordnance.update(dt);
@@ -80,7 +92,13 @@ export class Session {
     this.ordnance.update(dt);
     this.resolveProjectiles(player);
     this.debris.update(dt);
-    this.updateDocking(dt, player);
+    this.docking.update(
+      dt,
+      player,
+      input.thrust,
+      () => this.say("HARD DOCK"),
+      () => this.bank(),
+    );
     this.updateWaves(dt, player);
 
     if (player.hull <= 0) this.kill(player);
@@ -161,7 +179,7 @@ export class Session {
     this.debris.burst(
       hostile.shape.edgePositions,
       hostile.shape.group.matrixWorld,
-      PALETTE.amber,
+      HOSTILE_COLORS[hostile.kind],
       impulse,
       hostile.kind === "brawler" ? 1.4 : 1,
     );
@@ -181,57 +199,31 @@ export class Session {
     void player;
   }
 
-  // ── docking ──────────────────────────────────────────────────────────────
+  // ── banking ──────────────────────────────────────────────────────────────
 
-  private updateDocking(dt: number, player: Ship): void {
-    const toBase = this.scratch.copy(this.starbase).sub(player.position);
-    const distance = toBase.length();
-
-    if (distance > DOCK.radius) {
-      if (this.dockProgress > 0) this.dockProgress = Math.max(0, this.dockProgress - dt * 2);
-      if (this.state === "docking" || this.state === "docked") this.state = "fighting";
-      return;
-    }
-
-    const aligned =
-      player.speed < DOCK.maxSpeed &&
-      player.forward(this.nose).angleTo(toBase.normalize()) < DOCK.tolerance;
-
-    if (!aligned) {
-      this.dockProgress = Math.max(0, this.dockProgress - dt);
-      return;
-    }
-
-    this.state = "docking";
-    this.dockProgress += dt / DOCK.duration;
-    if (this.dockProgress < 1) return;
-
-    this.bank(player);
-  }
-
-  private bank(player: Ship): void {
-    const banked = Math.round(this.pending * this.multiplier);
-    this.score += banked;
+  /**
+   * Called by the docking sequence at the salvage-transfer stage. Repair and
+   * rearm are handled there, staged over time; this is only the money.
+   */
+  private bank(): void {
+    const total = Math.round(this.pending * this.multiplier);
+    this.lastBank = { salvage: this.pending, multiplier: this.multiplier, total };
+    this.score += total;
     this.pending = 0;
     this.multiplier = 1;
-    this.dockProgress = 0;
-    this.state = "docked";
-
-    player.energy = 1;
-    player.hull = 1;
-    player.torpedoes = TORPEDO.capacity;
-    for (const facing of ["fore", "starboard", "aft", "port"] as const) {
-      player.shields[facing] = 1;
-    }
-
-    this.say(banked > 0 ? `BANKED ${banked}` : "RESUPPLIED");
+    this.say(total > 0 ? `BANKED ${total}` : "RESUPPLIED");
   }
 
   // ── waves ────────────────────────────────────────────────────────────────
 
+  /**
+   * Runs whatever the docking state is. Pausing the clock while moored made
+   * the station a place to hide, which is the opposite of what the greed loop
+   * needs — sitting there has to cost you the time it takes.
+   */
   private updateWaves(dt: number, player: Ship): void {
     if (this.fleet.hostiles.length > 0) {
-      if (this.state === "fighting" || this.state === "clear") this.state = "fighting";
+      this.state = "fighting";
       return;
     }
 
@@ -242,7 +234,6 @@ export class Session {
       return;
     }
 
-    if (this.state !== "clear") return;
     this.breakTimer -= dt;
     if (this.breakTimer <= 0) this.spawnWave(player);
   }
@@ -280,14 +271,16 @@ export class Session {
     this.fleet.clear();
     this.ordnance.clear();
     this.debris.clear();
+    this.docking.reset();
     player.reset();
     this.state = "clear";
     this.wave = 0;
     this.score = 0;
+    this.displayScore = 0;
     this.multiplier = 1;
     this.pending = 0;
     this.kills = 0;
-    this.dockProgress = 0;
+    this.lastBank = { salvage: 0, multiplier: 1, total: 0 };
     this.breakTimer = 1.4;
     this.say("STAND BY");
   }
