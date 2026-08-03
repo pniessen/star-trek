@@ -298,6 +298,14 @@ function placeWreckCamera(death: DeathSequence, time: number): void {
 const CHART_FADE_RATE = 7;
 
 /**
+ * Where WASD hands off between flying the ship and moving the chart cursor,
+ * in terms of `chartOpacity`. Past this point the overlay reads as "up" to a
+ * player even mid-fade, so the controls should already agree with what their
+ * eyes are telling them rather than waiting for the fade to finish.
+ */
+const CHART_INPUT_THRESHOLD = 0.5;
+
+/**
  * Exponential approach toward `target`, framerate-independent by construction
  * rather than merely close for small `dt`. The chart's fade is the one place
  * this file eases anything, so it earns its own tiny helper instead of
@@ -331,7 +339,7 @@ function frame(now: number): void {
   // Past the midpoint of the fade WASD is reading the map, not flying the
   // ship. Below it, control hands straight back — there is no separate mode
   // to get stuck in, just where this one number happens to be.
-  const chartActive = chartOpacity > 0.5;
+  const chartActive = chartOpacity > CHART_INPUT_THRESHOLD;
   if (chartActive) {
     const col = colOf(chartCursor);
     const row = rowOf(chartCursor);

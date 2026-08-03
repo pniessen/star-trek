@@ -7,7 +7,6 @@ import { canDock, type Campaign, type Control } from "./campaign.js";
 /** Laid out in the HUD's fixed 800-unit design space, like everything else. */
 export const CHART = {
   size: 460,
-  margin: 24,
 } as const;
 
 /**
@@ -17,11 +16,13 @@ export const CHART = {
  * `PALETTE.trace` is the player's own cyan (see palette.ts) and `PALETTE.magenta`
  * is already the "unresolved" hue used by the scanner's ghost contacts, so both
  * are reused here rather than adding new named colours to the roster.
+ * `PALETTE.amber` ("alerts, and the raider class") is the same reuse for
+ * "theirs" — not a lookalike literal, the actual catalogued colour.
  */
 const CONTROL_COLOR: Record<Control, Color> = {
   ours: PALETTE.trace,
   contested: PALETTE.magenta,
-  theirs: new Color(0xffa63d),
+  theirs: PALETTE.amber,
 };
 
 export function drawChart(
@@ -30,7 +31,13 @@ export function drawChart(
   opacity: number,
   cursor: number,
 ): void {
-  if (opacity <= 0) return;
+  // `chartOpacity` is an exponential ease in main.ts: it approaches zero after
+  // the player releases Tab but never mathematically reaches it, so `<= 0`
+  // would only ever be true before the first press. Without a real cutoff
+  // this function would keep rebuilding ~64 sectors of segments every frame
+  // for the rest of the session at a brightness indistinguishable from off —
+  // exactly what `Hud`'s preallocated-buffer design exists to avoid.
+  if (opacity < 1e-3) return;
 
   // `Hud` draws in a 0..width, 0..800 space with the origin at the bottom
   // left, not centred on zero — so the chart centres itself here, on the
