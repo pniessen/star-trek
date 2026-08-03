@@ -106,6 +106,37 @@ scene → bloom → phosphor persistence → CRT glass → output encode → scr
   instrument shows lateral offset and speed so lining up is something you do.
   Waves keep coming while you are moored — you can turn and shoot, but not move.
 
+### Feel
+
+- **Hit-stop** on torpedo impact, on kills, on a hull breach and on death. It is
+  an explicitly bounded multiplier on game seconds, never a freeze, refreshed
+  rather than accumulated, and drained on wall-clock seconds so dilation can
+  never slow its own recovery — see the last entry in §4 for why that was worth
+  spelling out in a class comment rather than a constant.
+- **Dying is a sequence too.** The hull comes apart into its own edge segments,
+  through the same debris field every hostile goes through; a shock ring runs
+  out across the plane; hit-stop holds the moment; the camera lets go of the
+  ship, holds low and close, then rises and pulls back into a tilted orbit of
+  the wreck; the instruments brown out as one failing supply rather than
+  blinking off; and the run is added up on emergency power, with what it was
+  worth one dock short of home as the number that lands hardest.
+
+### The arcade shell
+
+A title screen, a demonstration, and the game. The title is one of the ship's
+own instruments — brackets, a rule, dim labels against bright values, the same
+stroke font as every other readout, over a slow orbit of the cruiser. Attract
+mode is not a canned animation: it is the real session with a demo pilot on the
+stick, so everything the demo shows is something the game genuinely does,
+including flying the docking corridor home once the pot is worth banking. Any
+key that is not a display toggle takes the controls, and an abandoned death
+tally falls back to attracting the way a cabinet does.
+
+This is a shell *around* the session rather than a state inside it:
+`Session.state` is still only `clear`/`fighting`/`dead`, because a title screen
+is not a phase of combat and pretending it was would put a fourth case into
+every rule that reads the run. The shell is `__probe.mode`.
+
 ### The scanner
 
 Heading-up, contacts glyphed by class, off-range contacts pinned to the rim.
@@ -117,7 +148,14 @@ it is half the interface, exactly as it was on the 1982 cabinet.
 `tools/playtest.mjs` drives a whole run headlessly and asserts eleven rules —
 waves spawn, phasers draw energy, kills bank salvage, the multiplier climbs,
 torpedoes deplete, explosions produce debris, docking banks and resupplies and
-resets, hull loss ends the run, restart is clean. All passing.
+resets, hull loss ends the run, restart is clean.
+
+**The harness now has to launch its own run.** A fresh load lands on the title
+screen and nothing spawns behind it, so the first assertion needs a keypress —
+`await page.keyboard.press("Enter")` after `goto`, or
+`window.__presentation.startRun()` — before waiting on wave one. Without it the
+page sits on the title for thirteen seconds and then starts a demonstration
+that fights the harness for the keyboard.
 
 ---
 
@@ -189,9 +227,8 @@ takes longer than the run, the layer has failed and we cut it back.
 - **Mouse aim.** Aiming is currently the nose, which is the Sega model and
   correct for a planar game. Mouse aim is worth testing but may make it too easy.
 - **Leaderboards and persistence.** `localStorage` and a seeded RNG when it
-  arrives; no backend, no accounts.
-- **Title and attract mode.** Arcade attract screens are a free showcase for the
-  aesthetic and should exist eventually.
+  arrives; no backend, no accounts. The title screen shows a best-of-this-
+  sitting and says so, rather than implying a record it does not keep.
 - **The remaining two hostiles** — the mine-layer and the cloaker. The cloaker
   is the interesting one: it appears only as an unresolved contact, which makes
   the *scanner* the skill rather than the reticle.
@@ -212,9 +249,10 @@ want a human on the keyboard. Specifically: turn rate and drag, phaser falloff
 curve, how fast the multiplier climbs, and whether the wave break is too long.
 This is the one item on the list that cannot be done by reasoning about it.
 
-**Next — game feel.** Hit-stop on torpedo impact, audio, better death, and the
-attract mode. Feel is most of what an arcade game is, and it is cheap to iterate
-now the renderer exists.
+**Next — game feel.** Hit-stop, the death sequence and the attract mode are
+built; audio is the piece still missing, and every one of the new constants is a
+first-draft guess. Feel is most of what an arcade game is, and it is cheap to
+iterate now the renderer exists.
 
 **Weeks 6–8 — the chart, in-run.** An 8×8 sector map, hyperwarp between sectors,
 fleets that advance on a clock while you fight. This is the step that turns
