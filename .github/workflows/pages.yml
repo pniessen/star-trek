@@ -1,0 +1,55 @@
+name: Deploy to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race. Queue rather than cancel, so a push that lands
+# during a deploy still ships instead of being silently dropped.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The campaign rules run in bare node with no browser, so they are cheap
+      # enough to gate a deploy on. `npm run playtest` is not here: it needs a
+      # Playwright browser download and a dev server, which is a different
+      # order of cost and belongs in its own workflow if it is ever wanted.
+      - name: Assert the campaign rules
+        run: npm run campaigntest
+
+      # Runs `tsc --noEmit` before vite, so a type error fails the deploy.
+      - name: Build
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
