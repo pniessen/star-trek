@@ -83,8 +83,9 @@ check("affordable spending succeeds", spendSalvage(c, 200) === true, `salvage=${
 check("...and debits", c.salvage === 300, `salvage=${c.salvage}`);
 check("unaffordable spending is refused", spendSalvage(c, 9999) === false, "refused");
 check("...and changes nothing", c.salvage === 300, `salvage=${c.salvage}`);
-creditSalvage(c, -50);
-check("salvage never goes negative", c.salvage >= 0, `salvage=${c.salvage}`);
+// Drive it well past zero: a clamp that is never crossed is not tested.
+creditSalvage(c, -500);
+check("salvage never goes negative", c.salvage === 0, `salvage=${c.salvage}`);
 
 // ── win and loss ────────────────────────────────────────────────────────────
 check("a fresh campaign is neither won nor lost", !isWon(c) && !isLost(c), "in progress");
