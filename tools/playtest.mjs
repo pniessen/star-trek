@@ -45,16 +45,31 @@ const check = (label, ok, detail) => {
   if (!ok) problems.push(`assertion failed: ${label} (${detail})`);
 };
 
+/**
+ * Poll until the game reaches a state rather than sleeping a fixed span. How
+ * much simulated time a wall-clock second buys depends on the host's GL — a
+ * fast laptop and a SwiftShader container differ by 2x or more — so fixed
+ * sleeps make every downstream assertion a coin flip. On timeout this returns
+ * the last state seen and lets the caller's check() report the real failure.
+ */
+const waitFor = async (predicate, timeout = 25000) => {
+  const deadline = Date.now() + timeout;
+  let state = await probe();
+  while (!predicate(state) && Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    state = await probe();
+  }
+  return state;
+};
+
 await page.goto("http://127.0.0.1:5173/", { waitUntil: "networkidle" });
 await page.evaluate(() => {
   window.__stage.bloom.enabled = false;
   window.__stage.phosphor.enabled = false;
   window.__stage.crt.enabled = false;
 });
-await page.waitForTimeout(3400);
-
 // ── wave one arrives ────────────────────────────────────────────────────────
-let state = await probe();
+let state = await waitFor((s) => s.wave >= 1 && s.hostiles > 0);
 check("wave spawns", state.wave >= 1 && state.hostiles > 0, JSON.stringify(state));
 
 // ── shoot something ─────────────────────────────────────────────────────────
@@ -71,12 +86,11 @@ await page.evaluate(() => {
   }
 });
 await page.keyboard.down(" ");
-await page.waitForTimeout(2600);
+state = await waitFor((s) => s.energy < 1 && s.pending > 0 && s.multiplier > 1);
 await page.screenshot({ path: `${OUT}/combat.png` });
 await page.keyboard.up(" ");
 await page.waitForTimeout(300);
 
-state = await probe();
 check("phaser draws energy", state.energy < 1, `energy=${state.energy}`);
 check("kills bank salvage", state.pending > 0, `pending=${state.pending}`);
 check("multiplier climbs", state.multiplier > 1, `x${state.multiplier}`);
@@ -84,8 +98,7 @@ check("multiplier climbs", state.multiplier > 1, `x${state.multiplier}`);
 // ── torpedoes ───────────────────────────────────────────────────────────────
 const before = (await probe()).torpedoes;
 await page.keyboard.press("x");
-await page.waitForTimeout(250);
-state = await probe();
+state = await waitFor((s) => s.torpedoes === before - 1, 5000);
 check("torpedo consumes ammunition", state.torpedoes === before - 1, `${before} → ${state.torpedoes}`);
 
 // ── debris ──────────────────────────────────────────────────────────────────
@@ -101,8 +114,7 @@ await page.evaluate(() => {
   const s = window.__session, f = window.__fleet;
   if (f.hostiles.length) s.destroy?.call?.(s, f.hostiles[0], window.__player);
 });
-await page.waitForTimeout(120);
-state = await probe();
+state = await waitFor((s) => s.debris > 0, 5000);
 check("explosion produces debris", state.debris > 0, `shards=${state.debris}`);
 await page.screenshot({ path: `${OUT}/debris.png` });
 
@@ -117,26 +129,31 @@ await page.evaluate(() => {
   p.torpedoes = 3;
   p.shields.fore = 0.2;
 });
-await page.waitForTimeout(700);
+// Cosmetic only — catches the approach mid-corridor. The assertions below do
+// the real waiting; dock phase is not published on the probe.
+await page.waitForTimeout(900);
 await page.screenshot({ path: `${OUT}/docking.png` });
-await page.waitForTimeout(2200);
+state = await waitFor((s) => s.score > 0 && s.torpedoes === 12 && s.energy > 0.9 && s.multiplier === 1);
 
-state = await probe();
 check("docking banks the multiplier", state.score > 0, `score=${state.score}`);
 check("docking resupplies", state.torpedoes === 12 && state.energy > 0.9, JSON.stringify({ t: state.torpedoes, e: state.energy }));
 check("multiplier resets after banking", state.multiplier === 1, `x${state.multiplier}`);
 await page.screenshot({ path: `${OUT}/docked.png` });
 
 // ── death and restart ───────────────────────────────────────────────────────
+// Leave the mooring first. Resupply lerps hull back toward 1 every frame, so
+// zeroing it while docked is undone before the death check ever sees it.
+// Departure is deliberate: it only happens under thrust.
+await page.keyboard.down("ArrowUp");
+await waitFor((s) => s.dock === "none", 15000);
+await page.keyboard.up("ArrowUp");
 await page.evaluate(() => { window.__player.hull = 0; });
-await page.waitForTimeout(400);
-state = await probe();
+state = await waitFor((s) => s.state === "dead", 8000);
 check("hull loss ends the run", state.state === "dead", `state=${state.state}`);
 await page.screenshot({ path: `${OUT}/dead.png` });
 
 await page.keyboard.press("r");
-await page.waitForTimeout(2600);
-state = await probe();
+state = await waitFor((s) => s.score === 0 && s.hull === 1 && s.wave >= 1);
 check("restart begins a fresh run", state.score === 0 && state.hull === 1 && state.wave >= 1, JSON.stringify(state));
 
 // ── beauty shots: full size, every effect on ────────────────────────────────

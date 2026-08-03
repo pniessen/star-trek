@@ -266,6 +266,7 @@ function frame(now: number): void {
   if (DEBUG_PROBE) {
     (window as unknown as Record<string, unknown>).__probe = {
       state: session.state,
+      dock: session.docking.phase,
       wave: session.wave,
       hostiles: fleet.hostiles.length,
       score: session.score,
