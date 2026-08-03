@@ -87,13 +87,22 @@ scene → bloom → phosphor persistence → CRT glass → output encode → scr
 
 ### Combat
 
-- Three hostiles, each punishing one habit and each with its own silhouette and
+- Five hostiles, each punishing one habit and each with its own silhouette and
   hue: **Raider** (gold, a stooping raptor) punishes tunnel vision, **Lance**
   (acid green, a horseshoe open at the bow) punishes standing still, **Bastion**
   (red-orange, a command bulb between swept engine wings) punishes a neglected
   shield facing. They hold a preferred range, strafe rather than driving straight
   in, lead their shots, and cannot fire when out-turned. The archetypes are the
   genre's shared visual grammar; the hulls are our own geometry.
+- The last two do not duel at all, which is the point of them. **Harrow**
+  (violet, a flat-decked tender with the ordnance visibly on its rails) never
+  fires: it leads mines onto the course you are already flying, and they persist
+  across waves until they burn out, so the sector you have been circling becomes
+  the sector you can no longer circle. Mines are shootable, chain-detonate, and
+  cost you the shots you would rather have spent on something shooting back.
+  **Shroud** (magenta, a blade) is invisible and unhittable until it commits;
+  it materialises over 0.45s, empties a burst, and fades. Killing one means
+  being pointed at it before it arrives, which is a scanner problem.
 - Hits route to the quarter facing the shooter; only the remainder reaches the
   hull.
 - **Ships explode into the line segments that drew them** — the hull's own edge
@@ -111,6 +120,20 @@ scene → bloom → phosphor persistence → CRT glass → output encode → scr
 Heading-up, contacts glyphed by class, off-range contacts pinned to the rim.
 This is the reason the play space is planar, so it is not optional dressing —
 it is half the interface, exactly as it was on the 1982 cabinet.
+
+It is now an instrument rather than a readout, in two tiers. Anything with a
+hull you could shoot is still drawn at its true position — a planar world is
+supposed to make this tube trustworthy and a scanner that misplaces a Bastion
+breaks that for nothing. What degrades is *confidence*: a contact dims between
+sweeps and flares as the arm repaints it. A cloaked hull gets the other tier —
+it exists only when the arm crosses it, is placed with a real positional error,
+and decays away over three seconds. The error is drawn as the circle it actually
+is and the offset is always smaller than the circle, so the true contact is
+genuinely somewhere inside the mark. Three returns in a row with each ring
+tighter than the last is a Shroud closing, and reading that before it
+materialises is the whole skill of the class. No false returns: ambiguity from
+staleness and error teaches you something, a phantom would only teach you to
+distrust the one instrument the game has promised is honest.
 
 ### Verification
 
@@ -192,9 +215,6 @@ takes longer than the run, the layer has failed and we cut it back.
   arrives; no backend, no accounts.
 - **Title and attract mode.** Arcade attract screens are a free showcase for the
   aesthetic and should exist eventually.
-- **The remaining two hostiles** — the mine-layer and the cloaker. The cloaker
-  is the interesting one: it appears only as an unresolved contact, which makes
-  the *scanner* the skill rather than the reticle.
 - **Mobile and touch.**
 
 ---

@@ -3,7 +3,15 @@ import { Stage } from "./render/Stage.js";
 import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { PALETTE } from "./render/palette.js";
-import { buildBastion, buildCruiser, buildLance, buildRaider, buildStarbase } from "./geometry/hulls.js";
+import {
+  buildBastion,
+  buildCruiser,
+  buildHarrow,
+  buildLance,
+  buildRaider,
+  buildShroud,
+  buildStarbase,
+} from "./geometry/hulls.js";
 import { createGrid, createStarfield } from "./scene/environment.js";
 import { Ship } from "./game/Ship.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
@@ -40,6 +48,8 @@ const HULLS = {
   swarmer: buildRaider(),
   sniper: buildLance(),
   brawler: buildBastion(),
+  miner: buildHarrow(),
+  stalker: buildShroud(),
 };
 
 const player = new Ship();
@@ -241,6 +251,7 @@ function frame(now: number): void {
 
   trace.begin();
   session.ordnance.draw(trace);
+  session.mines.draw(trace, player);
   session.debris.draw(trace);
   session.docking.draw(trace, player);
   trace.end();
@@ -255,6 +266,7 @@ function frame(now: number): void {
     starbase: STARBASE_POSITION,
     fps: smoothedFps,
     time,
+    dt,
     cameraMode: settings.camera,
     shapeMode: settings.shape,
     bloom: settings.bloom,
@@ -276,6 +288,8 @@ function frame(now: number): void {
       energy: +player.energy.toFixed(2),
       torpedoes: player.torpedoes,
       debris: session.debris.count,
+      mines: session.mines.count,
+      cloaked: fleet.hostiles.filter((h) => h.hidden).length,
       projectiles: session.ordnance.projectiles.length,
       fps: Math.round(smoothedFps),
     };

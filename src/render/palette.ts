@@ -17,6 +17,10 @@ export const PALETTE = {
   raider: new Color(0xf2a63b), // gold — fast, common
   lance: new Color(0xa8dc4a), // acid green — the long-range one
   bastion: new Color(0xe8563c), // red-orange — the heavy
-  magenta: new Color(0xe45fa0), // unresolved contacts, anomalies
+  // Violet sits in the widest gap left on the wheel — 75° clear of both the
+  // player's cyan and the magenta unresolved return — so the mine-layer and
+  // the hazards it leaves behind can never be mistaken for either.
+  harrow: new Color(0x9a6cf0), // violet — the mine-layer, and its mines
+  magenta: new Color(0xe45fa0), // unresolved contacts, anomalies, the cloaker
   star: new Color(0x7fb6bd),
 } as const;

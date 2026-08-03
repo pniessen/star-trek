@@ -64,7 +64,8 @@ to an sRGB display and every dim trace is crushed to black.
   bloom as the ships. The HUD draws in a fixed 800-unit-tall design space.
 - **Colour is information**: cyan is the player, magenta is unresolved or
   tractor, and each hostile class owns a hue (Raider gold, Lance acid green,
-  Bastion red-orange). Never introduce a decorative colour.
+  Bastion red-orange, Harrow violet, Shroud magenta because it never resolves).
+  Never introduce a decorative colour.
 - **Transient strokes go through `TraceBuffer`** — beams, debris, corridor
   guides — not new objects and materials.
 - **Time-based, not frame-based.** Anything that decays or accumulates must use
@@ -73,14 +74,14 @@ to an sRGB display and every dim trace is crushed to black.
 
 ## State
 
-Built: the renderer, combat (three hostile classes, waves, shield facings,
-debris that is the ship's own edge segments), the overhead scanner, and a full
-docking sequence — corridor, tractor capture, staged resupply, itemised tally,
+Built: the renderer, combat (five hostile classes, waves, shield facings,
+debris that is the ship's own edge segments), a persistent minefield, the
+overhead scanner with sweep-painted unresolved returns, and a full docking
+sequence — corridor, tractor capture, staged resupply, itemised tally,
 deliberate departure.
 
 Not built: audio (nothing at all yet), mouse aim, leaderboards, persistence,
-title/attract mode, the mine-layer and cloaker classes, and the entire strategy
-layer.
+title/attract mode, and the entire strategy layer.
 
 ## Next, in order
 

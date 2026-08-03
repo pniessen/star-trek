@@ -5,6 +5,7 @@ import { FACINGS, type Ship } from "../game/Ship.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, type Fleet } from "../game/hostiles.js";
 import { TORPEDO } from "../game/weapons.js";
+import { SCANNER, ScannerModel } from "./scanner.js";
 
 export interface HudView {
   readonly player: Ship;
@@ -13,6 +14,8 @@ export interface HudView {
   readonly starbase: Vector3;
   readonly fps: number;
   readonly time: number;
+  /** Seconds since the last frame. The scanner accumulates, so it needs this. */
+  readonly dt: number;
   readonly cameraMode: string;
   readonly shapeMode: string;
   readonly bloom: boolean;
@@ -21,9 +24,12 @@ export interface HudView {
   readonly showDiagnostics: boolean;
 }
 
-const SCANNER_RANGE = 150;
 const dim = PALETTE.trace.clone().multiplyScalar(0.5);
 const scratch = new Color();
+const point = new Vector3();
+
+/** What the scanner has been told, as opposed to what is true. See `scanner.ts`. */
+const contacts = new ScannerModel();
 
 function arc(
   out: number[],
@@ -109,11 +115,21 @@ export function drawHud(hud: Hud, view: HudView): void {
  *
  * Heading-up rather than north-up: in first person you steer relative to your
  * own nose, and a rotating map is one less translation to do under pressure.
+ *
+ * The tube shows four things now, in descending order of certainty: resolved
+ * hostiles, which are exactly where they are drawn and only dim between sweeps;
+ * mines, which never move and so are never in doubt; unresolved returns, which
+ * are drawn as the circle of error they actually carry; and the starbase.
  */
 function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   const { player, fleet, starbase, session } = view;
   const radius = 104;
-  const scale = radius / SCANNER_RANGE;
+  const scale = radius / SCANNER.range;
+
+  // Wave zero only happens on a fresh run, so this is where stale returns from
+  // the last one get wiped rather than lingering into the new sector.
+  if (session.wave === 0) contacts.reset();
+  contacts.update(view.dt, player, fleet);
 
   const rings: number[] = [];
   arc(rings, cx, cy, radius, 0, Math.PI * 2, 44);
@@ -139,12 +155,17 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   }
   hud.segments(ticks, PALETTE.traceDim);
 
-  // A sweep, because a scanner that does not sweep does not read as live.
-  const sweep = (view.time * 0.7) % (Math.PI * 2);
-  hud.segments(
-    [cx, cy, cx + Math.cos(Math.PI / 2 - sweep) * radius, cy + Math.sin(Math.PI / 2 - sweep) * radius],
-    scratch.copy(PALETTE.traceDim).multiplyScalar(0.8),
-  );
+  // The sweep, with a short decaying trail behind it. The trail is not
+  // decoration: it is how you judge when the arm is next due back over a
+  // bearing, which is the timing the unresolved returns are read against.
+  for (let i = 0; i < 6; i++) {
+    const angle = contacts.arm + i * 0.11;
+    scratch.copy(PALETTE.traceDim).multiplyScalar((1 - i / 6) * 0.9);
+    hud.segments(
+      [cx, cy, cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius],
+      scratch,
+    );
+  }
 
   const cos = Math.cos(player.heading);
   const sin = Math.sin(player.heading);
@@ -176,11 +197,26 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   }
   hud.segments(baseMark, session.docked ? PALETTE.trace : PALETTE.traceDim);
 
-  // Contacts. Glyph encodes class, so the scanner tells you what is coming,
-  // not merely that something is.
+  // Mines: small violet diamonds, the same glyph as the Harrow that laid them
+  // at a third the size. They never move, so there is nothing to be uncertain
+  // about — and knowing where the field is is most of surviving it.
+  for (const mine of session.mines.mines) {
+    const mark = project(mine.position);
+    if (mark.clamped) continue;
+    scratch.copy(PALETTE.harrow).multiplyScalar(mine.armed ? 0.95 : 0.4);
+    hud.segments(diamond(mark.x, mark.y, 2.2), scratch);
+  }
+
+  // Resolved contacts. Glyph encodes class, so the scanner tells you what is
+  // coming, not merely that something is. Brightness encodes how long ago the
+  // arm last confirmed it — position is never in doubt, confidence is.
   for (const hostile of fleet.hostiles) {
+    if (hostile.hidden) continue; // paints as an unresolved return instead
     const mark = project(hostile.position);
-    scratch.copy(HOSTILE_COLORS[hostile.kind]).multiplyScalar(mark.clamped ? 0.45 : 1);
+    const level =
+      (mark.clamped ? 0.45 : 1) *
+      (SCANNER.faintest + (1 - SCANNER.faintest) * contacts.freshness(hostile));
+    scratch.copy(HOSTILE_COLORS[hostile.kind]).multiplyScalar(level);
     const marks: number[] = [];
 
     if (mark.clamped) {
@@ -192,6 +228,12 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       marks.push(mark.x - 5, mark.y - 3, mark.x, mark.y + 4);
       marks.push(mark.x, mark.y + 4, mark.x + 5, mark.y - 3);
       marks.push(mark.x - 5, mark.y - 3, mark.x + 5, mark.y - 3);
+    } else if (hostile.kind === "miner") {
+      marks.push(...diamond(mark.x, mark.y, 5));
+    } else if (hostile.kind === "stalker") {
+      // A cross: the mark you were chasing as a ring, now finally pinned.
+      marks.push(mark.x - 4, mark.y - 4, mark.x + 4, mark.y + 4);
+      marks.push(mark.x - 4, mark.y + 4, mark.x + 4, mark.y - 4);
     } else {
       marks.push(mark.x - 4, mark.y - 4, mark.x + 4, mark.y - 4);
       marks.push(mark.x + 4, mark.y - 4, mark.x + 4, mark.y + 4);
@@ -201,6 +243,27 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     hud.segments(marks, scratch);
   }
 
+  // Unresolved returns: a broken ring the size of the error, decaying with age.
+  // A solid ring would claim a boundary the scanner has not got; the gaps say
+  // "about here". Read the sequence, not the mark — two rings closing on you
+  // from the same quarter is a Shroud, and you have until the third to turn.
+  for (const ghost of contacts.ghosts) {
+    const mark = project(point.set(ghost.x, 0, ghost.z));
+    if (mark.clamped) continue;
+    const fade = Math.pow(1 - ghost.age / SCANNER.ghostLife, 1.4);
+    scratch.copy(PALETTE.magenta).multiplyScalar(0.2 + fade * 1.1);
+
+    const ring: number[] = [];
+    const r = Math.max(3.5, ghost.spread * scale);
+    for (let i = 0; i < 4; i++) {
+      const from = (i / 4) * Math.PI * 2 + 0.3;
+      arc(ring, mark.x, mark.y, r, from, from + Math.PI / 2 - 0.6, 3);
+    }
+    ring.push(mark.x - 1.6, mark.y, mark.x + 1.6, mark.y);
+    ring.push(mark.x, mark.y - 1.6, mark.x, mark.y + 1.6);
+    hud.segments(ring, scratch);
+  }
+
   // Own ship, fixed at the centre pointing up.
   hud.segments(
     [cx, cy + 8, cx - 5, cy - 6, cx - 5, cy - 6, cx, cy - 2.5, cx, cy - 2.5, cx + 5, cy - 6, cx + 5, cy - 6, cx, cy + 8],
@@ -208,7 +271,25 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   );
 
   hud.text("SCANNER", cx - radius, cy + radius + 16, 1.5, PALETTE.traceDim);
-  hud.textRight(`${pad(SCANNER_RANGE, 3)} KM`, cx + radius, cy + radius + 16, 1.5, PALETTE.traceDim);
+  hud.textRight(`${pad(SCANNER.range, 3)} KM`, cx + radius, cy + radius + 16, 1.5, PALETTE.traceDim);
+
+  // An annunciator rather than a count: reporting how many cloaked hulls exist
+  // would be telling you something the scanner cannot know. This only says that
+  // something out there is returning and will not resolve.
+  if (contacts.alert && Math.sin(view.time * 8) > -0.3) {
+    const label = "UNRESOLVED";
+    hud.text(label, cx - (label.length * 4.2 * 1.6) / 2, cy - radius - 22, 1.6, PALETTE.magenta);
+  }
+}
+
+/** The Harrow's glyph, and its mines at a third the size. */
+function diamond(cx: number, cy: number, r: number): number[] {
+  return [
+    cx, cy + r, cx + r, cy,
+    cx + r, cy, cx, cy - r,
+    cx, cy - r, cx - r, cy,
+    cx - r, cy, cx, cy + r,
+  ];
 }
 
 function drawShields(hud: Hud, player: Ship, cx: number, cy: number): void {
