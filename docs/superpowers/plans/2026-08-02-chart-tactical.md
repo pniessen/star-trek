@@ -1172,40 +1172,68 @@ export function drawChart(
     const y = originY + rowOf(i) * cell;
     const color = CONTROL_COLOR[sector.control];
 
-    hud.rect(x + 2, y + 2, cell - 4, cell - 4, color, opacity * 0.5);
+    hud.rect(x + 2, y + 2, cell - 4, cell - 4, fade(color, opacity * 0.5));
 
     // Threat as ticks along the bottom edge. A digit would be one more thing
     // to read; ticks are countable at a glance under fire.
+    const ticks: number[] = [];
     for (let t = 0; t < sector.threat; t++) {
       const tx = x + 5 + t * 4;
-      hud.line(tx, y + 4, tx, y + 9, color, opacity * 0.8);
+      ticks.push(tx, y + 4, tx, y + 9);
     }
+    hud.segments(ticks, fade(color, opacity * 0.8));
 
     // Somewhere to bank is the single most decision-relevant fact on the map.
     if (canDock(sector)) {
-      hud.circle(x + cell / 2, y + cell / 2, cell * 0.18, color, opacity);
+      ring(hud, x + cell / 2, y + cell / 2, cell * 0.18, fade(color, opacity));
     }
 
     // An attack already committed against this sector. This is the whole
     // reason to look at the chart mid-run rather than only between runs.
-    const inbound = campaign.incoming.find((move) => move.sector === i);
-    if (inbound) {
-      hud.circle(x + cell / 2, y + cell / 2, cell * 0.34, CONTROL_COLOR.theirs, opacity);
+    if (campaign.incoming.some((move) => move.sector === i)) {
+      ring(hud, x + cell / 2, y + cell / 2, cell * 0.34, fade(CONTROL_COLOR.theirs, opacity));
     }
 
     // Where you are, versus where you are pointing. Two different marks:
     // confusing them is how a player jumps somewhere they did not mean to.
     if (i === campaign.current) {
-      hud.circle(x + cell / 2, y + cell / 2, cell * 0.42, PALETTE.player, opacity);
+      ring(hud, x + cell / 2, y + cell / 2, cell * 0.42, fade(PALETTE.player, opacity));
     }
     if (i === cursor) {
-      hud.rect(x, y, cell, cell, PALETTE.player, opacity);
+      hud.rect(x, y, cell, cell, fade(PALETTE.player, opacity));
     }
   }
 }
+
+/**
+ * The HUD has no opacity channel — every stroke's brightness is its colour,
+ * which is also how the death sequence browns the whole panel out. Fading is
+ * therefore scaling, not blending.
+ */
+function fade(color: Color, opacity: number): Color {
+  return SCRATCH.copy(color).multiplyScalar(opacity);
+}
+const SCRATCH = new Color();
+
+/** The HUD draws segments; a circle is a closed polygon of them. */
+function ring(hud: Hud, cx: number, cy: number, radius: number, color: Color): void {
+  const SIDES = 12;
+  const flat: number[] = [];
+  for (let i = 0; i < SIDES; i++) {
+    const a = (i / SIDES) * Math.PI * 2;
+    const b = ((i + 1) / SIDES) * Math.PI * 2;
+    flat.push(
+      cx + Math.cos(a) * radius, cy + Math.sin(a) * radius,
+      cx + Math.cos(b) * radius, cy + Math.sin(b) * radius,
+    );
+  }
+  hud.segments(flat, color);
+}
 ```
 
-> **If `hud.rect` / `hud.line` / `hud.circle` do not exist under those names**, use whatever the existing HUD exposes — read `src/hud/Hud.ts` and `src/hud/draw.ts` first and match them. Do not add a new drawing primitive unless the HUD genuinely lacks one.
+> **The HUD API, confirmed:** `Hud` exposes `segments(flat: readonly number[], color: Color)` as its primitive — flat `(x0,y0,x1,y1)` quads, origin bottom-left — plus `text`, `textRight`, `rect(x, y, w, h, color)` and `gauge`. There is **no opacity parameter and no circle**, which is why the code above fades by scaling the colour and builds rings from segments. Do not add a new primitive to `Hud`.
+>
+> `SCRATCH` is reused deliberately to avoid allocating a `Color` per sector per frame. It is safe only because `segments()` copies the colour into its buffer immediately — do not hold the returned `Color` past the call.
 
 - [ ] **Step 2: Wire the overlay into `src/hud/draw.ts` and `src/main.ts`**
 
