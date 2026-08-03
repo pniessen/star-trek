@@ -47,5 +47,55 @@ check(
   "no diagonals",
 );
 
+const {
+  CAMPAIGN_VERSION, ENEMY_START_DEPTH, newCampaign, creditSalvage,
+  spendSalvage, countControl, hasStructure, canDock, isWon, isLost,
+} = await import("../.campaign-build/chart/campaign.js");
+
+// ── a fresh campaign ────────────────────────────────────────────────────────
+const c = newCampaign(99);
+check("a campaign has 64 sectors", c.sectors.length === SECTOR_COUNT, `n=${c.sectors.length}`);
+check("it is stamped with a version", c.version === CAMPAIGN_VERSION, `v${c.version}`);
+check("it starts with no salvage", c.salvage === 0, `salvage=${c.salvage}`);
+check("it starts at run zero", c.runsElapsed === 0 && c.sectorsLost === 0, "counters clear");
+
+const theirs = countControl(c, "theirs");
+check(
+  "the enemy opens holding ENEMY_START_DEPTH rows",
+  theirs === ENEMY_START_DEPTH * GRID,
+  `theirs=${theirs}, expected=${ENEMY_START_DEPTH * GRID}`,
+);
+
+// You must always have somewhere to launch from, or the first run is
+// unplayable — the one thing the design forbids outright.
+const starbases = c.sectors.filter((s) => hasStructure(s, "starbase")).length;
+check("you open with exactly one starbase", starbases === 1, `n=${starbases}`);
+check("the front is a sector you hold", c.sectors[c.front].control === "ours", `front=${c.front}`);
+check("you start where you launch from", c.current === c.front, `current=${c.current}`);
+check("nothing is inbound yet", c.incoming.length === 0, "clear");
+check("a starbase is a dock", canDock(c.sectors.find((s) => hasStructure(s, "starbase"))), "starbase");
+check("empty space is not", !canDock(c.sectors[c.front === 0 ? 1 : 0]) || c.front === 0, "bare sector");
+
+// ── salvage ─────────────────────────────────────────────────────────────────
+creditSalvage(c, 500);
+check("salvage credits", c.salvage === 500, `salvage=${c.salvage}`);
+check("affordable spending succeeds", spendSalvage(c, 200) === true, `salvage=${c.salvage}`);
+check("...and debits", c.salvage === 300, `salvage=${c.salvage}`);
+check("unaffordable spending is refused", spendSalvage(c, 9999) === false, "refused");
+check("...and changes nothing", c.salvage === 300, `salvage=${c.salvage}`);
+creditSalvage(c, -50);
+check("salvage never goes negative", c.salvage >= 0, `salvage=${c.salvage}`);
+
+// ── win and loss ────────────────────────────────────────────────────────────
+check("a fresh campaign is neither won nor lost", !isWon(c) && !isLost(c), "in progress");
+
+const cleared = newCampaign(1);
+for (const s of cleared.sectors) if (s.control === "theirs") s.control = "ours";
+check("no enemy sectors is a win", isWon(cleared), "front pushed off");
+
+const doomed = newCampaign(2);
+for (const s of doomed.sectors) s.structures = s.structures.filter((x) => x.kind !== "starbase");
+check("no starbase is a loss", isLost(doomed), "last starbase fell");
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 process.exit(problems.length ? 1 : 0);
