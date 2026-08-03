@@ -232,28 +232,47 @@ WASD moves the cursor while it is up, and `Shift` charges a two-second
 hyperwarp — you can still turn, you cannot fire, energy drains whether or not
 you release early, and arrival halves the multiplier and costs you your
 energy. `src/game/hyperwarp.ts` is the state machine. A committed fleet push
-that has already landed on the chart can be intercepted mid-run — reach the
-threatened sector and clear the wave that greets you there and the attack
-never lands, and this is implemented and covered by `playtest.mjs`. What is
-not yet true: nothing in the running game calls `runEnemyTurn()` (see below),
-so no run currently generates a push to intercept — `campaign.incoming` stays
-empty until something between runs populates it, and the amber ring never
-draws in practice yet.
+can be intercepted mid-run: reach the threatened sector, clear the wave that
+greets you there, and the attack never lands.
 
-**One more thing not yet true: the dock ring is aspirational.** `ChartView`
-draws a ring on any sector `canDock` returns true for, as "somewhere to bank"
-— but the starbase itself sits at one fixed world position regardless of
-`campaign.current`, so the running game lets you dock from anywhere, not only
-from a sector holding a dock structure. Per-sector docking is out of scope
-for this pass; this is a note, not a fix.
+Between runs, `src/chart/economy.ts` and `src/chart/command.ts` hold the
+command view's rules, and `ChartView.ts` draws the same grid a second time,
+zoomed to fill. Twelve rows, four headings, no submenus: four structures
+priced from `strategy-layer.md`, the six refits, one patrol row, and the
+front. Arrows move the sector cursor, `W`/`S` move down the list, `Space`
+commits, `Enter` launches. Every row explains its own refusal rather than
+greying out silently.
+
+**The loop is closed.** Docking credits `campaign.salvage` — the one place
+the arcade layer pays the strategy layer. Reaching the epitaph resolves the
+run exactly once: construction ticks, `runEnemyTurn()` spends the enemy's
+pressure, patrols take attrition, and the campaign is saved with its RNG
+cursor so a reload resumes the same war rather than re-rolling it. Launching
+drops you at `campaign.front` with whatever refits are fitted.
+
+**The dock ring is still aspirational.** `ChartView` draws a ring on any
+sector `canDock` returns true for, but the starbase sits at one fixed world
+position regardless of `campaign.current`, so the running game still lets you
+dock from anywhere. Per-sector docking remains out of scope; this is a note,
+not a fix.
+
+**One mechanic was added that neither design document specifies.** Nothing in
+the game could move a sector back toward the player, so `isWon` — zero enemy
+sectors — was unreachable from play: build, refit, deploy and front spend,
+equip, position and commit, and not one of them takes ground. `gainGround` in
+`economy.ts` is the fix, and it is deliberately the mirror image of
+`resolveIncoming`: clearing a wave in the sector you are standing in moves it
+one step your way, theirs → contested → yours, the same ladder the enemy
+climbs at the same price. Flag it for review; the war being winnable is a
+promise both documents make and this is the only thing keeping it.
 
 Two of `strategy-layer.md`'s constants were retuned rather than reused: the
 enemy opens holding the far three rows of eight rather than half the board,
 and the pressure formula is `6 + floor(runsElapsed / 2) + sectorsLost`
-against the original `3 + floor(runsElapsed / 4) + sectorsLost × 0.5`. Both
-are first-draft guesses at a 15–25 run campaign, the same category as the
-flight-model constants in §7 — not decidable by reasoning, and now at least
-checked by simulation rather than left to discovery.
+against the original `3 + floor(runsElapsed / 4) + sectorsLost × 0.5`. The
+patrol's own cost, strength and capacity (200 salvage, strength 3, one in the
+field plus one per yard) are invented — `strategy-layer.md` prices everything
+else and leaves those open.
 
 **One deviation from the design doc, found while implementing salvage.**
 Salvage earned in a sector is scaled by `1 + yield`, not by `yield` as
@@ -264,50 +283,78 @@ documented 3×. Flag this for the tuning pass; it is a balance decision, not
 a bug, but it was made mid-implementation rather than in the design doc and
 deserves a second look with a human at the keyboard.
 
-**`tools/campaigntest.mjs`** is 54 assertions in bare node, no browser,
-covering pressure spend, adjacency, a neglected sector falling within four
-runs, interception, round-trip serialisation, a truncated save falling back
-to a fresh campaign, and that retaking ground actually lowers the pressure
-budget rather than only ever accumulating. **`tools/campaignlength.mjs`**
-runs the same logic against a crude model player thousands of times and
-reports the distribution:
+**`tools/campaigntest.mjs`** is 109 assertions in bare node, no browser. The
+first 54 cover the tactical half — pressure spend, adjacency, a neglected
+sector falling within four runs, interception, round-trip serialisation, a
+truncated save falling back to a fresh campaign, and that retaking ground
+lowers the pressure budget rather than only ever accumulating. The 55 added
+with the command view cover construction completing over runs and not before,
+a structure destroyed mid-build refunding nothing (driven through a real
+enemy assault), every refit costing the ship something, refits surviving the
+runs in between, patrols wearing out on the front in three runs and not at
+all behind the line, a yard rebuilding them, salvage holding its floor across
+400 starved decisions, a reloaded campaign resuming the same war, and the
+attract demo's firewall.
+
+### Campaign length, re-measured with an economy
+
+`tools/campaignlength.mjs` now runs a model player with the tools the command
+view gives a real one: it banks salvage, takes ground, fields and reinforces
+patrols, builds outposts, starbases and yards, and picks its front, all
+through the same functions the game calls. Two knobs describe it — `--take`,
+salvage banked per run, and `--reach`, steps of ground a run moves, where one
+step is one wave cleared where you stand.
 
 ```
 trials      2000
-won         0     (0.0%)
-lost        2000  (100.0%)
-unresolved  0      (0.0%)
-runs        p10=13  median=15  p90=16
+model       take=1200/run  reach=3 steps/run  refits=not modelled
+won         0  (0.0%)
+lost        1721  (86.1%)
+unresolved  279  (14.0%)
+runs        p10=25  median=26  p90=200
+economy     4.1 structures standing, 2.1 of 64 sectors held at the end
 ```
 
-The median and percentiles land inside the 15–25 run target the two retuned
-constants were chosen for. **The honest reading stops there.** Every one of
-those 2,000 campaigns ended in the player's defeat — the model player
-retakes one sector per run at a fixed rate, while the enemy's pressure budget
-grows without bound as `runsElapsed` climbs, and the model player has none of
-the defensive tools a real one will: a patrol or a starbase raises the
-enemy's cost by +2 or +3, and both belong to the second plan, not this one.
-So the number above is a **time-to-defeat**, not a validated campaign
-length — it says the constants make the enemy lose... nothing, currently,
-because there is no win condition in the loop being measured. Whether the
-pressure formula needs a cap is now an open question, recorded in §7, rather
-than a thing this instrument can quietly settle.
+**Still 0% wins — but the reason has changed, and that is the finding.** The
+economy is not what decides these campaigns. Running the same model with
+`--take=0` (no salvage, no structures, no patrols, ever) barely moves it:
+100% lost, median 24 instead of 26. Running it at `--take=6000` does not
+produce a single win either. Patrols and starbases raise the enemy's cost by
++2 and +3 in *one sector each*, while the pressure budget grows by +1 every
+two runs across the whole board — defence scales O(1) against pressure that
+scales O(runs), so salvage buys a delay and never a reversal.
 
-`tools/playtest.mjs` grew from 17 to 34 assertions to cover the in-run half:
-that hyperwarp charges, that weapons are locked while charging, that arrival
-halves the multiplier and costs energy, that the chart raises its own
-opacity and steps the cursor one sector at a time without walking it off the
-grid, that WASD hands off to steering the ship versus steering the cursor
-correctly, that the wave clock keeps advancing while the overlay is up, and
-that a fleet move can be intercepted by clearing the wave at its
-destination.
+What decides them is `--reach`, and it decides them absolutely:
 
-**What the chart does not do yet.** Nothing calls `save()` — the campaign
-loads at boot and is played against, but a reload starts fresh. And nothing
-in the running game calls `runEnemyTurn()` — the function is built and
-tested directly by `campaigntest.mjs`, but a run does not yet lead to
-another run. Both are first items for the second plan, along with the
-command view and its four decisions.
+| reach | won | lost | unresolved | median |
+|---:|---:|---:|---:|---:|
+| 1 | 0% | 100% | 0% | 19 |
+| 2 | 0% | 83.3% | 16.8% | 21 |
+| 3 | 0% | 86.1% | 14.0% | 26 |
+| 4 | 0% | 94.4% | 5.6% | 31 |
+| 5 | 0% | 95.4% | 4.6% | 36 |
+| 6 | **93.3%** | 0% | 6.7% | 15 |
+| 10 | 100% | 0% | 0% | 5 |
+
+There is no contested band. Below six steps a run the player always loses;
+at six they win 93% of the time in a median of fifteen runs. The campaign is
+two fixed linear rates racing, with nothing that makes the enemy slow down as
+it loses or the player speed up as they win, so the ratio decides the whole
+war on the first run and the remaining twenty are a formality.
+
+**And capping the pressure formula is not the fix.** Measured directly, by
+patching `pressureBudget` to `min(cap, …)` in the bare-node build and
+re-running: at cap 12 and reach 2, losses fall from 83% to 17% — and the
+other 83% become deadlocks that never resolve inside 200 runs. At cap 10 and
+reach 3, 100% unresolved. Capping removes the defeat without producing a
+victory, which answers §7's open question in the negative: the campaign does
+not need a smaller number, it needs a feedback term it currently has none of.
+That is a design decision for a human, not a constant to nudge, and no
+constant was changed on the strength of this measurement.
+
+`tools/playtest.mjs` is unchanged at 34 assertions. The lifecycle it drives
+did change — see §7's note on the command view — so it wants re-running
+before this is merged.
 
 ### Verification
 
@@ -441,13 +488,23 @@ sectors, fleets that advance on a clock while you fight — see §3, "The
 chart". This is the step that turns Kobayashi into Deep Black, and the same
 renderer is now the empire screen's, not just a promise that it would be.
 
-**Weeks 9–12 — the command view.** Build, refit, deploy, choose the front —
-the four decisions the chart's command mode still needs — plus the
-death → tally → chart handoff that would actually advance `runsElapsed` and
-call `runEnemyTurn()`. Nothing in the running game does either yet, so a run
-does not currently lead to another run. Enemy pressure and win/loss
-conditions for the war are built and tested (§3) but unreachable from
-play until this lands.
+**Weeks 9–12 — the command view. Built.** Build, refit, deploy, choose the
+front, on one screen with no submenus, plus the death → tally → chart
+handoff that advances `runsElapsed`, runs `runEnemyTurn()`, ticks
+construction, wears patrols down and saves the campaign with its RNG cursor.
+A run now leads to another run. Two things this pass added that the design
+documents do not specify and that want a second look: `gainGround` (§3),
+without which the war cannot be won at all, and the patrol's own price and
+strength.
+
+**The lifecycle changed, and `playtest.mjs` has not been re-run against it.**
+`PresentationMode` gained a fourth value, `"command"`; the epitaph now leads
+to it after ~3 seconds or on any key that is not `R`; `R` still restarts
+immediately, which is the path the harness takes. `Session` gained
+`bindCampaign`, and the probe gained `salvage`, `runsElapsed`, `front`,
+`refits`, `structures`, `patrols`, `ours` and `commandSelection`. Nothing
+existing was removed or renamed, but the harness should be run before this
+merges.
 
 **Later.** Territorial control *during* a run, if the between-runs version earns
 it. The exploration encounters from concept D, seeded into empty sectors.
@@ -474,13 +531,25 @@ Three open questions from this section and from `strategy-layer.md`'s own
 ### Open questions
 
 - Is mouse aim an improvement or does it remove the reason to turn the ship?
-- **Does the pressure formula need a cap?** `pressureBudget` grows without
-  bound in `runsElapsed`, with no defensive tools yet on the other side of
-  the ledger (patrols and starbases raise the enemy's cost, but nothing
-  fields them until the command view exists). Until then, campaign length
-  can only be measured as time-to-defeat (§3) rather than validated as a
-  winnable length. Whether that means capping the formula, or waiting for
-  defensive structures to exist before trusting the simulation, is open.
+- **Does the pressure formula need a cap? Measured: no — a cap is the wrong
+  fix.** With the command view's economy on the board, capping the budget
+  turns 83% losses into 83% deadlocks rather than into wins (§3). The
+  campaign is decided almost entirely by how much ground a run takes, with a
+  cliff between five steps (0% wins) and six (93% wins) and no contested band
+  between them. What is missing is a feedback term — something that slows the
+  enemy as it loses ground or speeds the player up as they gain it — not a
+  smaller number. Open, and a design question rather than a tuning one.
+- **How much ground should a run actually take?** `gainGround` gives one step
+  per wave cleared in the sector you are standing in, so a run's reach is
+  however many sectors a player can clear and hyperwarp between before dying.
+  Nobody has flown enough runs to know what that number is, and per the table
+  in §3 it is the number the entire campaign hangs on.
+- **Is the patrol priced right?** 200 salvage, strength 3, one in the field
+  plus one per yard. All invented; `strategy-layer.md` leaves them open.
+- **Should fitted refits be capped?** They are not, so a rich player
+  eventually flies all six. Each is individually a tradeoff and the downsides
+  do stack, but "what am I building for this run" becomes "everything" once
+  3,050 salvage is affordable.
 - **Is `1 + yield` the right salvage curve?** Implemented to avoid zeroing
   salvage in the yield-0 home sector, but it means yield-3 sectors pay 4×
   rather than the documented 3× (§3). Worth a look in the tuning pass

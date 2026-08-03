@@ -5,10 +5,9 @@ import { FACINGS, type Ship } from "../game/Ship.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, type Fleet } from "../game/hostiles.js";
 import type { Presentation } from "../game/presentation.js";
-import { TORPEDO } from "../game/weapons.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { GLYPH_ADVANCE } from "./strokeFont.js";
-import { drawChart } from "../chart/ChartView.js";
+import { drawChart, drawCommand } from "../chart/ChartView.js";
 import type { Campaign } from "../chart/campaign.js";
 
 export interface HudView {
@@ -33,6 +32,10 @@ export interface HudView {
   readonly chartOpacity: number;
   /** The sector the chart cursor is pointing at, independent of `campaign.current`. */
   readonly chartCursor: number;
+  /** Index into `DECISIONS` — which of the four the command view has highlighted. */
+  readonly commandSelection: number;
+  /** The command view's answer to the last decision taken, refusal included. */
+  readonly commandMessage: string;
 }
 
 const dim = PALETTE.trace.clone().multiplyScalar(0.5);
@@ -99,6 +102,21 @@ export function drawHud(hud: Hud, view: HudView): void {
 
   if (presentation.mode === "title") {
     drawTitle(hud, view, width, height);
+    hud.end();
+    return;
+  }
+
+  // Between runs the panel is the chart and nothing else — no scanner, no
+  // shields, no reticle, because there is nothing to fly. The same early
+  // return the title takes, for the same reason.
+  if (presentation.mode === "command") {
+    drawCommand(hud, view.campaign, {
+      cursor: view.chartCursor,
+      selection: view.commandSelection,
+      message: view.commandMessage,
+      report: presentation.report,
+      time: view.time,
+    });
     hud.end();
     return;
   }
@@ -465,7 +483,10 @@ function drawStatus(hud: Hud, view: HudView): void {
   // Torpedoes as discrete pips: a count you can read without reading.
   hud.text("TORPEDOES", 34, 26, 1.5, PALETTE.traceDim);
   const pips: number[] = [];
-  for (let i = 0; i < TORPEDO.capacity; i++) {
+  // Drawn against the loadout's capacity, not the stock twelve — torpedo racks
+  // that added rounds the tube could not show would be an upgrade you had to
+  // take on faith.
+  for (let i = 0; i < player.torpedoCapacity; i++) {
     const x = 118 + i * 9;
     if (i < player.torpedoes) pips.push(x, 20, x, 32);
     else pips.push(x, 24, x, 28);

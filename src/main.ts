@@ -20,8 +20,10 @@ import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
 import type { DeathSequence } from "./game/death.js";
 import { drawHud } from "./hud/draw.js";
-import { load } from "./chart/persistence.js";
+import { load, save } from "./chart/persistence.js";
 import { colOf, indexOf, inBounds, neighbours, rowOf } from "./chart/sectors.js";
+import { DECISIONS, decide } from "./chart/command.js";
+import type { Campaign } from "./chart/campaign.js";
 
 /** Publishes state on `window.__probe` for headless checks. */
 const DEBUG_PROBE = location.hostname === "127.0.0.1" || location.hostname === "localhost";
@@ -86,13 +88,31 @@ starbase.group.position.copy(STARBASE_POSITION);
 // both come from the sector you are currently in.
 const campaign = load(window.localStorage, Date.now());
 
+/**
+ * The one place the browser's storage is named. Everything below hands this to
+ * whoever needs to persist, so the campaign rules stay free of the DOM and a
+ * test can substitute a plain object.
+ */
+const persist = (state: Campaign): void => save(state, window.localStorage);
+
 const session = new Session(fleet, STARBASE_POSITION, playerHull, campaign);
-const presentation = new Presentation(session, player, fleet, STARBASE_POSITION);
+const presentation = new Presentation(
+  session,
+  player,
+  fleet,
+  STARBASE_POSITION,
+  campaign,
+  persist,
+);
 
 /** Eased 0→1 while `Tab` is held. The overlay fades; the run behind it does not pause. */
 let chartOpacity = 0;
 /** The sector the chart cursor is pointing at, independent of `campaign.current`. */
 let chartCursor = campaign.current;
+/** Which of the four decisions is highlighted in the command view. */
+let commandSelection = 0;
+/** The command view's answer to the last decision, refusal included. */
+let commandMessage = "";
 
 // ── controls ───────────────────────────────────────────────────────────────
 
@@ -127,6 +147,45 @@ const pressed = new Set<string>();
  * while admiring the title screen.
  */
 const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "m", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+
+/**
+ * The command view's keyboard, in two idioms and no more: the arrows move the
+ * cursor over the map, W/S move down the list of decisions. Two is what keeps
+ * the "no submenus" rule honest — there is no third mode to be in and nothing
+ * to descend into, so every decision is one keypress from every other.
+ */
+function handleCommandKey(key: string): void {
+  if (key === "enter" || key === "r") {
+    presentation.startRun();
+    commandMessage = "";
+    return;
+  }
+
+  if (key.startsWith("arrow")) {
+    const nextCol = colOf(chartCursor) + (key === "arrowright" ? 1 : key === "arrowleft" ? -1 : 0);
+    // Row 0 is the enemy's home edge and is drawn at the top — see `drawGrid` —
+    // so up the screen is a decreasing row, the same way the in-run cursor
+    // reads it.
+    const nextRow = rowOf(chartCursor) + (key === "arrowdown" ? 1 : key === "arrowup" ? -1 : 0);
+    if (inBounds(nextCol, nextRow)) chartCursor = indexOf(nextCol, nextRow);
+    // The old answer was about the old sector, so it stops being true here.
+    commandMessage = "";
+    return;
+  }
+
+  if (key === "w" || key === "s") {
+    const step = key === "w" ? -1 : 1;
+    commandSelection = (commandSelection + step + DECISIONS.length) % DECISIONS.length;
+    return;
+  }
+
+  if (key === " ") {
+    commandMessage = decide(campaign, DECISIONS[commandSelection], chartCursor);
+    // Saved on every decision rather than on the way out: a cabinet that is
+    // closed mid-chart should have kept whatever was already bought.
+    persist(campaign);
+  }
+}
 
 /** Applied to every VectorObject in the scene, including ones spawned later. */
 function applyShapeMode(): void {
@@ -174,7 +233,12 @@ window.addEventListener("keydown", (event) => {
       break;
     case "r":
       if (presentation.mode === "run") {
-        session.restart(player);
+        // Through the shell, not straight into the session: `startRun()` is
+        // what clears the resolved-run report. Calling `session.restart()`
+        // directly left it set, so the *next* death would come up on the
+        // command view showing the previous run's enemy report and without
+        // ever having advanced the campaign for its own.
+        presentation.startRun();
         // restart() resets campaign.current to campaign.front; chartCursor is
         // a module-level `let` with no equivalent reset of its own, so
         // without this a jump made last run leaves the cursor pointing at
@@ -202,10 +266,21 @@ window.addEventListener("keydown", (event) => {
       break;
   }
 
-  // Any key takes the controls off the title screen or out of the demo.
-  // Restarting from the death tally deliberately stays on R alone: a player
-  // still holding fire as they die should not skip their own epitaph.
-  if (presentation.mode !== "run" && !DISPLAY_KEYS.has(key)) presentation.startRun();
+  if (DISPLAY_KEYS.has(key)) return;
+
+  if (presentation.mode === "command") {
+    handleCommandKey(key);
+  } else if (presentation.mode === "run") {
+    // At the epitaph, any key that is not R brings the chart up early rather
+    // than waiting out the dwell. R keeps meaning what it has always meant —
+    // run again, now — so a player who only wants to fly never sees the chart
+    // they did not ask for. Both paths go through the same campaign advance;
+    // see `Presentation.resolveRun`.
+    if (session.death.phase === "tally" && key !== "r") presentation.enterCommand();
+  } else {
+    // Any key takes the controls off the title screen or out of the demo.
+    presentation.startRun();
+  }
 });
 window.addEventListener("keyup", (event) => held.delete(event.key.toLowerCase()));
 window.addEventListener("blur", () => held.clear());
@@ -281,6 +356,30 @@ function placeTitleCamera(time: number): void {
   camera.up.set(0, 1, 0);
   camera.lookAt(focus);
   camera.rotateZ(Math.sin(time * 0.19) * 0.05);
+}
+
+/**
+ * The command view is composed over empty sky, not over the ship.
+ *
+ * The title screen can sit around a hull because the panel leaves the middle of
+ * the frame to it. This one cannot: it is a map and twelve rows of type filling
+ * the screen, and a wireframe ship crossing the option list reads as clutter
+ * rather than as the game continuing. So the camera pitches up off the plane
+ * and holds a slow drift — the starfield has no edges to compete with the type.
+ */
+function placeCommandCamera(time: number): void {
+  const camera = stage.camera;
+  const angle = time * 0.045;
+
+  eye.set(Math.sin(angle) * 60, 3, Math.cos(angle) * 60);
+  // 60 units ahead and 42 up is roughly 35 degrees of pitch, which puts the
+  // grid's far edge below the frame at the 62-degree field this stage uses.
+  focus.set(eye.x + Math.sin(angle) * 60, 45, eye.z + Math.cos(angle) * 60);
+
+  camera.position.copy(eye);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(focus);
+  camera.rotateZ(Math.sin(time * 0.11) * 0.02);
 }
 
 /**
@@ -380,7 +479,10 @@ function frame(now: number): void {
 
   // The chart is an overlay on top of the run, not a pause of it — it fades on
   // its own clock using real `dt` so the ease reads the same on any machine.
-  chartOpacity = approach(chartOpacity, held.has("tab") ? 1 : 0, dt, CHART_FADE_RATE);
+  // Only over a run: the command view is already a chart, and raising a second
+  // one over it would put two cursors on one screen.
+  const wantsChart = held.has("tab") && presentation.mode === "run";
+  chartOpacity = approach(chartOpacity, wantsChart ? 1 : 0, dt, CHART_FADE_RATE);
   // Past the midpoint of the fade WASD is reading the map, not flying the
   // ship. Below it, control hands straight back — there is no separate mode
   // to get stuck in, just where this one number happens to be.
@@ -400,10 +502,13 @@ function frame(now: number): void {
     if (inBounds(nextCol, nextRow)) chartCursor = indexOf(nextCol, nextRow);
   }
 
-  if (presentation.mode === "title") {
-    // Nothing is flown and no wave is spawned behind the title — the session is
-    // not stepped at all. The hull just turns on the spot so it presents
-    // itself, which is the whole of what the title screen asks of the sim.
+  // Both screens that are not a run: the title and the command view. The
+  // session is not stepped at all in either, so no wave spawns behind a panel
+  // nobody can shoot back from. The hull just turns on the spot so it presents
+  // itself, which is the whole of what these screens ask of the sim.
+  const betweenRuns = presentation.mode === "title" || presentation.mode === "command";
+
+  if (betweenRuns) {
     player.heading += dt * 0.2;
   } else {
     const alive = session.state !== "dead";
@@ -471,9 +576,13 @@ function frame(now: number): void {
   playerHull.group.rotation.set(0, player.heading, player.bank * 0.6);
   // On the title screen the hull is the subject whatever the camera mode says;
   // once it has become debris there is nothing left to draw.
+  // The title screen is the hull's showcase; the command view is the chart's,
+  // and a ship drifting across twelve rows of type is only in the way.
   playerHull.group.visible =
     presentation.mode === "title" ||
-    (settings.camera !== "cockpit" && !session.death.hidesHull);
+    (presentation.mode !== "command" &&
+      settings.camera !== "cockpit" &&
+      !session.death.hidesHull);
   starbase.group.rotation.y = time * 0.06;
 
   trace.begin();
@@ -486,8 +595,9 @@ function frame(now: number): void {
 
   grid.follow(player.position.x, player.position.z);
 
-  if (session.death.phase !== "none") placeWreckCamera(session.death, time);
+  if (presentation.mode === "command") placeCommandCamera(time);
   else if (presentation.mode === "title") placeTitleCamera(time);
+  else if (session.death.phase !== "none") placeWreckCamera(session.death, time);
   else placeCamera(settings.camera, time);
 
   drawHud(stage.hud, {
@@ -509,6 +619,8 @@ function frame(now: number): void {
     campaign,
     chartOpacity,
     chartCursor,
+    commandSelection,
+    commandMessage,
   });
 
   if (DEBUG_PROBE) {
@@ -548,6 +660,17 @@ function frame(now: number): void {
       // other reason.
       chartOpacity: +chartOpacity.toFixed(3),
       chartCursor,
+      // The campaign, so a harness can prove a run actually leads to another
+      // one: salvage banked, the war's clock, what is standing and what is
+      // fitted. `commandSelection` is what the command view has highlighted.
+      salvage: Math.round(campaign.salvage),
+      runsElapsed: campaign.runsElapsed,
+      front: campaign.front,
+      refits: campaign.refits.length,
+      structures: campaign.sectors.reduce((n, s) => n + s.structures.length, 0),
+      patrols: campaign.sectors.filter((s) => s.patrol).length,
+      ours: campaign.sectors.filter((s) => s.control === "ours").length,
+      commandSelection,
     };
   }
 
@@ -575,6 +698,20 @@ if (DEBUG_PROBE) {
       },
     },
     __sound: sound,
+    // The command view's own state, so a harness can point at a decision
+    // without walking W twelve times.
+    __command: {
+      get selection() {
+        return commandSelection;
+      },
+      set selection(i: number) {
+        commandSelection = i;
+      },
+      get message() {
+        return commandMessage;
+      },
+      decisions: DECISIONS,
+    },
   });
 }
 

@@ -1,5 +1,8 @@
 import { MathUtils, Vector3 } from "three";
 import { DOCK_GEOMETRY } from "./docking.js";
+import { isLost, isWon, newCampaign, type Campaign } from "../chart/campaign.js";
+import { advanceCampaign, campaignFor, restartCampaign, type RunReport } from "../chart/economy.js";
+import { makeRng } from "../chart/rng.js";
 import type { Fleet, Hostile } from "./hostiles.js";
 import type { Session } from "./session.js";
 import type { Ship } from "./Ship.js";
@@ -19,7 +22,7 @@ import type { Ship } from "./Ship.js";
  * phase of combat and pretending it was would put a fourth case into every
  * rule that reads the run.
  */
-export type PresentationMode = "title" | "attract" | "run";
+export type PresentationMode = "title" | "attract" | "run" | "command";
 
 /** What the demo pilot is asking for this frame, in the player's own verbs. */
 export interface PilotInput {
@@ -36,9 +39,18 @@ const TIMING = {
   attract: 34,
   /** The demo's own wreck is left on screen this long before cutting away. */
   demoDeath: 4.5,
-  /** An abandoned tally goes back to attracting, the way a cabinet does. */
-  abandon: 14,
+  /** How long the epitaph is left to land before the chart comes up. */
+  tally: 3.2,
+  /** An abandoned command view goes back to attracting, the way a cabinet does. */
+  commandIdle: 60,
 } as const;
+
+/**
+ * The demonstration's own board, so a fixed seed rather than a clock: an
+ * attract loop that showed a different chart every cycle would be showing the
+ * cabinet's mood rather than the game.
+ */
+const DEMO_SEED = 20260802;
 
 const PILOT = {
   /** Range the pilot tries to fight at. Inside the phaser's full-damage band. */
@@ -63,22 +75,50 @@ export class Presentation {
    */
   best = 0;
 
+  /**
+   * What the enemy did between the last run and this one, for the command view
+   * to report. Doubles as the "this run has been resolved" flag: it is null
+   * for the whole of a run and non-null from the moment `advanceCampaign` has
+   * been called for it, which is what stops a tally sitting on screen from
+   * advancing the war once a frame.
+   */
+  report: RunReport | null = null;
+
+  /**
+   * The demonstration's throwaway campaign. The demo pilot flies the real
+   * session and the real session banks salvage, so without a second campaign to
+   * bank into an unattended cabinet spends the player's savings. See
+   * `campaignFor`.
+   */
+  private readonly demo: Campaign = newCampaign(DEMO_SEED);
+
   /** The gate and the staging point the demo pilot flies to. */
   private readonly gate: Vector3;
   private readonly staging: Vector3;
   private readonly target = new Vector3();
   private torpedoTimer = 0;
+  /** Real seconds the epitaph has been up, so the chart follows it on a clock. */
+  private tallyTime = 0;
 
+  /**
+   * @param campaign  the player's own, written to by a run and by the chart
+   * @param persist   called whenever the campaign changes between runs; injected
+   *   rather than reaching for localStorage, so this class stays testable and
+   *   the storage decision stays in one place
+   */
   constructor(
     private readonly session: Session,
     private readonly player: Ship,
     private readonly fleet: Fleet,
     station: Vector3,
+    private readonly campaign: Campaign,
+    private readonly persist: (campaign: Campaign) => void,
   ) {
     // The demo flies the same corridor a human does — it gets no private door
     // into the station, because a demonstration of a shortcut is a lie.
     this.gate = station.clone().add(new Vector3(0, 0, -DOCK_GEOMETRY.gateOffset));
     this.staging = this.gate.clone().add(new Vector3(0, 0, -PILOT.stagingOffset));
+    this.session.bindCampaign(campaignFor(this.mode, this.campaign, this.demo));
   }
 
   /** @param realDt wall-clock seconds; the shell's clock is never dilated. */
@@ -101,27 +141,75 @@ export class Presentation {
 
       case "run":
         if (this.session.score > this.best) this.best = this.session.score;
-        // Walk away from the tally and the cabinet goes back to attracting.
-        // R still restarts directly, so nobody is ever waiting on this.
-        if (
-          this.session.death.phase === "tally" &&
-          this.session.death.time >= TIMING.abandon
-        ) {
-          this.enter("title");
+        if (this.session.death.phase === "none") {
+          this.tallyTime = 0;
+          break;
         }
+        // Resolved the moment the hull goes, not when the epitaph appears.
+        // Deliberate: `R` restarts from the tally, and resolving there left a
+        // window — a few frames wide, and a player mashing R finds it — where
+        // the run ended and the enemy never took its turn. A free reroll of
+        // the drop and of the whole war's clock. `report` is the once-only
+        // guard; the wreck is still drifting while this runs, and nothing
+        // here touches the session.
+        if (!this.report) this.resolveRun();
+        if (this.session.death.phase !== "tally") break;
+        // Then let the epitaph land before the chart comes up over it.
+        this.tallyTime += realDt;
+        if (this.tallyTime >= TIMING.tally) this.enter("command");
+        break;
+
+      case "command":
+        // An unattended command view goes back to attracting, the way a
+        // cabinet does. The campaign is already saved, so nothing is lost.
+        if (this.time >= TIMING.commandIdle) this.enter("title");
         break;
     }
   }
 
   /** Hand the controls to whoever pressed the key. */
   startRun(): void {
+    // A war that has been won or lost is over; the next launch opens a new one.
+    // Done in place rather than by rebinding — see `restartCampaign`.
+    if (isWon(this.campaign) || isLost(this.campaign)) {
+      restartCampaign(this.campaign, Date.now());
+      this.persist(this.campaign);
+    }
     this.enter("run");
+  }
+
+  /** Straight from the epitaph to the chart, for a player who does not want to wait. */
+  enterCommand(): void {
+    if (!this.report) this.resolveRun();
+    this.enter("command");
+  }
+
+  /**
+   * A run's aftermath, applied to the campaign exactly once. Salvage is not
+   * credited here — that already happened at whatever docks the player
+   * reached, which is what makes dying undocked cost the run's earnings.
+   */
+  private resolveRun(): void {
+    const rng = makeRng(this.campaign.seed, this.campaign.rngCursor);
+    this.report = advanceCampaign(this.campaign, rng);
+    this.persist(this.campaign);
   }
 
   private enter(mode: PresentationMode): void {
     this.mode = mode;
     this.time = 0;
     this.torpedoTimer = 0;
+    this.tallyTime = 0;
+    // The command view is the one mode that exists to read the report, so it
+    // is the one mode that does not clear it.
+    if (mode !== "command") this.report = null;
+    // A demonstration always opens on the same fresh board, so nothing the
+    // demo pilot did last cycle is still on the chart this cycle.
+    if (mode === "attract") restartCampaign(this.demo, DEMO_SEED);
+    // Before the restart, not after: `Session.restart` reads the campaign for
+    // the drop sector and the refit loadout, so binding second would fly the
+    // demo on the player's loadout or the player on the demo's.
+    this.session.bindCampaign(campaignFor(mode, this.campaign, this.demo));
     // Every mode change begins from a clean board — including the title, which
     // must not have the previous run's wreck drifting through it.
     this.session.restart(this.player);

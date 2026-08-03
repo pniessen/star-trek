@@ -3,7 +3,6 @@ import { sound } from "../audio/sound.js";
 import { PALETTE } from "../render/palette.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 import { FACINGS, type Ship } from "./Ship.js";
-import { TORPEDO } from "./weapons.js";
 
 /**
  * Docking, as an event rather than a proximity check.
@@ -283,7 +282,10 @@ export class Docking {
     player.hull = MathUtils.lerp(this.atMooring.hull, 1, ramp(TIMING.shields, TIMING.hull));
     player.energy = MathUtils.lerp(this.atMooring.energy, 1, ramp(TIMING.hull, TIMING.energy));
     player.torpedoes = Math.round(
-      MathUtils.lerp(this.atMooring.torpedoes, TORPEDO.capacity, ramp(TIMING.energy, TIMING.torpedoes)),
+      // Rearms to whatever the loadout carries, not to the stock twelve —
+      // torpedo racks that only filled at the start of a run would be an
+      // upgrade you lose the moment you use it.
+      MathUtils.lerp(this.atMooring.torpedoes, player.torpedoCapacity, ramp(TIMING.energy, TIMING.torpedoes)),
     );
 
     // Announce each stage as it starts, so the sequence reads as steps — and
