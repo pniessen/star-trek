@@ -11,6 +11,7 @@
     "standalone": "vite build && node tools/build-standalone.mjs",
     "playtest": "node tools/playtest.mjs",
     "campaigntest": "tsc -p tsconfig.campaign.json && node tools/campaigntest.mjs",
+    "campaignlength": "tsc -p tsconfig.campaign.json && node tools/campaignlength.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
