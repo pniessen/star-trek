@@ -179,20 +179,25 @@ check(
 );
 
 // ── the promise that matters ────────────────────────────────────────────────
-// "Ignore a sector for four runs and it falls, and it stays fallen."
+// "Ignore a sector for four runs and it falls, and it stays fallen." The
+// promise is about *some* neglected ground falling, not about any one
+// specific sector — pinning it to a single sector (e.g. the first one found)
+// makes the assertion a shuffle-position lottery for that sector rather than
+// a test of the stated behaviour, since every push-ours candidate costs the
+// same and only shuffle order decides which get funded first.
 const neglected = newCampaign(13);
-let fellWithin = 0;
-const watch = neglected.sectors.findIndex(
-  (s, i) => s.control === "ours" && neighbours(i).some((n) => neglected.sectors[n].control === "theirs"),
-);
+const startedOurs = neglected.sectors.map((s) => s.control === "ours");
 for (let run = 1; run <= 4; run++) {
   neglected.runsElapsed = run;
   const r = makeRng(neglected.seed, neglected.rngCursor);
   runEnemyTurn(neglected, r);
   neglected.rngCursor = r.cursor;
-  if (neglected.sectors[watch].control === "theirs" && !fellWithin) fellWithin = run;
 }
-check("a neglected front sector falls within four runs", fellWithin > 0 && fellWithin <= 4, `run ${fellWithin}`);
+check(
+  "a neglected front sector falls within four runs",
+  neglected.sectors.some((s, i) => startedOurs[i] && s.control !== "ours"),
+  `lost=${neglected.sectorsLost}`,
+);
 
 // Losses are counted, because the budget depends on them.
 check("losing ground is recorded", neglected.sectorsLost > 0, `lost=${neglected.sectorsLost}`);
@@ -234,14 +239,19 @@ check(
   `sector ${doomedSector} held`,
 );
 
-// Determinism: same seed, same war.
+// Determinism: same seed, same war. Compares incoming as well as sectors —
+// a push only touches campaign.incoming (it lands later, via resolveIncoming
+// on a subsequent turn), so a turn whose entire budget goes to pushes would
+// leave campaign.sectors unchanged and byte-identical between runs even if
+// the shuffle driving which sectors got pushed were not actually seeded.
 const runA = newCampaign(14);
 const runB = newCampaign(14);
 runEnemyTurn(runA, makeRng(14, 0));
 runEnemyTurn(runB, makeRng(14, 0));
 check(
   "the same seed produces the same turn",
-  JSON.stringify(runA.sectors) === JSON.stringify(runB.sectors),
+  JSON.stringify({ sectors: runA.sectors, incoming: runA.incoming }) ===
+    JSON.stringify({ sectors: runB.sectors, incoming: runB.incoming }),
   "deterministic",
 );
 

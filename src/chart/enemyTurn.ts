@@ -7,9 +7,15 @@ import type { Rng } from "./rng.js";
  * Campaign length is shortened mostly by ENEMY_START_DEPTH — moving less
  * ground — because raising pressure alone only makes the player lose faster.
  * Both constants are first-draft guesses; see the length simulation.
+ *
+ * A fresh board offers eight cost-1 consolidate targets (one per column on
+ * the enemy's own border row) before a single push is ever affordable at
+ * ACTION_COST.pushOurs. At base 6 that's enough on its own to eat the whole
+ * opening budget, which is why spending below is split into two phases
+ * instead of one flat cheapest-first pass — see runEnemyTurn.
  */
 export const PRESSURE = {
-  base: 9,
+  base: 6,
   runsPerStep: 2,
 } as const;
 
@@ -51,9 +57,14 @@ function defenceOf(sector: Sector): number {
  * Spends the budget adjacent to ground already held. Mutates the campaign and
  * returns what it did, so the chart can show the player where the war moved.
  *
- * Cheapest-first: the enemy takes the ground it can afford before the ground
- * it would like. That is what makes an unwatched flank fall while a defended
- * one holds, which is the behaviour the whole layer promises.
+ * Spent in two phases, cheapest-first within each: expansion (pushes and
+ * assaults) first, consolidate only with whatever is left over. A single
+ * flat cheapest-first pass would let consolidate — cheap, and always
+ * available in bulk on the enemy's own border row — buy out the entire
+ * budget before a single push is ever affordable, so the front would never
+ * move at all. Splitting the phases is what makes an unwatched flank fall
+ * while a defended one holds, which is the behaviour the whole layer
+ * promises.
  */
 export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
   resolveIncoming(campaign);
@@ -61,8 +72,11 @@ export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
   let budget = pressureBudget(campaign);
   const actions: EnemyAction[] = [];
 
-  // Frozen up front: acting on a snapshot stops a sector taken this turn from
-  // immediately becoming the springboard for the next one.
+  // Frozen up front as defence-in-depth: nothing in this turn's spending
+  // currently flips control directly (a push only lands via resolveIncoming,
+  // on a later turn), so this snapshot and a live read agree today. If that
+  // ever changes, acting on the snapshot rather than live sectors is what
+  // stops a sector taken this turn from becoming this same turn's springboard.
   const held = campaign.sectors.map((s) => s.control === "theirs");
 
   const targets: number[] = [];
