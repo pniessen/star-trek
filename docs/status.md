@@ -87,17 +87,24 @@ scene → bloom → phosphor persistence → CRT glass → output encode → scr
 
 ### Combat
 
-- Three hostiles, each punishing one habit: the **swarmer** tunnel vision, the
-  **sniper** standing still, the **brawler** a neglected shield facing. They
-  hold a preferred range, strafe rather than driving straight in, lead their
-  shots, and cannot fire when out-turned.
+- Three hostiles, each punishing one habit and each with its own silhouette and
+  hue: **Raider** (gold, a stooping raptor) punishes tunnel vision, **Lance**
+  (acid green, a horseshoe open at the bow) punishes standing still, **Bastion**
+  (red-orange, a command bulb between swept engine wings) punishes a neglected
+  shield facing. They hold a preferred range, strafe rather than driving straight
+  in, lead their shots, and cannot fire when out-turned. The archetypes are the
+  genre's shared visual grammar; the hulls are our own geometry.
 - Hits route to the quarter facing the shooter; only the remainder reaches the
   hull.
 - **Ships explode into the line segments that drew them** — the hull's own edge
   list, pushed outward and tumbled. No particles, no sprites.
 - Waves escalate and ring the player rather than clustering ahead.
-- **Docking is a skill test**: slow, lined up, vulnerable. It repairs, rearms,
-  banks the multiplier and resets it to one.
+- **Docking is a sequence**, not a proximity check: a marked corridor with rails
+  and travelling chevrons, a gate you fly through, a tractor that takes the helm
+  and pulls you in, systems restored one at a time, an itemised tally with the
+  score odometer rolling, and a deliberate departure under thrust. An approach
+  instrument shows lateral offset and speed so lining up is something you do.
+  Waves keep coming while you are moored — you can turn and shoot, but not move.
 
 ### The scanner
 
@@ -142,6 +149,15 @@ sizes. It now draws in a fixed design space.
 **A sustained turn held ~50° of roll**, tipping the horizon over. Bank is now a
 transient lean.
 
+**The wave clock stopped while docked.** Any dock state short-circuited wave
+spawning, so the station was somewhere to hide and lingering cost nothing —
+exactly backwards for a loop about whether to bank or push on. Combat phase and
+dock phase are now tracked separately, because they are genuinely independent.
+
+**Departure shoved you back into the clamps.** Thrust is how you ask to leave,
+and thrust points at the station. There is now a short window after release
+where forward thrust is ignored.
+
 **One non-bug worth knowing about:** roughly an hour went into what looked like
 a 100× performance regression. It is an artifact of headless SwiftShader, which
 needs about half a second per frame for ~15 full-screen post passes at
@@ -185,7 +201,13 @@ takes longer than the run, the layer has failed and we cut it back.
 
 ## 7. Roadmap
 
-**Now — tuning.** The flight model and wave pacing are first-draft numbers and
+**Now — audio.** Nothing makes a sound yet, which is why the docking sequence
+still feels slightly thin despite the visuals. Synthesised WebAudio rather than
+samples: a rising tone under tractor capture, a clunk on hard dock, ascending
+blips per service stage, an arpeggio on the tally that pitches with the
+multiplier, plus weapons and an alert drone tracking threat.
+
+**Then — tuning.** The flight model and wave pacing are first-draft numbers and
 want a human on the keyboard. Specifically: turn rate and drag, phaser falloff
 curve, how fast the multiplier climbs, and whether the wave break is too long.
 This is the one item on the list that cannot be done by reasoning about it.

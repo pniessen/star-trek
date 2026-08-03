@@ -50,7 +50,7 @@ fire — waves, kills, salvage, the multiplier, docking, death, restart.
 **Milestone one — renderer.** Wireframe/occluded toggle, bloom, phosphor
 persistence, CRT glass, output encode, stroke-drawn HUD with no DOM text in it.
 
-**Milestone two — combat.** Phasers (hitscan, energy-draining, weaker with
+**Milestone two — combat and docking.** Phasers (hitscan, energy-draining, weaker with
 distance) and torpedoes (limited, must be led); three hostiles that each punish
 one habit; shield facings that absorb by quarter; ships that explode into the
 line segments that drew them; waves; docking as a skill test; and the greed
@@ -58,6 +58,10 @@ multiplier that ties it together.
 
 **The overhead scanner is in** — heading-up, contacts glyphed by class, off-range
 contacts pinned to the rim. It is the reason the play space is a plane.
+
+Docking is a full sequence: approach corridor, tractor capture, staged
+resupply, itemised tally, deliberate departure — and the waves keep coming
+while you are moored.
 
 Not yet: audio, mouse aim, leaderboards, the strategy layer.
 
