@@ -17,6 +17,7 @@ import { Ship } from "./game/Ship.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Session } from "./game/session.js";
 import { Presentation } from "./game/presentation.js";
+import { sound } from "./audio/sound.js";
 import type { DeathSequence } from "./game/death.js";
 import { drawHud } from "./hud/draw.js";
 import { load } from "./chart/persistence.js";
@@ -125,7 +126,7 @@ const pressed = new Set<string>();
  * cabinet convention — but you should still be able to turn the CRT glass off
  * while admiring the title screen.
  */
-const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "m", "1", "2", "3", "[", "]", "-", "=", "tab"]);
 
 /** Applied to every VectorObject in the scene, including ones spawned later. */
 function applyShapeMode(): void {
@@ -142,6 +143,11 @@ window.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   held.add(key);
   pressed.add(key);
+
+  // A browser will not run an AudioContext until the page has been touched, and
+  // this is the touch: the same keypress that launches a run off the title. It
+  // is a resume on every key after the first, and silent if there is no device.
+  sound.start();
 
   switch (key) {
     case "g":
@@ -162,6 +168,9 @@ window.addEventListener("keydown", (event) => {
       break;
     case "h":
       settings.diagnostics = !settings.diagnostics;
+      break;
+    case "m":
+      sound.muted = !sound.muted;
       break;
     case "r":
       if (presentation.mode === "run") {
@@ -201,6 +210,11 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => held.delete(event.key.toLowerCase()));
 window.addEventListener("blur", () => held.clear());
 window.addEventListener("resize", () => stage.setSize(window.innerWidth, window.innerHeight));
+// A click is a gesture too, and somebody will click the canvas before pressing
+// anything. The drone stops with the frame loop when the tab is hidden — rAF
+// stops there, so without this the last level set would hold forever.
+window.addEventListener("pointerdown", () => sound.start());
+document.addEventListener("visibilitychange", () => sound.setPaused(document.hidden));
 
 applyShapeMode();
 
@@ -345,6 +359,11 @@ function frame(now: number): void {
 
   presentation.update(dt);
 
+  // Where the ear is. Set before the session is stepped, so everything that
+  // fires this frame is placed against this frame's heading.
+  sound.listen(player.position.x, player.position.z, player.heading);
+  let burn = 0;
+
   if (presentation.mode !== previousPresentationMode) {
     // Every mode change — title → attract, attract → title, an abandoned
     // tally back to title, `startRun()` — calls `session.restart()` inside
@@ -403,6 +422,9 @@ function frame(now: number): void {
       ? demo.thrust
       : (held.has("arrowup") || (!chartActive && held.has("w")) ? 1 : 0) -
         (held.has("arrowdown") || (!chartActive && held.has("s")) ? 1 : 0);
+    // The engine bed reads the same thrust the flight model does, so reading
+    // the map does not make the ship sound like it is still burning.
+    burn = Math.max(0, thrust);
 
     // Hyperwarp: holding Shift commits to a jump at the chart cursor, wherever
     // it was last pointed. Releasing early is a refund of nothing — Session
@@ -429,6 +451,18 @@ function frame(now: number): void {
     });
   }
   pressed.clear();
+
+  // The two continuous voices: the alert drone rides the threat on the tube,
+  // the engine rides the throttle. Levels, not events — the same contract the
+  // gauges work under.
+  sound.update({
+    threat: session.threat,
+    hull: player.hull,
+    thrust: burn,
+    speed: player.speed,
+    alive: presentation.mode !== "title" && session.state !== "dead",
+    docked: session.docking.held,
+  });
 
   // Newly spawned hostiles have to inherit the current geometry mode.
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
@@ -470,6 +504,7 @@ function frame(now: number): void {
     bloom: settings.bloom,
     phosphor: settings.phosphor,
     crt: settings.crt,
+    muted: sound.muted,
     showDiagnostics: settings.diagnostics,
     campaign,
     chartOpacity,
@@ -539,6 +574,7 @@ if (DEBUG_PROBE) {
         chartCursor = i;
       },
     },
+    __sound: sound,
   });
 }
 

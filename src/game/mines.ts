@@ -1,4 +1,5 @@
 import { Vector3 } from "three";
+import { sound } from "../audio/sound.js";
 import { PALETTE } from "../render/palette.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 import type { Ship } from "./Ship.js";
@@ -83,6 +84,7 @@ export class Minefield {
       fuse: 0,
       flash: 0,
     });
+    sound.mineLay(position.x, position.z);
   }
 
   /** @param onHull called when a detonation gets past a shield facing. */
@@ -177,6 +179,10 @@ export class Minefield {
 
   private detonate(mine: Mine, player: Ship, onHull: () => void): void {
     this.blasts.push({ position: mine.position.clone(), age: 0 });
+    // A chain arrives as a run of blasts spaced by the fuse, which is exactly
+    // what the fuse was for: the voice pool turns a cluster into a sequence
+    // rather than one clipped bang.
+    sound.mineBlast(mine.position.x, mine.position.z);
 
     const distance = mine.position.distanceTo(player.position);
     if (distance < MINE.blast) {

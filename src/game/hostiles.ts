@@ -1,4 +1,5 @@
 import { Color, MathUtils, Vector3 } from "three";
+import { sound } from "../audio/sound.js";
 import { VectorObject } from "../render/VectorObject.js";
 import { PALETTE } from "../render/palette.js";
 import { BOLT, type Ordnance } from "./weapons.js";
@@ -272,6 +273,10 @@ export class Hostile {
         .addScaledVector(player.velocity, flightTime)
         .sub(this.position);
       ordnance.fire(this.position, lead, "bolt", false);
+      // Placed where the shooter is, so a trigger pulled behind you is heard
+      // behind you. The forward view cannot tell you this and the scanner only
+      // tells you it exists.
+      sound.hostileFire(this.position.x, this.position.z);
     }
 
     this.shape.group.position.copy(this.position);

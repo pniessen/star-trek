@@ -1,4 +1,5 @@
 import { MathUtils, Vector3 } from "three";
+import { sound } from "../audio/sound.js";
 import { PALETTE } from "../render/palette.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 import { FACINGS, type Ship } from "./Ship.js";
@@ -83,6 +84,8 @@ export class Docking {
    * straight back into the clamps you just left.
    */
   private releaseTimer = 0;
+  /** Last frame's gate state, so entering it is an edge rather than a level. */
+  private inGate = false;
 
   private guidance: DockGuidance = {
     lateral: 0,
@@ -127,6 +130,7 @@ export class Docking {
     this.status = "";
     this.rearm = false;
     this.releaseTimer = 0;
+    this.inGate = false;
     // Guidance is only recomputed while the session is being stepped, so a
     // stale reading survives into a screen that has no run behind it and draws
     // a corridor across the title.
@@ -194,6 +198,11 @@ export class Docking {
 
   private updateApproach(player: Ship): void {
     const g = this.guidance;
+    const wasInGate = this.inGate;
+    this.inGate = g.inGate;
+    // Crossing the ring is a thing that happens to you rather than a thing you
+    // read off the panel, so it gets a tick.
+    if (g.visible && g.inGate && !wasInGate) sound.gate();
 
     if (!g.visible) {
       this.phase = "none";
@@ -221,6 +230,9 @@ export class Docking {
       this.captureHeading = player.heading;
       this.mooringHeading = 0; // facing the station, up the corridor
       this.status = "TRACTOR LOCK";
+      // One rising note across the whole capture: the sound of the helm being
+      // taken off you, which is what this phase is.
+      sound.tractor(TIMING.capture);
       void player;
     }
   }
@@ -247,6 +259,7 @@ export class Docking {
       torpedoes: player.torpedoes,
     };
     this.status = "HARD DOCK";
+    sound.hardDock();
     onMoored();
   }
 
@@ -273,14 +286,18 @@ export class Docking {
       MathUtils.lerp(this.atMooring.torpedoes, TORPEDO.capacity, ramp(TIMING.energy, TIMING.torpedoes)),
     );
 
-    // Announce each stage as it starts, so the sequence reads as steps.
-    const announce = (at: number, text: string) => {
-      if (previous < at && this.service >= at) this.status = text;
+    // Announce each stage as it starts, so the sequence reads as steps — and
+    // blip it a note higher each time, so it reads as steps with your eyes
+    // somewhere else, which during a wave they will be.
+    const announce = (at: number, step: number, text: string) => {
+      if (previous >= at || this.service < at) return;
+      this.status = text;
+      sound.service(step);
     };
-    announce(0, "SHIELDS RECHARGING");
-    announce(TIMING.shields, "HULL REPAIR");
-    announce(TIMING.hull, "REACTOR TRANSFER");
-    announce(TIMING.energy, "REARMING");
+    announce(0, 0, "SHIELDS RECHARGING");
+    announce(TIMING.shields, 1, "HULL REPAIR");
+    announce(TIMING.hull, 2, "REACTOR TRANSFER");
+    announce(TIMING.energy, 3, "REARMING");
 
     if (previous < TIMING.torpedoes && this.service >= TIMING.torpedoes) {
       this.status = "SALVAGE TRANSFER";
@@ -300,6 +317,7 @@ export class Docking {
     this.releaseTimer = 0.8;
     // A push off the clamps, so leaving has a shove to it.
     player.velocity.set(Math.sin(player.heading), 0, Math.cos(player.heading)).multiplyScalar(-14);
+    sound.depart();
   }
 
   /**
