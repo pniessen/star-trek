@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "standalone": "vite build && node tools/build-standalone.mjs",
     "playtest": "node tools/playtest.mjs",
+    "campaigntest": "tsc -p tsconfig.campaign.json && node tools/campaigntest.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

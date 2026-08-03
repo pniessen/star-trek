@@ -4,3 +4,6 @@ shots/
 
 # Agent worktrees — checkouts of this repo, never content of it.
 .claude/worktrees/
+
+# Emitted so node can import the chart logic for tests. Never committed.
+.campaign-build/

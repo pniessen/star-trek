@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./.campaign-build",
+    "rootDir": "./src"
+  },
+  "include": ["src/chart"],
+  "exclude": ["src/chart/ChartView.ts"]
+}
