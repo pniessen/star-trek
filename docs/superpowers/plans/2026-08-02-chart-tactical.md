@@ -793,6 +793,30 @@ check(
 Run: `npm run campaigntest`
 Expected: FAIL — `ERR_MODULE_NOT_FOUND` for `enemyTurn.js`.
 
+> **Correction, recorded after execution.** The reference code below had three
+> defects, found during implementation and review. The committed source in
+> `src/chart/enemyTurn.ts` is authoritative; this block is kept for the
+> reasoning, not to be copied.
+>
+> 1. **The allocation could not pass its own tests.** A fresh board offers eight
+>    cost-1 `consolidate` targets, which consume the entire opening budget of 6
+>    before any push is affordable — so `incoming` stayed empty and the test
+>    block threw. Allocation is now two-phase: expansion is funded before
+>    consolidation.
+> 2. **Off-by-one in `resolveIncoming`.** `move.runsUntil > 0` made a committed
+>    push take two turns to land, contradicting "they land a run later". It is
+>    `> 1`.
+> 3. **The four-run assertion was a lottery.** It pinned one `findIndex`-picked
+>    sector and demanded that one fall. All eight candidates cost 3, so shuffle
+>    position alone decided which were funded. It now asserts the promise as the
+>    design states it — that neglected ground falls — which holds for 5000/5000
+>    seeds at `base: 6`. An earlier attempt to fix this by raising `base` to 9
+>    was reverted: it passed only 106/200 seeds and was fitted to one seed.
+>
+> The determinism assertion also could not fail, because it compared only
+> `campaign.sectors` while the whole budget lands in `campaign.incoming`. It now
+> compares both.
+
 - [ ] **Step 3: Implement `src/chart/enemyTurn.ts`**
 
 ```ts
