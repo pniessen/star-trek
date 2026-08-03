@@ -166,6 +166,86 @@ materialises is the whole skill of the class. No false returns: ambiguity from
 staleness and error teaches you something, a phantom would only teach you to
 distrust the one instrument the game has promised is honest.
 
+### The chart
+
+The tactical half of the strategy layer designed in §5 and detailed in
+[the chart design doc](superpowers/specs/2026-08-02-chart-design.md) is now
+built. `src/chart/` holds it, deliberately free of `three` and the DOM:
+`rng.ts` (a seeded PRNG carrying its own cursor, so a save is reproducible),
+`sectors.ts` (the 8×8 grid and orthogonal adjacency), `campaign.ts` (state
+and its mutators — nothing else is allowed to write to a campaign),
+`enemyTurn.ts` (the pressure budget, spent as committed moves that resolve a
+run later and can be intercepted), and `persistence.ts` (a versioned
+`localStorage` blob that never throws — a corrupt or absent save starts a
+fresh campaign). `ChartView.ts` is the one module in the directory allowed to
+touch a renderer, and it is excluded from the bare-node build accordingly
+(see the gotcha in `CLAUDE.md`).
+
+In-run, `Tab` raises the chart at reduced opacity without pausing the game,
+WASD moves the cursor while it is up, and `Shift` charges a two-second
+hyperwarp — you can still turn, you cannot fire, energy drains whether or not
+you release early, and arrival halves the multiplier and costs you your
+energy. `src/game/hyperwarp.ts` is the state machine. Fleet pushes committed
+by the enemy turn resolve on that same clock, visibly, so flying to intercept
+one is a real option during a run rather than a between-runs abstraction.
+
+Two of `strategy-layer.md`'s constants were retuned rather than reused: the
+enemy opens holding the far three rows of eight rather than half the board,
+and the pressure formula is `6 + floor(runsElapsed / 2) + sectorsLost`
+against the original `3 + floor(runsElapsed / 4) + sectorsLost × 0.5`. Both
+are first-draft guesses at a 15–25 run campaign, the same category as the
+flight-model constants in §7 — not decidable by reasoning, and now at least
+checked by simulation rather than left to discovery.
+
+**One deviation from the design doc, found while implementing salvage.**
+Salvage earned in a sector is scaled by `1 + yield`, not by `yield` as
+written: yield runs 0–3 and the home sector — where every fresh campaign
+starts — is yield 0, and a bare multiply would zero every kill's salvage
+there. The consequence is that a yield-3 sector now pays 4× rather than the
+documented 3×. Flag this for the tuning pass; it is a balance decision, not
+a bug, but it was made mid-implementation rather than in the design doc and
+deserves a second look with a human at the keyboard.
+
+**`tools/campaigntest.mjs`** is 52 assertions in bare node, no browser,
+covering pressure spend, adjacency, a neglected sector falling within four
+runs, interception, and round-trip serialisation. **`tools/campaignlength.mjs`**
+runs the same logic against a crude model player thousands of times and
+reports the distribution:
+
+```
+trials      2000
+won         0     (0.0%)
+lost        2000  (100.0%)
+unresolved  0      (0.0%)
+runs        p10=13  median=15  p90=16
+```
+
+The median and percentiles land inside the 15–25 run target the two retuned
+constants were chosen for. **The honest reading stops there.** Every one of
+those 2,000 campaigns ended in the player's defeat — the model player
+retakes one sector per run at a fixed rate, while the enemy's pressure budget
+grows without bound as `runsElapsed` climbs, and the model player has none of
+the defensive tools a real one will: a patrol or a starbase raises the
+enemy's cost by +2 or +3, and both belong to the second plan, not this one.
+So the number above is a **time-to-defeat**, not a validated campaign
+length — it says the constants make the enemy lose... nothing, currently,
+because there is no win condition in the loop being measured. Whether the
+pressure formula needs a cap is now an open question, recorded in §7, rather
+than a thing this instrument can quietly settle.
+
+`tools/playtest.mjs` grew from 17 to 26 assertions to cover the in-run half:
+that hyperwarp charges, that weapons are locked while charging, that arrival
+halves the multiplier and costs energy, that the chart does not stop the
+wave clock, and that a fleet move can be intercepted by clearing the wave at
+its destination.
+
+**What the chart does not do yet.** Nothing calls `save()` — the campaign
+loads at boot and is played against, but a reload starts fresh. And nothing
+in the running game calls `runEnemyTurn()` — the function is built and
+tested directly by `campaigntest.mjs`, but a run does not yet lead to
+another run. Both are first items for the second plan, along with the
+command view and its four decisions.
+
 ### Verification
 
 `tools/playtest.mjs` drives a whole run headlessly and asserts eleven rules —
@@ -229,14 +309,19 @@ puts this in CI.
 
 ---
 
-## 5. The strategy layer, designed but not built
+## 5. The strategy layer — tactical half built, command half designed
 
-[strategy-layer.md](./strategy-layer.md) has the detail. In summary: an 8×8
-chart between runs where salvage buys structures (with build times measured in
-runs, not rushable with money), refits that are all genuine tradeoffs, and
-patrols that buy turns rather than safety. The enemy spends pressure points
-after every run, so ignore a sector for four runs and it falls — and stays
-fallen.
+[strategy-layer.md](./strategy-layer.md) has the original design; the
+tactical chart it describes is now built — see §3's "The chart" — against the
+retuned constants and resolved open questions in
+[the chart design doc](superpowers/specs/2026-08-02-chart-design.md). What
+remains designed but not built is the **command view**: an 8×8 chart between
+runs where salvage buys structures (with build times measured in runs, not
+rushable with money), refits that are all genuine tradeoffs, and patrols that
+buy turns rather than safety. The enemy spends pressure points after every
+run, so ignore a sector for four runs and it falls — and stays fallen; that
+part of the enemy turn is built and tested, only nothing in the running game
+calls it yet.
 
 The rule that keeps it an arcade game: **Into the Breach, not Stellaris.** Four
 decisions per chart visit, no submenus, one currency. If the chart visit ever
@@ -249,9 +334,17 @@ takes longer than the run, the layer has failed and we cut it back.
 - **Audio.** Nothing yet. Planned as WebAudio synthesis rather than samples.
 - **Mouse aim.** Aiming is currently the nose, which is the Sega model and
   correct for a planar game. Mouse aim is worth testing but may make it too easy.
-- **Leaderboards and persistence.** `localStorage` and a seeded RNG when it
-  arrives; no backend, no accounts. The title screen shows a best-of-this-
-  sitting and says so, rather than implying a record it does not keep.
+- **Leaderboards, and run-level persistence.** `localStorage` and a seeded RNG
+  now exist for the campaign (§3, "The chart") but nothing analogous covers a
+  run or a high-score table; no backend, no accounts. The title screen shows
+  a best-of-this-sitting and says so, rather than implying a record it does
+  not keep.
+- **Saving the campaign.** The persistence module can round-trip a campaign
+  through `localStorage`, but nothing calls `save()` — the game loads
+  whatever campaign exists at boot and then never writes to it, so a reload
+  starts fresh regardless of what was won or lost.
+- **The command view and the four decisions.** Build, refit, deploy, choose
+  the front — designed in `strategy-layer.md`, not yet built.
 - **Mobile and touch.**
 
 ---
@@ -274,22 +367,55 @@ built; audio is the piece still missing, and every one of the new constants is a
 first-draft guess. Feel is most of what an arcade game is, and it is cheap to
 iterate now the renderer exists.
 
-**Weeks 6–8 — the chart, in-run.** An 8×8 sector map, hyperwarp between sectors,
-fleets that advance on a clock while you fight. This is the step that turns
-Kobayashi into Deep Black, and it doubles as the empire screen's renderer.
+**Weeks 6–8 — the chart, in-run. Built.** An 8×8 sector map, hyperwarp between
+sectors, fleets that advance on a clock while you fight — see §3, "The
+chart". This is the step that turns Kobayashi into Deep Black, and the same
+renderer is now the empire screen's, not just a promise that it would be.
 
-**Weeks 9–12 — the campaign.** Build, refit, deploy, choose the front. Enemy
-pressure. Win and loss conditions for the war.
+**Weeks 9–12 — the command view.** Build, refit, deploy, choose the front —
+the four decisions the chart's command mode still needs — plus the
+death → tally → chart handoff that would actually advance `runsElapsed` and
+call `runEnemyTurn()`. Nothing in the running game does either yet, so a run
+does not currently lead to another run. Enemy pressure and win/loss
+conditions for the war are built and tested (§3) but unreachable from
+play until this lands.
 
 **Later.** Territorial control *during* a run, if the between-runs version earns
 it. The exploration encounters from concept D, seeded into empty sectors.
 
+### Resolved
+
+Three open questions from this section and from `strategy-layer.md`'s own
+"Open questions" are now resolved, in
+[the chart design doc](superpowers/specs/2026-08-02-chart-design.md):
+
+- **Does the campaign need to be shorter?** The 8×8 grid is kept — shrinking
+  the board was rejected in favour of retuning pressure. The enemy now opens
+  holding the far three rows of eight rather than half the board, and the
+  pressure formula is `6 + floor(runsElapsed / 2) + sectorsLost`. Less
+  ground to move, not a faster loss. Simulated at median 15 runs (§3);
+  see that section's caveat before reading this as validated.
+- **Do refits persist through death?** Yes. Every run ends in death by
+  design, so losing refits on death would mean losing them always — a tax on
+  a guaranteed event, not a choice. Built as designed.
+- **Do patrols need to be visible during a run?** Yes, designed as such — a
+  sector holding a patrol is meant to show it during a run you drop into.
+  Not yet built; belongs with the rest of the command view.
+
 ### Open questions
 
-- Does the campaign need to be shorter? An 8×8 chart at ~3 pressure per run
-  implies 30–50 runs; a 6×6 opening chart is worth testing.
-- Do refits persist through death, or are they lost? Leaning persist.
 - Is mouse aim an improvement or does it remove the reason to turn the ship?
+- **Does the pressure formula need a cap?** `pressureBudget` grows without
+  bound in `runsElapsed`, with no defensive tools yet on the other side of
+  the ledger (patrols and starbases raise the enemy's cost, but nothing
+  fields them until the command view exists). Until then, campaign length
+  can only be measured as time-to-defeat (§3) rather than validated as a
+  winnable length. Whether that means capping the formula, or waiting for
+  defensive structures to exist before trusting the simulation, is open.
+- **Is `1 + yield` the right salvage curve?** Implemented to avoid zeroing
+  salvage in the yield-0 home sector, but it means yield-3 sectors pay 4×
+  rather than the documented 3× (§3). Worth a look in the tuning pass
+  alongside the flight-model constants.
 
 ---
 
