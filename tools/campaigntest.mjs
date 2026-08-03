@@ -98,5 +98,50 @@ const doomed = newCampaign(2);
 for (const s of doomed.sectors) s.structures = s.structures.filter((x) => x.kind !== "starbase");
 check("no starbase is a loss", isLost(doomed), "last starbase fell");
 
+// ── persistence ────────────────────────────────────────────────────────────
+const { SAVE_KEY, save, load } = await import("../.campaign-build/chart/persistence.js");
+
+/** Stands in for localStorage, which does not exist in node. */
+const fakeStorage = (seed = {}) => {
+  const data = { ...seed };
+  return {
+    getItem: (k) => (k in data ? data[k] : null),
+    setItem: (k, v) => { data[k] = v; },
+    raw: data,
+  };
+};
+
+const store = fakeStorage();
+const original = newCampaign(4242);
+original.salvage = 750;
+original.runsElapsed = 6;
+original.rngCursor = 31;
+save(original, store);
+const restored = load(store, 1);
+
+check("a save round-trips salvage", restored.salvage === 750, `salvage=${restored.salvage}`);
+check("...and the run counter", restored.runsElapsed === 6, `runs=${restored.runsElapsed}`);
+check("...and the seed", restored.seed === 4242, `seed=${restored.seed}`);
+// The subtle one. Without the cursor a reload re-rolls the enemy's turn.
+check("...and the RNG cursor", restored.rngCursor === 31, `cursor=${restored.rngCursor}`);
+check(
+  "...and the board exactly",
+  JSON.stringify(restored.sectors) === JSON.stringify(original.sectors),
+  "64 sectors",
+);
+
+// A player whose save fails to parse gets a new campaign, not a black screen.
+const corrupt = load(fakeStorage({ [SAVE_KEY]: "{not json" }), 7);
+check("corrupt saves start fresh", corrupt.seed === 7 && corrupt.salvage === 0, "recovered");
+
+const absent = load(fakeStorage(), 8);
+check("absent saves start fresh", absent.seed === 8, "recovered");
+
+const stale = fakeStorage({
+  [SAVE_KEY]: JSON.stringify({ ...original, version: CAMPAIGN_VERSION + 99 }),
+});
+const migrated = load(stale, 9);
+check("a future version resets rather than crashing", migrated.seed === 9, "reset");
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 process.exit(problems.length ? 1 : 0);
