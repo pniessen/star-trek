@@ -250,7 +250,7 @@ export function neighbours(index: number): number[] {
 - [ ] **Step 6: Run the tests and make sure they pass**
 
 Run: `npm run campaigntest`
-Expected: PASS on all 9 assertions, ending `no problems`.
+Expected: PASS on all 10 assertions, ending `no problems`.
 
 - [ ] **Step 7: Typecheck and commit**
 
