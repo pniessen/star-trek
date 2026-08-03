@@ -19,6 +19,8 @@ import { Session } from "./game/session.js";
 import { Presentation } from "./game/presentation.js";
 import type { DeathSequence } from "./game/death.js";
 import { drawHud } from "./hud/draw.js";
+import { load } from "./chart/persistence.js";
+import { colOf, indexOf, inBounds, rowOf } from "./chart/sectors.js";
 
 /** Publishes state on `window.__probe` for headless checks. */
 const DEBUG_PROBE = location.hostname === "127.0.0.1" || location.hostname === "localhost";
@@ -77,6 +79,18 @@ starbase.group.position.copy(STARBASE_POSITION);
 const session = new Session(fleet, STARBASE_POSITION, playerHull);
 const presentation = new Presentation(session, player, fleet, STARBASE_POSITION);
 
+// ── campaign ───────────────────────────────────────────────────────────────
+
+// Loaded once at boot rather than on demand, so holding Tab the first time
+// never stalls on a synchronous read. `load` never throws — a corrupt or
+// absent save quietly becomes a fresh campaign.
+const campaign = load(window.localStorage, Date.now());
+
+/** Eased 0→1 while `Tab` is held. The overlay fades; the run behind it does not pause. */
+let chartOpacity = 0;
+/** The sector the chart cursor is pointing at, independent of `campaign.current`. */
+let chartCursor = campaign.current;
+
 // ── controls ───────────────────────────────────────────────────────────────
 
 const CAMERA_MODES = ["cockpit", "chase", "orbit"] as const;
@@ -109,7 +123,7 @@ const pressed = new Set<string>();
  * cabinet convention — but you should still be able to turn the CRT glass off
  * while admiring the title screen.
  */
-const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "1", "2", "3", "[", "]", "-", "="]);
+const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "1", "2", "3", "[", "]", "-", "=", "tab"]);
 
 /** Applied to every VectorObject in the scene, including ones spawned later. */
 function applyShapeMode(): void {
@@ -120,7 +134,9 @@ function applyShapeMode(): void {
 
 window.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
-  if (key === " " || key.startsWith("arrow")) event.preventDefault();
+  // Tab's default is to move focus off the canvas, which would silently
+  // strip every other key binding out from under the player.
+  if (key === " " || key === "tab" || key.startsWith("arrow")) event.preventDefault();
   if (event.repeat) return;
   held.add(key);
   pressed.add(key);
@@ -278,6 +294,19 @@ function placeWreckCamera(death: DeathSequence, time: number): void {
 
 // ── loop ───────────────────────────────────────────────────────────────────
 
+/** Fade rate for the chart overlay, in nats/second — see `approach` below. */
+const CHART_FADE_RATE = 7;
+
+/**
+ * Exponential approach toward `target`, framerate-independent by construction
+ * rather than merely close for small `dt`. The chart's fade is the one place
+ * this file eases anything, so it earns its own tiny helper instead of
+ * borrowing a lerp that would drift at a slow frame.
+ */
+function approach(current: number, target: number, dt: number, rate: number): number {
+  return target + (current - target) * Math.exp(-rate * dt);
+}
+
 let last = performance.now();
 let time = 0;
 let smoothedFps = 60;
@@ -296,6 +325,28 @@ function frame(now: number): void {
 
   presentation.update(dt);
 
+  // The chart is an overlay on top of the run, not a pause of it — it fades on
+  // its own clock using real `dt` so the ease reads the same on any machine.
+  chartOpacity = approach(chartOpacity, held.has("tab") ? 1 : 0, dt, CHART_FADE_RATE);
+  // Past the midpoint of the fade WASD is reading the map, not flying the
+  // ship. Below it, control hands straight back — there is no separate mode
+  // to get stuck in, just where this one number happens to be.
+  const chartActive = chartOpacity > 0.5;
+  if (chartActive) {
+    const col = colOf(chartCursor);
+    const row = rowOf(chartCursor);
+    let nextCol = col;
+    let nextRow = row;
+    // One sector per press, not per frame: `pressed` only latches the first
+    // keydown of a hold, so parking a finger on `D` does not sweep the cursor
+    // across the whole grid in one held breath.
+    if (pressed.has("w")) nextRow -= 1;
+    else if (pressed.has("s")) nextRow += 1;
+    else if (pressed.has("a")) nextCol -= 1;
+    else if (pressed.has("d")) nextCol += 1;
+    if (inBounds(nextCol, nextRow)) chartCursor = indexOf(nextCol, nextRow);
+  }
+
   if (presentation.mode === "title") {
     // Nothing is flown and no wave is spawned behind the title — the session is
     // not stepped at all. The hull just turns on the spot so it presents
@@ -307,14 +358,17 @@ function frame(now: number): void {
     // watched for the keypress that takes it away again.
     const demo = presentation.mode === "attract" ? presentation.fly(dt) : null;
 
+    // WASD flies the ship, except while the chart is up, where the same keys
+    // step the cursor instead — see above. The arrows are never reassigned,
+    // so a player who wants to keep manoeuvring while reading the chart can.
     const turn = demo
       ? demo.turn
-      : (held.has("arrowright") || held.has("d") ? 1 : 0) -
-        (held.has("arrowleft") || held.has("a") ? 1 : 0);
+      : (held.has("arrowright") || (!chartActive && held.has("d")) ? 1 : 0) -
+        (held.has("arrowleft") || (!chartActive && held.has("a")) ? 1 : 0);
     const thrust = demo
       ? demo.thrust
-      : (held.has("arrowup") || held.has("w") ? 1 : 0) -
-        (held.has("arrowdown") || held.has("s") ? 1 : 0);
+      : (held.has("arrowup") || (!chartActive && held.has("w")) ? 1 : 0) -
+        (held.has("arrowdown") || (!chartActive && held.has("s")) ? 1 : 0);
 
     // The station takes the helm during capture, and holds you in place while
     // moored — you can still turn and shoot, which is what stops a wave arriving
@@ -374,6 +428,9 @@ function frame(now: number): void {
     phosphor: settings.phosphor,
     crt: settings.crt,
     showDiagnostics: settings.diagnostics,
+    campaign,
+    chartOpacity,
+    chartCursor,
   });
 
   if (DEBUG_PROBE) {

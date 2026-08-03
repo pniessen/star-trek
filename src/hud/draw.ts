@@ -8,6 +8,8 @@ import type { Presentation } from "../game/presentation.js";
 import { TORPEDO } from "../game/weapons.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { GLYPH_ADVANCE } from "./strokeFont.js";
+import { drawChart } from "../chart/ChartView.js";
+import type { Campaign } from "../chart/campaign.js";
 
 export interface HudView {
   readonly player: Ship;
@@ -25,6 +27,11 @@ export interface HudView {
   readonly phosphor: boolean;
   readonly crt: boolean;
   readonly showDiagnostics: boolean;
+  readonly campaign: Campaign;
+  /** 0→1, eased in `main.ts` while `Tab` is held. */
+  readonly chartOpacity: number;
+  /** The sector the chart cursor is pointing at, independent of `campaign.current`. */
+  readonly chartCursor: number;
 }
 
 const dim = PALETTE.trace.clone().multiplyScalar(0.5);
@@ -134,6 +141,11 @@ export function drawHud(hud: Hud, view: HudView): void {
   if (presentation.mode === "attract") drawAttractBanner(hud, view, width);
 
   if (view.showDiagnostics) drawDiagnostics(hud, view, width, height);
+
+  // Drawn last so it sits on top of every other instrument. Never reached from
+  // the title or tally early-returns above, which is what keeps it off the
+  // title screen without a special case here.
+  drawChart(hud, view.campaign, view.chartOpacity, view.chartCursor);
 
   hud.end();
 }
