@@ -7,7 +7,9 @@ whose command layer is not yet. Working title; the eventual larger game is
 
 Full background in `docs/` — [status.md](docs/status.md) first, then
 [prior-art.md](docs/prior-art.md), [concept-options.md](docs/concept-options.md),
-[strategy-layer.md](docs/strategy-layer.md).
+[strategy-layer.md](docs/strategy-layer.md), and
+[audio-prior-art.md](docs/audio-prior-art.md), which the audio layer was built
+*before* rather than from, and which contradicts it in several places.
 
 ## Run it
 
