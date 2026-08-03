@@ -215,7 +215,14 @@ await page.screenshot({ path: `${OUT}/cloaked.png` });
 await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
 // ── hyperwarp ───────────────────────────────────────────────────────────────
+// Pinned for the whole charge-and-arrive sequence below: breach() applies the
+// identical Math.max(1, m * 0.5) halving on a hostile hit that arrive() does
+// on a jump, and the charge runs two full seconds next to a live wave with no
+// other guard against a stray shot landing. Without the pin, a hit during the
+// charge could satisfy "arriving halves the multiplier" on its own, whether
+// or not arrive() itself ever ran the halving.
 await page.evaluate(() => {
+  window.__pin = setInterval(() => { window.__player.hull = 1; }, 80);
   window.__session.wave = 1;
   window.__fleet.clear();
   window.__player.energy = 1;
@@ -272,9 +279,17 @@ const sectorBefore = (await probe()).sector;
 state = await waitFor((s) => s.multiplier <= 2, 15000);
 await page.keyboard.up("Shift");
 check("arriving halves the multiplier", state.multiplier <= 2, `x${state.multiplier}`);
-check("...and you arrive cold", state.energy < 0.6, `energy=${state.energy}`);
+// HYPERWARP.arrivalEnergy is 0.25, but the charge's own drain
+// (drainPerSecond * charge = 0.25 * 2 = 0.5) starting from the energy=1 set
+// above would *also* land near 0.5 with the explicit arrival-energy
+// assignment deleted entirely — a threshold of 0.6 would pass on drain alone
+// and never actually exercise the override. 0.35 sits strictly below that
+// natural leftover and strictly above the 0.25 constant, so only the real
+// assignment in arrive() can satisfy it.
+check("...and you arrive cold", state.energy < 0.35, `energy=${state.energy}`);
 // Without this the jump is a reset button rather than travel.
 check("...and somewhere else", state.sector !== sectorBefore, `${sectorBefore} → ${state.sector}`);
+await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
 // ── the overlay does not pause the game ─────────────────────────────────────
 const waveBefore = (await probe()).wave;
@@ -286,26 +301,20 @@ check("the chart does not stop the wave clock", (await probe()).wave > waveBefor
 // ── a jump intercepts a committed attack on the destination ─────────────────
 // Flagged by Task 7's implementer as untested: reaching a sector the enemy
 // has already committed to attacking should cancel that attack — see the
-// comment on Session.updateWaves(). Prove it the way a player actually would:
-// jump to a threatened sector, then clear the wave that greets you there.
-//
-// Arriving is deliberately checked *before* the clear. Arrival empties the
-// fleet on its own (`arrive()` calls `fleet.clear()`), and the "fighting →
-// clear" transition that fires interception doesn't care which sector taught
-// it "fighting" — so a charge begun while a fight was already under way could
-// look like an interception by accident, on a sector nothing was ever fought
-// in. Forcing a clean "clear" state before the jump, and asserting inbound is
-// still untouched the instant the jump lands, is what rules that out and
-// makes the drop below actually attributable to clearing the destination's
-// own wave.
+// comment on Session.updateWaves(). Prove it the way a player actually
+// would: jump to a threatened sector, then clear the wave that greets you
+// there — *while a real fight is already under way back where the jump
+// started*. That precondition is not incidental: arrive() empties the fleet
+// on its own, and the "fighting → clear" transition that fires interception
+// used to fire for whatever campaign.current happened to be at that moment —
+// including the sector just arrived in, credited for a fight that happened
+// somewhere else entirely, for free. A jump begun from a clean, idle state
+// can never exercise that path at all, so the wave from the previous section
+// is deliberately left up rather than cleared first.
 await page.evaluate(() => {
   window.__hullPin = setInterval(() => { window.__player.hull = 1; }, 80);
-  window.__fleet.clear();
-  window.__session.state = "clear";
-  // Pinned so the break timer can't sneak a wave in before the setup below
-  // finishes pointing the jump.
-  window.__session.breakTimer = 999;
 });
+state = await waitFor((s) => s.hostiles > 0, 10000);
 
 const interceptSetup = await page.evaluate(() => {
   const { neighbours } = window.__chart;
@@ -325,6 +334,10 @@ check(
   state.sector === interceptSetup.to,
   `${interceptSetup.from} → ${state.sector}, wanted ${interceptSetup.to}`,
 );
+// The regression test for the free-interception bug: read the instant the
+// jump lands, before any wave is fought at the destination. The fight left
+// running back at `from` is what would let a broken implementation credit
+// this as interception; a correct one must still show the attack pending.
 check(
   "arrival alone does not intercept",
   state.inbound === interceptSetup.inboundBefore,

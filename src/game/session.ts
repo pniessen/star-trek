@@ -54,6 +54,15 @@ export class Session {
   readonly hyperwarp = new Hyperwarp();
   /** Sector a charge is headed for. -1 when idle — `hyperwarp.phase` is the source of truth for "charging". */
   private hyperwarpDestination = -1;
+  /**
+   * Set by `arrive()`, consumed by the next `updateWaves()` call. Arrival
+   * empties the fleet as a side effect of the jump, not because the player
+   * cleared anything in the sector they land in — without this, the
+   * "fighting" state inherited from whatever was fought *before* the jump
+   * would credit that unrelated fight as an interception of the destination's
+   * committed attack, which is a free win the player never earned.
+   */
+  private arrivedByJump = false;
 
   state: SessionState = "clear";
   wave = 0;
@@ -209,6 +218,10 @@ export class Session {
     // Arriving somewhere is the point. Without this the jump is a reset
     // button and threat and yield never come from anywhere.
     this.campaign.current = this.hyperwarpDestination;
+    // This clear is the jump's doing, not a wave the player just beat here —
+    // see the field comment. updateWaves() reads and clears this on its very
+    // next call, whichever branch it takes.
+    this.arrivedByJump = true;
     this.say("HYPERWARP");
   }
 
@@ -342,6 +355,7 @@ export class Session {
     // mid-spin-up would otherwise sit at "charging" forever.
     this.hyperwarp.cancel();
     this.hyperwarpDestination = -1;
+    this.arrivedByJump = false;
     this.hitStop.strike(HIT_STOP.death);
     this.death.begin(player, this.playerShape, this.debris);
     this.say("SHIP LOST");
@@ -370,6 +384,12 @@ export class Session {
    * needs — sitting there has to cost you the time it takes.
    */
   private updateWaves(dt: number, player: Ship): void {
+    // Consumed here, once, regardless of which branch below runs — this is
+    // the only call that can see the transition arrival caused, and it must
+    // not leak forward to credit some later, unrelated clear.
+    const arrivedByJump = this.arrivedByJump;
+    this.arrivedByJump = false;
+
     if (this.fleet.hostiles.length > 0) {
       this.state = "fighting";
       return;
@@ -380,7 +400,11 @@ export class Session {
       this.breakTimer = WAVE_BREAK;
       // Clearing a wave in a sector with a committed attack against it is the
       // interception — the whole reason to read the chart mid-run rather than
-      // only between runs.
+      // only between runs. But the "fighting" flag reaching this point can
+      // also be arrival's own fleet.clear() carrying over the *previous*
+      // sector's fight — see `arrivedByJump`. Only a wave the player actually
+      // destroyed in the sector they are now in may intercept.
+      if (arrivedByJump) return;
       if (intercept(this.campaign, this.campaign.current)) this.say("ATTACK BROKEN");
       else this.say("SECTOR CLEAR");
       return;
@@ -441,6 +465,7 @@ export class Session {
     this.hitStop.clear();
     this.hyperwarp.cancel();
     this.hyperwarpDestination = -1;
+    this.arrivedByJump = false;
     player.reset();
     this.state = "clear";
     this.wave = 0;
