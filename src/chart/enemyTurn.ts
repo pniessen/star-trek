@@ -1,5 +1,5 @@
-import { hasStructure, type Campaign, type Sector } from "./campaign.js";
-import { neighbours } from "./sectors.js";
+import { countControl, hasStructure, ENEMY_START_DEPTH, type Campaign, type Sector } from "./campaign.js";
+import { GRID, neighbours } from "./sectors.js";
 import type { Rng } from "./rng.js";
 
 /**
@@ -10,9 +10,9 @@ import type { Rng } from "./rng.js";
  *
  * A fresh board offers eight cost-1 consolidate targets (one per column on
  * the enemy's own border row) before a single push is ever affordable at
- * ACTION_COST.pushOurs. At base 6 that's enough on its own to eat the whole
- * opening budget, which is why spending below is split into two phases
- * instead of one flat cheapest-first pass — see runEnemyTurn.
+ * ACTION_COST.pushOurs — at base 6 that's enough on its own to eat the whole
+ * opening budget. See `runEnemyTurn`'s docblock for why that is handled by
+ * spending in two phases rather than one flat cheapest-first pass.
  */
 export const PRESSURE = {
   base: 6,
@@ -38,11 +38,23 @@ export interface EnemyAction {
   cost: number;
 }
 
+/**
+ * Sectors the enemy holds beyond the depth it opened with, floored at zero.
+ * This is what `campaign.sectorsLost` was trying to be, read live off the
+ * board instead of accumulated: `sectorsLost` only ever increments, so a
+ * campaign that lost ground and then retook it stayed charged for ground it
+ * no longer holds. Deriving it from the board means retaking a sector lowers
+ * this — and the pressure budget with it — the instant control flips back.
+ */
+function sectorsHeldBeyondStart(campaign: Campaign): number {
+  return Math.max(0, countControl(campaign, "theirs") - ENEMY_START_DEPTH * GRID);
+}
+
 export function pressureBudget(campaign: Campaign): number {
   return (
     PRESSURE.base +
     Math.floor(campaign.runsElapsed / PRESSURE.runsPerStep) +
-    campaign.sectorsLost
+    sectorsHeldBeyondStart(campaign)
   );
 }
 
@@ -96,12 +108,8 @@ export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
     .filter((option) => option.kind !== null)
     .sort((a, b) => a.cost - b.cost);
 
-  // Expansion (pushes and assaults) spends first, cheapest-first; consolidate
-  // spends only what expansion leaves behind. A single global cheapest-first
-  // pass lets consolidate — cheap, and always available in bulk on the
-  // enemy's own border row — buy out the whole budget before a single push
-  // is ever affordable, so the front never moves. Consolidation is what the
-  // enemy does with what's left over, not what it does first.
+  // Expansion first, consolidate only with what's left — see the docblock
+  // above for why the order matters.
   const expansion = priced.filter((option) => option.kind !== "consolidate");
   const reinforcement = priced.filter((option) => option.kind === "consolidate");
 

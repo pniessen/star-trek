@@ -215,12 +215,16 @@ await page.screenshot({ path: `${OUT}/cloaked.png` });
 await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
 // ── hyperwarp ───────────────────────────────────────────────────────────────
-// Pinned for the whole charge-and-arrive sequence below: breach() applies the
-// identical Math.max(1, m * 0.5) halving on a hostile hit that arrive() does
-// on a jump, and the charge runs two full seconds next to a live wave with no
-// other guard against a stray shot landing. Without the pin, a hit during the
-// charge could satisfy "arriving halves the multiplier" on its own, whether
-// or not arrive() itself ever ran the halving.
+// Pinned for the whole charge-and-arrive sequence below purely so the ship
+// survives the two-second charge next to a live wave: this does NOT guard the
+// multiplier-halving assertion below. `Ship.takeHit` returns true — and
+// `Session.resolveProjectiles` therefore calls `breach()`, which applies the
+// identical Math.max(1, m * 0.5) halving that arrive() does — whenever
+// throughput exceeds the *shield*, regardless of hull, so a stray hit during
+// the charge can halve the multiplier on its own even with hull pinned to 1.
+// The assertion below is written to be immune to that: it waits on
+// `sector !== sectorBefore`, something only a completed jump can produce,
+// rather than on the multiplier threshold itself.
 await page.evaluate(() => {
   window.__pin = setInterval(() => { window.__player.hull = 1; }, 80);
   window.__session.wave = 1;
@@ -276,7 +280,13 @@ check(
 );
 
 const sectorBefore = (await probe()).sector;
-state = await waitFor((s) => s.multiplier <= 2, 15000);
+// Wait on the thing only the jump itself can produce, not on the multiplier
+// threshold — see the comment above the pin. A hostile hit landing during the
+// two-second charge could otherwise satisfy `multiplier <= 2` on its own,
+// which would (a) let a deleted halving in arrive() still pass this check and
+// (b) leave the next two assertions reading pre-jump state, a live flake
+// source independent of (a).
+state = await waitFor((s) => s.sector !== sectorBefore, 15000);
 await page.keyboard.up("Shift");
 check("arriving halves the multiplier", state.multiplier <= 2, `x${state.multiplier}`);
 // HYPERWARP.arrivalEnergy is 0.25, but the charge's own drain
@@ -291,12 +301,97 @@ check("...and you arrive cold", state.energy < 0.35, `energy=${state.energy}`);
 check("...and somewhere else", state.sector !== sectorBefore, `${sectorBefore} → ${state.sector}`);
 await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
-// ── the overlay does not pause the game ─────────────────────────────────────
+// ── the chart overlay ────────────────────────────────────────────────────────
+// This block used to re-read the exact predicate `waitFor` had just
+// satisfied, which cannot fail, and never established the overlay was
+// actually up — an implementation where Tab is unbound or drawChart
+// early-returns unconditionally would still pass it. Establish each thing
+// separately instead.
+
+// Pinned for the whole block: waiting for a wave to advance can run for
+// several seconds next to whatever spawned, and this block is about the
+// overlay and the cursor, not about whether the harness can survive combat.
+await page.evaluate(() => {
+  window.__chartPin = setInterval(() => { window.__player.hull = 1; }, 80);
+});
+
+// Holding Tab has to raise chartOpacity itself, not just something that
+// happens to correlate with it.
 const waveBefore = (await probe()).wave;
 await page.keyboard.down("Tab");
-await waitFor((s) => s.wave > waveBefore, 30000);
+state = await waitFor((s) => s.chartOpacity > 0.5, 3000);
+check("holding Tab raises the chart's opacity", state.chartOpacity > 0.5, `opacity=${state.chartOpacity}`);
+
+// The wave clock has to advance *while the overlay is still up*, not merely
+// resume once Tab is released — waiting for `wave > waveBefore` and then
+// reading a post-release probe would pass even if the clock only restarted
+// on release. Capture the wave before raising the chart and require a
+// strictly greater value while chartOpacity is still above the threshold.
+state = await waitFor((s) => s.wave > waveBefore && s.chartOpacity > 0.5, 30000);
+check(
+  "the chart does not stop the wave clock",
+  state.wave > waveBefore && state.chartOpacity > 0.5,
+  `wave ${waveBefore} → ${state.wave}, opacity=${state.chartOpacity}`,
+);
+
+// WASD steps the cursor one sector per press and never walks it off the grid.
+// Park it in a corner first so both a normal move and an off-grid clamp are
+// exercised from known, computed positions rather than magic indices.
+const corners = await page.evaluate(() => {
+  const { indexOf } = window.__chart;
+  return { nw: indexOf(0, 0), east: indexOf(1, 0), south: indexOf(0, 1) };
+});
+await page.evaluate((nw) => window.__chartCursor.set(nw), corners.nw);
+
+await page.keyboard.press("d");
+state = await waitFor((s) => s.chartCursor === corners.east, 3000);
+check("D steps the cursor one sector east", state.chartCursor === corners.east, `cursor=${state.chartCursor}`);
+
+await page.keyboard.press("a");
+state = await waitFor((s) => s.chartCursor === corners.nw, 3000);
+check("A steps the cursor back west", state.chartCursor === corners.nw, `cursor=${state.chartCursor}`);
+
+// From the northwest corner, stepping further west or north must not move
+// the cursor off the grid.
+await page.keyboard.press("a");
+await page.waitForTimeout(200);
+state = await probe();
+check("the cursor does not walk off the west edge", state.chartCursor === corners.nw, `cursor=${state.chartCursor}`);
+await page.keyboard.press("w");
+await page.waitForTimeout(200);
+state = await probe();
+check("the cursor does not walk off the north edge", state.chartCursor === corners.nw, `cursor=${state.chartCursor}`);
+
+await page.keyboard.press("s");
+state = await waitFor((s) => s.chartCursor === corners.south, 3000);
+check("S steps the cursor one sector south", state.chartCursor === corners.south, `cursor=${state.chartCursor}`);
+
+// While the overlay is up, WASD is reading the map, not flying the ship —
+// but the arrow keys are never reassigned and must still work.
+const headingBeforeWasd = await page.evaluate(() => window.__player.heading);
+await page.keyboard.down("d");
+await page.waitForTimeout(300);
+const headingAfterWasd = await page.evaluate(() => window.__player.heading);
+await page.keyboard.up("d");
+check(
+  "WASD does not steer while the chart is up",
+  headingAfterWasd === headingBeforeWasd,
+  `${headingBeforeWasd} → ${headingAfterWasd}`,
+);
+
+const headingBeforeArrow = await page.evaluate(() => window.__player.heading);
+await page.keyboard.down("ArrowRight");
+await page.waitForTimeout(300);
+const headingAfterArrow = await page.evaluate(() => window.__player.heading);
+await page.keyboard.up("ArrowRight");
+check(
+  "the arrow keys still steer while the chart is up",
+  headingAfterArrow !== headingBeforeArrow,
+  `${headingBeforeArrow} → ${headingAfterArrow}`,
+);
+
 await page.keyboard.up("Tab");
-check("the chart does not stop the wave clock", (await probe()).wave > waveBefore, `wave>${waveBefore}`);
+await page.evaluate(() => { clearInterval(window.__chartPin); delete window.__chartPin; });
 
 // ── a jump intercepts a committed attack on the destination ─────────────────
 // Flagged by Task 7's implementer as untested: reaching a sector the enemy

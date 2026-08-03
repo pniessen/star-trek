@@ -1,4 +1,5 @@
 import { CAMPAIGN_VERSION, newCampaign, type Campaign } from "./campaign.js";
+import { SECTOR_COUNT } from "./sectors.js";
 
 export const SAVE_KEY = "kobayashi.campaign";
 
@@ -37,6 +38,14 @@ export function load(storage: CampaignStorage, freshSeed: number): Campaign {
   return parsed;
 }
 
+/**
+ * Every field checked here is one `spawnWave()` dereferences without a guard
+ * of its own — `campaign.sectors[campaign.current].threat`, chiefly — inside
+ * `frame()`, before `requestAnimationFrame` re-arms. A save that passes this
+ * check but is still short a field throws there instead, and the loop never
+ * restarts: the game freezes on the last frame rather than falling back to a
+ * fresh campaign, which is the one outcome this module exists to prevent.
+ */
 function isCampaign(value: unknown): value is Campaign {
   if (typeof value !== "object" || value === null) return false;
   const c = value as Partial<Campaign>;
@@ -46,6 +55,9 @@ function isCampaign(value: unknown): value is Campaign {
     typeof c.rngCursor === "number" &&
     typeof c.salvage === "number" &&
     typeof c.front === "number" &&
-    Array.isArray(c.sectors)
+    typeof c.current === "number" &&
+    Array.isArray(c.sectors) &&
+    c.sectors.length === SECTOR_COUNT &&
+    Array.isArray(c.incoming)
   );
 }

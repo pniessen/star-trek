@@ -188,10 +188,14 @@ layer with nothing underneath it.
 
 ## Open questions
 
-- Does the campaign need a length? An 8×8 chart at ~3 pressure per run implies
-  roughly 30–50 runs to resolve, which may be too long for a first campaign.
-  A 6×6 opening chart is worth testing.
-- Should refits be lost on death, or persist? Losing them makes each run matter
-  more and makes a bad run feel expensive. Leaning persist, test both.
+All three questions originally posed here are resolved — see
+[status.md §7, "Resolved"](./status.md#resolved) for the answers and the
+reasoning, recorded there rather than duplicated here because that is where
+the rest of the chart's build state and caveats already live:
+
+- Does the campaign need a length? Resolved: kept the 8×8 board, retuned
+  `ENEMY_START_DEPTH` and the pressure formula instead of shrinking the grid.
+- Should refits be lost on death, or persist? Resolved: persist.
 - Do patrols need to be visible during a run if you drop into their sector?
-  Cheap to do, and it would sell the map hard.
+  Resolved: yes, designed as such — not yet built, belongs with the command
+  view.

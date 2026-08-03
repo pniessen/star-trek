@@ -185,9 +185,21 @@ In-run, `Tab` raises the chart at reduced opacity without pausing the game,
 WASD moves the cursor while it is up, and `Shift` charges a two-second
 hyperwarp — you can still turn, you cannot fire, energy drains whether or not
 you release early, and arrival halves the multiplier and costs you your
-energy. `src/game/hyperwarp.ts` is the state machine. Fleet pushes committed
-by the enemy turn resolve on that same clock, visibly, so flying to intercept
-one is a real option during a run rather than a between-runs abstraction.
+energy. `src/game/hyperwarp.ts` is the state machine. A committed fleet push
+that has already landed on the chart can be intercepted mid-run — reach the
+threatened sector and clear the wave that greets you there and the attack
+never lands, and this is implemented and covered by `playtest.mjs`. What is
+not yet true: nothing in the running game calls `runEnemyTurn()` (see below),
+so no run currently generates a push to intercept — `campaign.incoming` stays
+empty until something between runs populates it, and the amber ring never
+draws in practice yet.
+
+**One more thing not yet true: the dock ring is aspirational.** `ChartView`
+draws a ring on any sector `canDock` returns true for, as "somewhere to bank"
+— but the starbase itself sits at one fixed world position regardless of
+`campaign.current`, so the running game lets you dock from anywhere, not only
+from a sector holding a dock structure. Per-sector docking is out of scope
+for this pass; this is a note, not a fix.
 
 Two of `strategy-layer.md`'s constants were retuned rather than reused: the
 enemy opens holding the far three rows of eight rather than half the board,
@@ -206,9 +218,11 @@ documented 3×. Flag this for the tuning pass; it is a balance decision, not
 a bug, but it was made mid-implementation rather than in the design doc and
 deserves a second look with a human at the keyboard.
 
-**`tools/campaigntest.mjs`** is 52 assertions in bare node, no browser,
+**`tools/campaigntest.mjs`** is 54 assertions in bare node, no browser,
 covering pressure spend, adjacency, a neglected sector falling within four
-runs, interception, and round-trip serialisation. **`tools/campaignlength.mjs`**
+runs, interception, round-trip serialisation, a truncated save falling back
+to a fresh campaign, and that retaking ground actually lowers the pressure
+budget rather than only ever accumulating. **`tools/campaignlength.mjs`**
 runs the same logic against a crude model player thousands of times and
 reports the distribution:
 
@@ -233,11 +247,14 @@ because there is no win condition in the loop being measured. Whether the
 pressure formula needs a cap is now an open question, recorded in §7, rather
 than a thing this instrument can quietly settle.
 
-`tools/playtest.mjs` grew from 17 to 26 assertions to cover the in-run half:
+`tools/playtest.mjs` grew from 17 to 35 assertions to cover the in-run half:
 that hyperwarp charges, that weapons are locked while charging, that arrival
-halves the multiplier and costs energy, that the chart does not stop the
-wave clock, and that a fleet move can be intercepted by clearing the wave at
-its destination.
+halves the multiplier and costs energy, that the chart raises its own
+opacity and steps the cursor one sector at a time without walking it off the
+grid, that WASD hands off to steering the ship versus steering the cursor
+correctly, that the wave clock keeps advancing while the overlay is up, and
+that a fleet move can be intercepted by clearing the wave at its
+destination.
 
 **What the chart does not do yet.** Nothing calls `save()` — the campaign
 loads at boot and is played against, but a reload starts fresh. And nothing
@@ -249,13 +266,15 @@ command view and its four decisions.
 ### Verification
 
 `tools/playtest.mjs` drives a whole run headlessly and has grown, feature by
-feature, to twenty-six assertions: waves spawn and escalate, phasers draw
+feature, to thirty-five assertions: waves spawn and escalate, phasers draw
 energy and torpedoes deplete, kills bank salvage and climb the multiplier,
 docking banks and resupplies and resets, hit-stop dilates time and always lets
 go, death breaks the player up and reaches the tally, restart is clean, the
 minelayer and cloaker classes behave as designed, and — the in-run half of
 the chart, covered in §3 above — hyperwarp charges, locks weapons, and costs
-what it should, and a committed fleet move can be intercepted.
+what it should, the overlay itself raises and steps the cursor without
+walking it off the grid, WASD hands off between the ship and the cursor
+correctly, and a committed fleet move can be intercepted.
 
 **The harness now has to launch its own run.** A fresh load lands on the title
 screen and nothing spawns behind it, so the first assertion needs a keypress —

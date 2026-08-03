@@ -74,7 +74,11 @@ check("the front is a sector you hold", c.sectors[c.front].control === "ours", `
 check("you start where you launch from", c.current === c.front, `current=${c.current}`);
 check("nothing is inbound yet", c.incoming.length === 0, "clear");
 check("a starbase is a dock", canDock(c.sectors.find((s) => hasStructure(s, "starbase"))), "starbase");
-check("empty space is not", !canDock(c.sectors[c.front === 0 ? 1 : 0]) || c.front === 0, "bare sector");
+// Sector 0 is never the front (the front is always the board's centre-bottom
+// home sector) and starts with no structures, so this is unconditionally a
+// bare sector — no `|| c.front === 0` needed, and that clause was dead: it
+// would have made this pass unconditionally had `front` ever actually been 0.
+check("empty space is not", !canDock(c.sectors[0]), "bare sector");
 
 // ── salvage ─────────────────────────────────────────────────────────────────
 creditSalvage(c, 500);
@@ -143,20 +147,53 @@ const stale = fakeStorage({
 const migrated = load(stale, 9);
 check("a future version resets rather than crashing", migrated.seed === 9, "reset");
 
-const { PRESSURE, ACTION_COST, pressureBudget, runEnemyTurn, intercept } =
+// A save with a truncated sectors array passes a check that only looks for
+// `Array.isArray` — `campaign.sectors[campaign.current].threat` then throws
+// inside `frame()`, before `requestAnimationFrame` re-arms, and the game
+// freezes on the last frame instead of falling back to a fresh campaign.
+const truncated = fakeStorage({
+  [SAVE_KEY]: JSON.stringify({ ...original, sectors: original.sectors.slice(0, 3) }),
+});
+const rescued = load(truncated, 10);
+check(
+  "a truncated sectors array starts fresh, not a black screen",
+  rescued.seed === 10 && rescued.sectors.length === SECTOR_COUNT,
+  `sectors=${rescued.sectors.length}`,
+);
+
+const { PRESSURE, pressureBudget, runEnemyTurn, intercept } =
   await import("../.campaign-build/chart/enemyTurn.js");
 
 // ── the budget ──────────────────────────────────────────────────────────────
 const fresh = newCampaign(11);
 check("opening pressure is the base", pressureBudget(fresh) === PRESSURE.base, `p=${pressureBudget(fresh)}`);
 
+// The budget now reads the live board, not the `sectorsLost` counter (see
+// enemyTurn.ts's `sectorsHeldBeyondStart`) — so "losses" here means actually
+// flipping sector control, not setting a field.
 const later = newCampaign(11);
 later.runsElapsed = 10;
-later.sectorsLost = 2;
+const takenA = later.sectors.findIndex((s) => s.control === "ours");
+later.sectors[takenA].control = "theirs";
+const takenB = later.sectors.findIndex((s, i) => s.control === "ours" && i !== takenA);
+later.sectors[takenB].control = "theirs";
 check(
-  "pressure climbs with runs and losses",
+  "pressure climbs with runs and ground actually lost",
   pressureBudget(later) === PRESSURE.base + Math.floor(10 / PRESSURE.runsPerStep) + 2,
   `p=${pressureBudget(later)}`,
+);
+
+// The fix for the ratchet: retaking one of the two sectors just flipped must
+// lower the budget again immediately, live — not stay charged for a loss
+// that no longer exists. Against the old `campaign.sectorsLost`-based budget
+// (which only ever incremented) this assertion fails, because retaking
+// ground never touched that counter.
+const budgetBeforeRetake = pressureBudget(later);
+later.sectors[takenA].control = "ours";
+check(
+  "retaking ground lowers the pressure budget",
+  pressureBudget(later) === budgetBeforeRetake - 1,
+  `before=${budgetBeforeRetake} after=${pressureBudget(later)}`,
 );
 
 // ── spending ────────────────────────────────────────────────────────────────

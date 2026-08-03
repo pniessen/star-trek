@@ -45,7 +45,14 @@ export interface Campaign {
   rngCursor: number;
   runsElapsed: number;
   salvage: number;
-  /** Feeds the pressure formula: losing ground makes the enemy stronger. */
+  /**
+   * Historical count, incremented in `resolveIncoming` and kept for save
+   * compatibility — but the pressure budget no longer reads it. It only ever
+   * grows, so a campaign that lost ground early and then retook every inch
+   * of it would still be charged for losses that no longer exist. See
+   * `enemyTurn.ts`'s `sectorsHeldBeyondStart`, which derives the same idea
+   * from the live board instead, so retaking ground actually lowers pressure.
+   */
   sectorsLost: number;
   refits: string[];
   sectors: Sector[];

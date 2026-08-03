@@ -164,7 +164,15 @@ window.addEventListener("keydown", (event) => {
       settings.diagnostics = !settings.diagnostics;
       break;
     case "r":
-      if (presentation.mode === "run") session.restart(player);
+      if (presentation.mode === "run") {
+        session.restart(player);
+        // restart() resets campaign.current to campaign.front; chartCursor is
+        // a module-level `let` with no equivalent reset of its own, so
+        // without this a jump made last run leaves the cursor pointing at
+        // wherever it was last aimed, not at the sector the new run actually
+        // starts in.
+        chartCursor = campaign.current;
+      }
       break;
     case "1":
     case "2":
@@ -320,6 +328,8 @@ function approach(current: number, target: number, dt: number, rate: number): nu
 let last = performance.now();
 let time = 0;
 let smoothedFps = 60;
+/** Detects the mode changes that run `session.restart()` inside `Presentation.enter()` — see below. */
+let previousPresentationMode = presentation.mode;
 
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -334,6 +344,20 @@ function frame(now: number): void {
   const gameDt = dt * session.timeScale;
 
   presentation.update(dt);
+
+  if (presentation.mode !== previousPresentationMode) {
+    // Every mode change — title → attract, attract → title, an abandoned
+    // tally back to title, `startRun()` — calls `session.restart()` inside
+    // `Presentation.enter()`, which resets `campaign.current` to
+    // `campaign.front`. `chartCursor` is a module-level `let` with no
+    // equivalent reset, so without this it would still point at wherever a
+    // previous run's or the demo's own jump last aimed it, carrying that
+    // stale front into whatever comes next. The `R` key takes the same
+    // restart path without a mode change, so it resets `chartCursor` itself
+    // where it is handled, above.
+    chartCursor = campaign.current;
+    previousPresentationMode = presentation.mode;
+  }
 
   // The chart is an overlay on top of the run, not a pause of it — it fades on
   // its own clock using real `dt` so the ease reads the same on any machine.
@@ -483,6 +507,12 @@ function frame(now: number): void {
       hyperwarpProgress: +session.hyperwarp.progress.toFixed(3),
       sector: campaign.current,
       inbound: campaign.incoming.length,
+      // The overlay itself, so a headless harness can prove Tab actually
+      // raises it and WASD actually steps the cursor, rather than only
+      // re-reading a predicate the game already had to satisfy for some
+      // other reason.
+      chartOpacity: +chartOpacity.toFixed(3),
+      chartCursor,
     };
   }
 

@@ -65,6 +65,17 @@ export function drawChart(
     }
     hud.segments(ticks, fade(color, opacity * 0.8));
 
+    // Yield as ticks along the top edge, mirroring threat's along the
+    // bottom — a different edge keeps the two countable at a glance without
+    // spending a colour on it, and `traceDim` is reused rather than adding
+    // one, per the "colour is information" rule.
+    const yieldTicks: number[] = [];
+    for (let v = 0; v < sector.yield; v++) {
+      const ty = x + 5 + v * 4;
+      yieldTicks.push(ty, y + cell - 9, ty, y + cell - 4);
+    }
+    if (yieldTicks.length) hud.segments(yieldTicks, fade(PALETTE.traceDim, opacity * 0.8));
+
     // Somewhere to bank is the single most decision-relevant fact on the map.
     if (canDock(sector)) {
       ring(hud, x + cell / 2, y + cell / 2, cell * 0.18, fade(color, opacity));

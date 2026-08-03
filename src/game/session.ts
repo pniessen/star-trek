@@ -176,6 +176,15 @@ export class Session {
     );
     this.updateWaves(dt, player);
 
+    // `beginHyperwarp` only refuses at the moment a charge starts. Docking
+    // runs above this line, so a ship that drifts into the station's
+    // guidance sphere mid-charge can flip `docking.phase` off "none" within
+    // this very frame, and nothing had re-checked it since — a charge begun
+    // at range 72 was confirmed to survive into the corridor. The docking
+    // state machine takes the helm the moment it leaves "none"; cancel here
+    // so that guard actually holds for the whole charge, not just its start.
+    if (this.hyperwarp.charging && this.docking.phase !== "none") this.cancelHyperwarp();
+
     // Fires on the frame the charge completes. Update runs the drain and the
     // countdown; arrival is a separate step because it touches the fleet,
     // the field and the campaign, none of which `Hyperwarp` itself knows about.
@@ -213,7 +222,15 @@ export class Session {
     this.fleet.clear();
     this.mines.clear();
     player.energy = HYPERWARP.arrivalEnergy;
-    this.wave = Math.max(0, this.wave - 1); // the destination spawns its own wave
+    // Deliberately no wave decrement here. `arrive()` clears the fleet, so
+    // `updateWaves()` → `spawnWave()` already increments on the very next
+    // call — a decrement here made the net change zero or negative, and
+    // since the only other price is halving a multiplier that is 1 at the
+    // start of every run and immediately after every dock, a jump could cost
+    // nothing while still rewinding the wave counter. Verified: six
+    // alternating jumps between two adjacent sectors walked a run from wave
+    // 11 to wave 7. Do not restore this — "the destination spawns its own
+    // wave" was the plan's reasoning and it was wrong.
 
     // Arriving somewhere is the point. Without this the jump is a reset
     // button and threat and yield never come from anywhere.
@@ -466,6 +483,12 @@ export class Session {
     this.hyperwarp.cancel();
     this.hyperwarpDestination = -1;
     this.arrivedByJump = false;
+    // A jump moves `campaign.current`, and without this a "fresh" run drops
+    // you wherever the last one's hyperwarp last left you — including a
+    // front-row sector with a much higher threat and yield than a fresh run
+    // is supposed to pay. `campaign.front` is "the sector the next run drops
+    // into"; a run beginning is exactly when that promise has to be kept.
+    this.campaign.current = this.campaign.front;
     player.reset();
     this.state = "clear";
     this.wave = 0;
