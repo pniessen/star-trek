@@ -2,6 +2,7 @@ import { Vector3 } from "three";
 import { DebrisField } from "./debris.js";
 import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
 import { Ordnance, PHASER, TORPEDO, phaserDamageAt } from "./weapons.js";
+import { MINE, Minefield } from "./mines.js";
 import { Docking } from "./docking.js";
 import type { Ship } from "./Ship.js";
 
@@ -34,6 +35,8 @@ const PLAYER_RADIUS = 2.6;
 export class Session {
   readonly ordnance = new Ordnance();
   readonly debris = new DebrisField();
+  /** Persists across waves: the field is the run's own history of where you flew. */
+  readonly mines = new Minefield();
   readonly docking: Docking;
 
   state: SessionState = "clear";
@@ -79,6 +82,9 @@ export class Session {
 
     if (this.state === "dead") {
       this.ordnance.update(dt);
+      // Keeps running so blasts already in flight finish expanding rather than
+      // freezing half-drawn on the death screen.
+      this.mines.update(dt, player, () => {});
       this.debris.update(dt);
       return;
     }
@@ -86,11 +92,15 @@ export class Session {
     this.handlePlayerFire(dt, player, input);
 
     for (const hostile of this.fleet.hostiles) {
-      hostile.update(dt, player, this.ordnance);
+      hostile.update(dt, player, this.ordnance, this.mines);
+      // The one warning the forward view gives you. Everything before this
+      // moment happened on the scanner.
+      if (hostile.revealed) this.say("DECLOAKING");
     }
 
     this.ordnance.update(dt);
     this.resolveProjectiles(player);
+    this.mines.update(dt, player, () => this.breach());
     this.debris.update(dt);
     this.docking.update(
       dt,
@@ -119,6 +129,7 @@ export class Session {
       // at it, and nothing more.
       let best: { hostile: Hostile; distance: number } | null = null;
       for (const hostile of this.fleet.hostiles) {
+        if (hostile.hidden) continue; // a cloaked hull is not there to lock onto
         const toTarget = hostile.position.clone().sub(player.position);
         const distance = toTarget.length();
         if (distance > PHASER.falloffEnd) continue;
@@ -127,7 +138,14 @@ export class Session {
         if (!best || distance < best.distance) best = { hostile, distance };
       }
 
-      if (best) {
+      // Whatever is nearer takes the beam, mine or ship. Clearing a lane costs
+      // you the shots you would rather have spent on the thing shooting back.
+      const mine = this.mines.aim(player.position, forward, PHASER.aimCone, PHASER.falloffEnd);
+      if (mine && (!best || mine.distance < best.distance)) {
+        this.ordnance.discharge(this.nose, mine.mine.position, true);
+        const damage = phaserDamageAt(mine.distance);
+        if (damage > 0 && this.mines.strike(mine.mine, damage)) this.pending += MINE.value;
+      } else if (best) {
         const damage = phaserDamageAt(best.distance);
         this.ordnance.discharge(this.nose, best.hostile.position, true);
         if (damage > 0 && best.hostile.damage(damage)) {
@@ -155,22 +173,36 @@ export class Session {
 
       if (projectile.friendly) {
         for (const hostile of this.fleet.hostiles) {
+          if (hostile.hidden) continue; // torpedoes pass straight through a veil
           if (projectile.position.distanceTo(hostile.position) > hostile.spec.radius) continue;
           projectile.dead = true;
           if (hostile.damage(projectile.damage)) this.destroy(hostile, player);
           break;
         }
+        if (projectile.dead) continue;
+
+        // Only the player's own fire clears mines. Letting hostile bolts set
+        // the field off would make the danger something that happens to you
+        // rather than something you flew into.
+        const mine = this.mines.intercept(projectile.position, 2.4);
+        if (mine) {
+          projectile.dead = true;
+          if (this.mines.strike(mine, projectile.damage)) this.pending += MINE.value;
+        }
       } else if (projectile.position.distanceTo(player.position) <= PLAYER_RADIUS) {
         projectile.dead = true;
-        const reachedHull = player.takeHit(projectile.damage, projectile.position);
-        if (reachedHull) {
-          // The multiplier is what a hit actually costs. Losing shields is
-          // recoverable; losing the run's earnings is the punishment.
-          this.multiplier = Math.max(1, this.multiplier * 0.5);
-          this.say("HULL BREACH");
-        }
+        if (player.takeHit(projectile.damage, projectile.position)) this.breach();
       }
     }
+  }
+
+  /**
+   * Something reached the hull. The multiplier is what a hit actually costs:
+   * losing shields is recoverable, losing the run's earnings is the punishment.
+   */
+  private breach(): void {
+    this.multiplier = Math.max(1, this.multiplier * 0.5);
+    this.say("HULL BREACH");
   }
 
   private destroy(hostile: Hostile, player: Ship): void {
@@ -181,7 +213,7 @@ export class Session {
       hostile.shape.group.matrixWorld,
       HOSTILE_COLORS[hostile.kind],
       impulse,
-      hostile.kind === "brawler" ? 1.4 : 1,
+      hostile.kind === "brawler" ? 1.4 : hostile.kind === "miner" ? 1.25 : 1,
     );
 
     this.kills++;
@@ -242,18 +274,26 @@ export class Session {
     this.wave++;
     this.state = "fighting";
 
+    // Escalation is by class, not only by count. The first waves teach the
+    // reticle; the Harrow arrives once you have a flying habit worth punishing,
+    // and the Shroud only after you have had reason to look at the scanner.
+    // Both are capped — three of either is a different game, not a harder one.
     const roster: HostileKind[] = [];
     const n = this.wave;
     for (let i = 0; i < 2 + Math.floor(n * 0.7); i++) roster.push("swarmer");
     for (let i = 0; i < Math.max(0, Math.floor((n - 1) / 2)); i++) roster.push("sniper");
     for (let i = 0; i < Math.max(0, Math.floor((n - 3) / 3)); i++) roster.push("brawler");
+    if (n >= 4) for (let i = 0; i < Math.min(3, 1 + Math.floor((n - 4) / 4)); i++) roster.push("miner");
+    if (n >= 6) for (let i = 0; i < Math.min(3, 1 + Math.floor((n - 6) / 5)); i++) roster.push("stalker");
 
     // Ring the player rather than clustering: an attack that only ever comes
     // from ahead never teaches you to watch your flanks.
     const offset = Math.random() * Math.PI * 2;
     roster.forEach((kind, index) => {
       const angle = offset + (index / roster.length) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
-      const range = 95 + Math.random() * 45;
+      // A Shroud starts further out than it needs to, so its first returns land
+      // on the tube while there is still time to do something about them.
+      const range = (95 + Math.random() * 45) * (kind === "stalker" ? 1.4 : 1);
       const position = new Vector3(
         player.position.x + Math.sin(angle) * range,
         0,
@@ -271,6 +311,7 @@ export class Session {
     this.fleet.clear();
     this.ordnance.clear();
     this.debris.clear();
+    this.mines.clear();
     this.docking.reset();
     player.reset();
     this.state = "clear";

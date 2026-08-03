@@ -64,12 +64,13 @@ export function buildCruiser(): BufferGeometry {
 /**
  * The hostile roster is built from the genre's silhouette grammar rather than
  * from any particular studio's ships: a stooping raptor, a horseshoe with its
- * mouth open, and a bulb on a neck between swept wings. Those three outlines
- * have meant "predator", "elegant capital ship" and "battlecruiser" in screen
- * science fiction since the sixties, and they are recognisable at the size of a
- * scanner blip, which is the only size that matters here.
+ * mouth open, a bulb on a neck between swept wings, a flat-decked working
+ * tender, and a blade. Those outlines have meant "predator", "elegant capital
+ * ship", "battlecruiser", "auxiliary" and "assassin" in screen science fiction
+ * since the sixties, and they are recognisable at the size of a scanner blip,
+ * which is the only size that matters here.
  *
- * All three are our own geometry. The archetype is shared vocabulary; the
+ * All of them are our own geometry. The archetype is shared vocabulary; the
  * specific hulls are not.
  */
 
@@ -157,6 +158,76 @@ export function buildBastion(): BufferGeometry {
       ),
     );
     parts.push(placed(new CylinderGeometry(0.24, 0.24, 2.0, 6), alongZ(side * 2.25, -0.12, -1.15)));
+  }
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
+ * Harrow — the working tender. A flat open deck with ordnance rails slung
+ * underneath and the canisters visibly sitting on them, square engine blocks
+ * bolted outboard, and a sensor mast that is the only thing standing up. It is
+ * meant to read as machinery rather than as a warship, because it is not one:
+ * it never shoots at you, it only sows.
+ */
+export function buildHarrow(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  // Deck slab — all working surface, no grace.
+  parts.push(placed(new BoxGeometry(2.4, 0.34, 3.6), at(0, 0.25, -0.2)));
+  parts.push(
+    placed(
+      new BoxGeometry(1.8, 0.28, 1.3),
+      at(0, 0.18, 1.9).multiply(new Matrix4().makeRotationX(0.22)),
+    ),
+  );
+
+  for (const side of [-1, 1]) {
+    // Rail under the deck, and the mines still riding on it.
+    parts.push(placed(new BoxGeometry(0.2, 0.5, 3.2), at(side * 0.85, -0.2, -0.3)));
+    for (let i = 0; i < 3; i++) {
+      parts.push(
+        placed(new CylinderGeometry(0.26, 0.26, 0.5, 6), at(side * 0.85, -0.62, 1.0 - i)),
+      );
+    }
+    // Engine block, square and ugly, with the throat behind it.
+    parts.push(placed(new BoxGeometry(0.62, 0.62, 1.5), at(side * 1.55, 0.1, -1.5)));
+    parts.push(placed(new CylinderGeometry(0.3, 0.38, 0.4, 6), alongZ(side * 1.55, 0.1, -2.4)));
+  }
+
+  parts.push(placed(new CylinderGeometry(0.08, 0.08, 1.1, 5), at(0, 0.95, 0.4)));
+  parts.push(placed(new BoxGeometry(1.1, 0.1, 0.14), at(0, 1.46, 0.4)));
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
+ * Shroud — the blade. A single dart with fins folded hard back and down and
+ * nothing broad enough to catch an eye, plus a pair of emitter spines along the
+ * fin roots where the veil is generated.
+ *
+ * It spends most of its life invisible, so this hull only ever gets seen for
+ * about two seconds at a time. That argues for fewer strokes and a harder
+ * outline, not more detail — you have to know what it is the instant it
+ * materialises.
+ */
+export function buildShroud(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  parts.push(placed(new CylinderGeometry(0.0, 0.34, 2.6, 4), alongZ(0, 0, 1.9)));
+  parts.push(placed(new BoxGeometry(0.44, 0.3, 2.6), at(0, 0, -0.4)));
+  parts.push(placed(new CylinderGeometry(0.3, 0.16, 0.9, 4), alongZ(0, 0, -2.1)));
+
+  for (const side of [-1, 1]) {
+    parts.push(
+      placed(
+        new BoxGeometry(2.6, 0.07, 0.7),
+        at(side * 1.25, -0.16, -0.9)
+          .multiply(new Matrix4().makeRotationY(side * 0.62))
+          .multiply(new Matrix4().makeRotationZ(side * -0.5)),
+      ),
+    );
+    parts.push(placed(new CylinderGeometry(0.09, 0.09, 2.2, 4), alongZ(side * 0.4, 0.14, 0.1)));
   }
 
   return mergeGeometries(parts, false)!;
