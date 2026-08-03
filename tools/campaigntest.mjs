@@ -143,5 +143,107 @@ const stale = fakeStorage({
 const migrated = load(stale, 9);
 check("a future version resets rather than crashing", migrated.seed === 9, "reset");
 
+const { PRESSURE, ACTION_COST, pressureBudget, runEnemyTurn, intercept } =
+  await import("../.campaign-build/chart/enemyTurn.js");
+
+// ── the budget ──────────────────────────────────────────────────────────────
+const fresh = newCampaign(11);
+check("opening pressure is the base", pressureBudget(fresh) === PRESSURE.base, `p=${pressureBudget(fresh)}`);
+
+const later = newCampaign(11);
+later.runsElapsed = 10;
+later.sectorsLost = 2;
+check(
+  "pressure climbs with runs and losses",
+  pressureBudget(later) === PRESSURE.base + Math.floor(10 / PRESSURE.runsPerStep) + 2,
+  `p=${pressureBudget(later)}`,
+);
+
+// ── spending ────────────────────────────────────────────────────────────────
+const turn = newCampaign(12);
+const rng = makeRng(turn.seed, turn.rngCursor);
+const actions = runEnemyTurn(turn, rng);
+const spent = actions.reduce((sum, a) => sum + a.cost, 0);
+check("the enemy spends something", actions.length > 0, `${actions.length} actions`);
+check("...and never overspends", spent <= pressureBudget(newCampaign(12)), `spent=${spent}`);
+
+// The enemy may only act next to ground it already holds. Without this the
+// front is meaningless and sectors fall at random.
+const startedTheirs = newCampaign(12).sectors.map((s) => s.control === "theirs");
+check(
+  "the enemy only acts adjacent to itself",
+  actions.every(
+    (a) => startedTheirs[a.sector] || neighbours(a.sector).some((n) => startedTheirs[n]),
+  ),
+  "adjacency",
+);
+
+// ── the promise that matters ────────────────────────────────────────────────
+// "Ignore a sector for four runs and it falls, and it stays fallen."
+const neglected = newCampaign(13);
+let fellWithin = 0;
+const watch = neglected.sectors.findIndex(
+  (s, i) => s.control === "ours" && neighbours(i).some((n) => neglected.sectors[n].control === "theirs"),
+);
+for (let run = 1; run <= 4; run++) {
+  neglected.runsElapsed = run;
+  const r = makeRng(neglected.seed, neglected.rngCursor);
+  runEnemyTurn(neglected, r);
+  neglected.rngCursor = r.cursor;
+  if (neglected.sectors[watch].control === "theirs" && !fellWithin) fellWithin = run;
+}
+check("a neglected front sector falls within four runs", fellWithin > 0 && fellWithin <= 4, `run ${fellWithin}`);
+
+// Losses are counted, because the budget depends on them.
+check("losing ground is recorded", neglected.sectorsLost > 0, `lost=${neglected.sectorsLost}`);
+
+// ── committed, not instant ──────────────────────────────────────────────────
+// Pressure buys a move that lands a run later. The gap is what the player
+// can fly out and stop.
+const commits = newCampaign(15);
+const beforeControl = commits.sectors.map((s) => s.control);
+runEnemyTurn(commits, makeRng(15, 0));
+check("a push is committed, not applied", commits.incoming.length > 0, `${commits.incoming.length} inbound`);
+check(
+  "...and nothing has flipped yet",
+  commits.sectors.every((s, i) => s.control === beforeControl[i]),
+  "board unchanged",
+);
+
+const landed = commits.incoming[0].sector;
+commits.runsElapsed = 1;
+runEnemyTurn(commits, makeRng(15, commits.rngCursor));
+check(
+  "an unopposed move lands next turn",
+  commits.sectors[landed].control !== beforeControl[landed],
+  `sector ${landed}`,
+);
+
+// Interception: reach it and clear it and the attack never arrives.
+const stopped = newCampaign(16);
+runEnemyTurn(stopped, makeRng(16, 0));
+const doomedSector = stopped.incoming[0].sector;
+const controlBefore = stopped.sectors[doomedSector].control;
+check("interception reports a hit", intercept(stopped, doomedSector) === true, `sector ${doomedSector}`);
+check("intercepting an empty sector reports nothing", intercept(stopped, doomedSector) === false, "already clear");
+stopped.runsElapsed = 1;
+runEnemyTurn(stopped, makeRng(16, stopped.rngCursor));
+check(
+  "an intercepted move never lands",
+  stopped.sectors[doomedSector].control === controlBefore,
+  `sector ${doomedSector} held`,
+);
+
+// Determinism: same seed, same war.
+const runA = newCampaign(14);
+const runB = newCampaign(14);
+runEnemyTurn(runA, makeRng(14, 0));
+runEnemyTurn(runB, makeRng(14, 0));
+check(
+  "the same seed produces the same turn",
+  JSON.stringify(runA.sectors) === JSON.stringify(runB.sectors),
+  "deterministic",
+);
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 process.exit(problems.length ? 1 : 0);
