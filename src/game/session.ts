@@ -6,6 +6,9 @@ import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } 
 import { Ordnance, PHASER, TORPEDO, phaserDamageAt } from "./weapons.js";
 import { MINE, Minefield } from "./mines.js";
 import { Docking } from "./docking.js";
+import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
+import { intercept } from "../chart/enemyTurn.js";
+import type { Campaign } from "../chart/campaign.js";
 import type { VectorObject } from "../render/VectorObject.js";
 import type { Ship } from "./Ship.js";
 
@@ -43,6 +46,9 @@ export class Session {
   readonly docking: Docking;
   readonly death = new DeathSequence();
   readonly hitStop = new HitStop();
+  readonly hyperwarp = new Hyperwarp();
+  /** Sector a charge is headed for. -1 when idle — `hyperwarp.phase` is the source of truth for "charging". */
+  private hyperwarpDestination = -1;
 
   state: SessionState = "clear";
   wave = 0;
@@ -82,6 +88,7 @@ export class Session {
     private readonly fleet: Fleet,
     starbase: Vector3,
     private readonly playerShape: VectorObject,
+    private readonly campaign: Campaign,
   ) {
     this.docking = new Docking(starbase);
   }
@@ -155,12 +162,57 @@ export class Session {
     );
     this.updateWaves(dt, player);
 
+    // Fires on the frame the charge completes. Update runs the drain and the
+    // countdown; arrival is a separate step because it touches the fleet,
+    // the field and the campaign, none of which `Hyperwarp` itself knows about.
+    if (this.hyperwarp.update(dt, player)) this.arrive(player);
+
     if (player.hull <= 0) this.kill(player);
+  }
+
+  // ── hyperwarp ────────────────────────────────────────────────────────────
+
+  /**
+   * Refused whenever the helm is not the player's to give up: dead, docked in
+   * any phase, already charging, or a "jump" to the sector you are already
+   * in — that would cost half the multiplier for nothing, which reads as a
+   * bug rather than the price it is everywhere else.
+   */
+  beginHyperwarp(destination: number): void {
+    if (this.state === "dead" || this.docking.phase !== "none") return;
+    if (this.hyperwarp.charging) return;
+    if (destination === this.campaign.current) return;
+    this.hyperwarpDestination = destination;
+    this.hyperwarp.begin();
+  }
+
+  /** Releasing early spends the energy already drained for nothing — that is the price of the gamble. */
+  cancelHyperwarp(): void {
+    this.hyperwarp.cancel();
+  }
+
+  private arrive(player: Ship): void {
+    // A jump costs the same as taking a hit, so the game already teaches the
+    // price. Fleeing saves the ship and costs what you came for.
+    this.multiplier = Math.max(1, this.multiplier * 0.5);
+    this.fleet.clear();
+    this.mines.clear();
+    player.energy = HYPERWARP.arrivalEnergy;
+    this.wave = Math.max(0, this.wave - 1); // the destination spawns its own wave
+
+    // Arriving somewhere is the point. Without this the jump is a reset
+    // button and threat and yield never come from anywhere.
+    this.campaign.current = this.hyperwarpDestination;
+    this.say("HYPERWARP");
   }
 
   // ── shooting ─────────────────────────────────────────────────────────────
 
   private handlePlayerFire(_dt: number, player: Ship, input: CombatInput): void {
+    // Firing through the charge would make fleeing free, and the whole price
+    // above collapses. Locking it here catches both weapons in one place.
+    if (this.hyperwarp.charging) return;
+
     const forward = player.forward(this.scratch).clone();
     this.nose.copy(player.position).addScaledVector(forward, 3.2);
 
@@ -188,7 +240,7 @@ export class Session {
       if (mine && (!best || mine.distance < best.distance)) {
         this.ordnance.discharge(this.nose, mine.mine.position, true);
         const damage = phaserDamageAt(mine.distance);
-        if (damage > 0 && this.mines.strike(mine.mine, damage)) this.pending += MINE.value;
+        if (damage > 0 && this.mines.strike(mine.mine, damage)) this.pending += MINE.value * this.salvageScale;
       } else if (best) {
         const damage = phaserDamageAt(best.distance);
         this.ordnance.discharge(this.nose, best.hostile.position, true);
@@ -235,7 +287,7 @@ export class Session {
         const mine = this.mines.intercept(projectile.position, 2.4);
         if (mine) {
           projectile.dead = true;
-          if (this.mines.strike(mine, projectile.damage)) this.pending += MINE.value;
+          if (this.mines.strike(mine, projectile.damage)) this.pending += MINE.value * this.salvageScale;
         }
       } else if (projectile.position.distanceTo(player.position) <= PLAYER_RADIUS) {
         projectile.dead = true;
@@ -267,7 +319,7 @@ export class Session {
 
     this.hitStop.strike(HIT_STOP.kill);
     this.kills++;
-    this.pending += hostile.spec.value;
+    this.pending += hostile.spec.value * this.salvageScale;
     this.multiplier = Math.min(9.9, this.multiplier + 0.2);
     this.fleet.retire(hostile);
     void player;
@@ -280,6 +332,9 @@ export class Session {
     this.pending = 0; // die undocked and the run's earnings go with you
     this.multiplier = 1;
     this.docking.reset();
+    // The dead branch of update() never steps hyperwarp, so a charge caught
+    // mid-spin-up would otherwise sit at "charging" forever.
+    this.hyperwarp.cancel();
     this.hitStop.strike(HIT_STOP.death);
     this.death.begin(player, this.playerShape, this.debris);
     this.say("SHIP LOST");
@@ -316,7 +371,11 @@ export class Session {
     if (this.state === "fighting") {
       this.state = "clear";
       this.breakTimer = WAVE_BREAK;
-      this.say("SECTOR CLEAR");
+      // Clearing a wave in a sector with a committed attack against it is the
+      // interception — the whole reason to read the chart mid-run rather than
+      // only between runs.
+      if (intercept(this.campaign, this.campaign.current)) this.say("ATTACK BROKEN");
+      else this.say("SECTOR CLEAR");
       return;
     }
 
@@ -333,7 +392,11 @@ export class Session {
     // and the Shroud only after you have had reason to look at the scanner.
     // Both are capped — three of either is a different game, not a harder one.
     const roster: HostileKind[] = [];
-    const n = this.wave;
+    // Threat 1 — the sector a fresh campaign drops you in — leaves this
+    // exactly where it always sat; each point above that pulls every class
+    // forward by roughly a wave, so a jump into the front escalates visibly.
+    const threat = this.campaign.sectors[this.campaign.current].threat;
+    const n = this.wave + (threat - 1);
     for (let i = 0; i < 2 + Math.floor(n * 0.7); i++) roster.push("swarmer");
     for (let i = 0; i < Math.max(0, Math.floor((n - 1) / 2)); i++) roster.push("sniper");
     for (let i = 0; i < Math.max(0, Math.floor((n - 3) / 3)); i++) roster.push("brawler");
@@ -369,6 +432,8 @@ export class Session {
     this.docking.reset();
     this.death.reset();
     this.hitStop.clear();
+    this.hyperwarp.cancel();
+    this.hyperwarpDestination = -1;
     player.reset();
     this.state = "clear";
     this.wave = 0;
@@ -393,6 +458,16 @@ export class Session {
       (total, hostile) => total + HOSTILE_SPECS[hostile.kind].value,
       0,
     );
+  }
+
+  /**
+   * Salvage multiplier for the sector you are in right now. Floors at 1 so the
+   * sector a fresh campaign drops you in — yield 0 — still pays what it always
+   * did; sectors worth pushing into pay up to 4x, which is what makes jumping
+   * toward the front a decision with an upside rather than only a cost.
+   */
+  private get salvageScale(): number {
+    return 1 + this.campaign.sectors[this.campaign.current].yield;
   }
 
   private say(text: string): void {

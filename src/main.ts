@@ -20,7 +20,7 @@ import { Presentation } from "./game/presentation.js";
 import type { DeathSequence } from "./game/death.js";
 import { drawHud } from "./hud/draw.js";
 import { load } from "./chart/persistence.js";
-import { colOf, indexOf, inBounds, rowOf } from "./chart/sectors.js";
+import { colOf, indexOf, inBounds, neighbours, rowOf } from "./chart/sectors.js";
 
 /** Publishes state on `window.__probe` for headless checks. */
 const DEBUG_PROBE = location.hostname === "127.0.0.1" || location.hostname === "localhost";
@@ -76,15 +76,17 @@ const starbase = new VectorObject(buildStarbase(), {
 }).addTo(stage.scene);
 starbase.group.position.copy(STARBASE_POSITION);
 
-const session = new Session(fleet, STARBASE_POSITION, playerHull);
-const presentation = new Presentation(session, player, fleet, STARBASE_POSITION);
-
 // ── campaign ───────────────────────────────────────────────────────────────
 
 // Loaded once at boot rather than on demand, so holding Tab the first time
 // never stalls on a synchronous read. `load` never throws — a corrupt or
-// absent save quietly becomes a fresh campaign.
+// absent save quietly becomes a fresh campaign. Loaded before the session
+// because the session reads it every frame — wave escalation and salvage
+// both come from the sector you are currently in.
 const campaign = load(window.localStorage, Date.now());
+
+const session = new Session(fleet, STARBASE_POSITION, playerHull, campaign);
+const presentation = new Presentation(session, player, fleet, STARBASE_POSITION);
 
 /** Eased 0→1 while `Tab` is held. The overlay fades; the run behind it does not pause. */
 let chartOpacity = 0;
@@ -378,6 +380,15 @@ function frame(now: number): void {
       : (held.has("arrowup") || (!chartActive && held.has("w")) ? 1 : 0) -
         (held.has("arrowdown") || (!chartActive && held.has("s")) ? 1 : 0);
 
+    // Hyperwarp: holding Shift commits to a jump at the chart cursor, wherever
+    // it was last pointed. Releasing early is a refund of nothing — Session
+    // owns every guard (dead, docked, already charging, already there), so
+    // this is just the raw request, asked again every frame.
+    if (!demo) {
+      if (held.has("shift")) session.beginHyperwarp(chartCursor);
+      else session.cancelHyperwarp();
+    }
+
     // The station takes the helm during capture, and holds you in place while
     // moored — you can still turn and shoot, which is what stops a wave arriving
     // mid-dock from being a helpless mauling.
@@ -466,6 +477,12 @@ function frame(now: number): void {
       cloaked: fleet.hostiles.filter((h) => h.hidden).length,
       projectiles: session.ordnance.projectiles.length,
       fps: Math.round(smoothedFps),
+      // The chart layer: which sector you're in, what's committed against the
+      // front, and how far through a jump the charge is.
+      hyperwarp: session.hyperwarp.phase,
+      hyperwarpProgress: +session.hyperwarp.progress.toFixed(3),
+      sector: campaign.current,
+      inbound: campaign.incoming.length,
     };
   }
 
@@ -480,6 +497,18 @@ if (DEBUG_PROBE) {
     __player: player,
     __fleet: fleet,
     __presentation: presentation,
+    __campaign: campaign,
+    // Grid geometry, re-exported rather than reimplemented, so the harness can
+    // point the cursor at a real neighbour without duplicating the layout rules.
+    __chart: { neighbours, indexOf, colOf, rowOf },
+    // The next task's harness needs to set the destination directly — walking
+    // WASD across the grid one keypress at a time is not worth simulating.
+    __chartCursor: {
+      get: () => chartCursor,
+      set: (i: number) => {
+        chartCursor = i;
+      },
+    },
   });
 }
 
