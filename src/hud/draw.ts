@@ -24,6 +24,7 @@ export interface HudView {
   readonly bloom: boolean;
   readonly phosphor: boolean;
   readonly crt: boolean;
+  readonly muted: boolean;
   readonly showDiagnostics: boolean;
 }
 
@@ -567,6 +568,7 @@ function drawDiagnostics(hud: Hud, view: HudView, width: number, height: number)
     ["B  BLOOM", view.bloom ? "ON" : "OFF"],
     ["F  PHOSPHOR", view.phosphor ? "ON" : "OFF"],
     ["V  CRT GLASS", view.crt ? "ON" : "OFF"],
+    ["M  AUDIO", view.muted ? "MUTED" : "ON"],
     ["1/2/3  VIEW", view.cameraMode.toUpperCase()],
   ];
   rows.forEach(([label, value], index) => {

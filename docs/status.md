@@ -146,6 +146,52 @@ This is a shell *around* the session rather than a state inside it:
 is not a phase of combat and pretending it was would put a fourth case into
 every rule that reads the run. The shell is `__probe.mode`.
 
+### Sound
+
+Synthesised, never sampled — a sample would be the only asset in a project that
+is otherwise procedural geometry and stroke fonts, and the look and the sound
+should come off the same bench. So the whole bank is built from two voices: a
+pitched oscillator that can glide, and filtered noise whose filter can sweep.
+A phaser, the clamps engaging, a mine going off and the Shroud materialising are
+all those two with different envelopes. It is the `TraceBuffer` argument in the
+other medium.
+
+Three things follow from that and are worth stating separately:
+
+- **Timbre is information, the way colour is.** Yours are clean and centred —
+  triangle and sine — because you are always at the middle of the tube. Theirs
+  are sawtooth and square, and they are *placed*: distance attenuates and bearing
+  pans, off one listener updated once a frame. A bolt fired from your port
+  quarter arrives on your left. That is the scanner's job done by ear.
+- **The Shroud's decloak is the most important sound in the game.** The class is
+  only fair because it materialises over 0.45s before it fires, and that tell
+  used to be a flare somewhere off screen — useless if you were not already
+  looking at it. Now it is a rising, detuned, panned warning with a floor under
+  its attenuation, and the crack lands three hundredths of a second before the
+  first bolt. Rising, because everything else that matters falls; detuned,
+  because that is the timbre reserved for what will not resolve, exactly as
+  magenta is the colour of it.
+- **The tally pitches with the multiplier.** Root, arpeggio length and a sub note
+  all climb together, so banking 9x is audibly a bigger event than banking 1x.
+  The greed loop's payoff had a rolling odometer and no sound; now the number
+  going up has a shape.
+
+The mix is four buses and a compressor, and the voice pool is capped at eighteen
+with oldest-first stealing — a wave-eight fight with a mine chain going off will
+ask for more than that, and the eleventh explosion in a second is not information
+anyone is listening for. Everything is scheduled against the audio clock rather
+than the frame clock, so a stuttering frame under software GL cannot stretch an
+arpeggio.
+
+Two constraints are load-bearing rather than defensive. The audio layer may
+never throw: the headless harness runs in a Chromium with no audio device, and
+an exception inside the frame loop kills `requestAnimationFrame` and freezes the
+game on its last frame, so the first failure retires the machine permanently and
+silently. And nothing may start before a user gesture, because browsers will not
+run an `AudioContext` until the page has been touched — the keypress that
+launches a run off the title is the gesture, which is why the title screen is
+silent on a fresh load and correct to be.
+
 ### The scanner
 
 Heading-up, contacts glyphed by class, off-range contacts pinned to the rim.
@@ -246,7 +292,6 @@ takes longer than the run, the layer has failed and we cut it back.
 
 ## 6. What is deliberately not built
 
-- **Audio.** Nothing yet. Planned as WebAudio synthesis rather than samples.
 - **Mouse aim.** Aiming is currently the nose, which is the Sega model and
   correct for a planar game. Mouse aim is worth testing but may make it too easy.
 - **Leaderboards and persistence.** `localStorage` and a seeded RNG when it
@@ -258,21 +303,22 @@ takes longer than the run, the layer has failed and we cut it back.
 
 ## 7. Roadmap
 
-**Now — audio.** Nothing makes a sound yet, which is why the docking sequence
-still feels slightly thin despite the visuals. Synthesised WebAudio rather than
-samples: a rising tone under tractor capture, a clunk on hard dock, ascending
-blips per service stage, an arpeggio on the tally that pitches with the
-multiplier, plus weapons and an alert drone tracking threat.
+**Now — tuning, and the mix is part of it.** The flight model and wave pacing
+are first-draft numbers and want a human on the keyboard: turn rate and drag,
+phaser falloff curve, how fast the multiplier climbs, whether the wave break is
+too long. Audio joins that list rather than sitting above it, because every
+level and envelope in it was arrived at by reasoning rather than by listening.
+The three to sit down with first are the phaser at a held 6.25 shots a second,
+which is the only sound in the game with a real chance of becoming fatiguing;
+the alert drone's threat scaling, which is either tension or a nuisance and
+there is no way to tell from the source; and the decloak, which has to cut
+through a firefight without being the loudest thing in the game. This is the one
+item on the list that cannot be done by reasoning about it.
 
-**Then — tuning.** The flight model and wave pacing are first-draft numbers and
-want a human on the keyboard. Specifically: turn rate and drag, phaser falloff
-curve, how fast the multiplier climbs, and whether the wave break is too long.
-This is the one item on the list that cannot be done by reasoning about it.
-
-**Next — game feel.** Hit-stop, the death sequence and the attract mode are
-built; audio is the piece still missing, and every one of the new constants is a
-first-draft guess. Feel is most of what an arcade game is, and it is cheap to
-iterate now the renderer exists.
+**Next — game feel.** Hit-stop, the death sequence, the attract mode and the
+sound are all built, and every one of their constants is a first-draft guess.
+Feel is most of what an arcade game is, and it is cheap to iterate now that both
+the renderer and the sound bank exist.
 
 **Weeks 6–8 — the chart, in-run.** An 8×8 sector map, hyperwarp between sectors,
 fleets that advance on a clock while you fight. This is the step that turns

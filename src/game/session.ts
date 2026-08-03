@@ -6,6 +6,7 @@ import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } 
 import { Ordnance, PHASER, TORPEDO, phaserDamageAt } from "./weapons.js";
 import { MINE, Minefield } from "./mines.js";
 import { Docking } from "./docking.js";
+import { sound } from "../audio/sound.js";
 import type { VectorObject } from "../render/VectorObject.js";
 import type { Ship } from "./Ship.js";
 
@@ -123,6 +124,7 @@ export class Session {
 
       const before = this.death.phase;
       this.death.update(dt);
+      if (before !== "tally" && this.death.phase === "tally") sound.panelRestore();
       // Once the panel comes back up for the readout the screen belongs to it.
       // The pack circling the wreck is the right thing to watch during the
       // drift and pure noise across four lines of numbers.
@@ -138,8 +140,12 @@ export class Session {
     for (const hostile of this.fleet.hostiles) {
       hostile.update(dt, player, this.ordnance, this.mines);
       // The one warning the forward view gives you. Everything before this
-      // moment happened on the scanner.
-      if (hostile.revealed) this.say("DECLOAKING");
+      // moment happened on the scanner — and the sound is the half of the
+      // warning that works when you are pointed the wrong way.
+      if (hostile.revealed) {
+        this.say("DECLOAKING");
+        sound.decloak(hostile.position.x, hostile.position.z);
+      }
     }
 
     this.ordnance.update(dt);
@@ -185,14 +191,17 @@ export class Session {
       // Whatever is nearer takes the beam, mine or ship. Clearing a lane costs
       // you the shots you would rather have spent on the thing shooting back.
       const mine = this.mines.aim(player.position, forward, PHASER.aimCone, PHASER.falloffEnd);
+      let landed = false;
       if (mine && (!best || mine.distance < best.distance)) {
         this.ordnance.discharge(this.nose, mine.mine.position, true);
         const damage = phaserDamageAt(mine.distance);
-        if (damage > 0 && this.mines.strike(mine.mine, damage)) this.pending += MINE.value;
+        landed = damage > 0;
+        if (landed && this.mines.strike(mine.mine, damage)) this.pending += MINE.value;
       } else if (best) {
         const damage = phaserDamageAt(best.distance);
         this.ordnance.discharge(this.nose, best.hostile.position, true);
-        if (damage > 0 && best.hostile.damage(damage)) {
+        landed = damage > 0;
+        if (landed && best.hostile.damage(damage)) {
           this.destroy(best.hostile, player);
         }
       } else {
@@ -202,12 +211,16 @@ export class Session {
           false,
         );
       }
+      // Connecting is a spark on the end of the same shot rather than a second
+      // sound: at 6.25 shots a second, two distinct sounds is one too many.
+      sound.phaser(landed);
     }
 
     if (input.fireTorpedo && player.torpedoCooldown <= 0 && player.torpedoes > 0) {
       player.torpedoCooldown = TORPEDO.cooldown;
       player.torpedoes--;
       this.ordnance.fire(this.nose, forward, "torpedo", true, player.velocity);
+      sound.torpedo();
     }
   }
 
@@ -223,8 +236,12 @@ export class Session {
           // Only torpedoes reach here — phasers resolve instantly — which is
           // what keeps hit-stop an event. A phaser burst lands every 0.16s and
           // dilating on each of those would be a permanent limp.
-          if (hostile.damage(projectile.damage)) this.destroy(hostile, player);
-          else this.hitStop.strike(HIT_STOP.impact);
+          if (hostile.damage(projectile.damage)) {
+            this.destroy(hostile, player);
+          } else {
+            this.hitStop.strike(HIT_STOP.impact);
+            sound.impact(hostile.position.x, hostile.position.z);
+          }
           break;
         }
         if (projectile.dead) continue;
@@ -239,7 +256,11 @@ export class Session {
         }
       } else if (projectile.position.distanceTo(player.position) <= PLAYER_RADIUS) {
         projectile.dead = true;
+        // A facing eating a bolt and a bolt reaching the hull are different
+        // events and have to sound like it — that distinction is the whole
+        // reason four shields exist.
         if (player.takeHit(projectile.damage, projectile.position)) this.breach();
+        else sound.shieldHit(projectile.position.x, projectile.position.z);
       }
     }
   }
@@ -251,21 +272,26 @@ export class Session {
   private breach(): void {
     this.multiplier = Math.max(1, this.multiplier * 0.5);
     this.hitStop.strike(HIT_STOP.breach);
+    sound.breach();
     this.say("HULL BREACH");
   }
 
   private destroy(hostile: Hostile, player: Ship): void {
     const impulse = hostile.velocity.clone().multiplyScalar(0.35);
+    const size = hostile.kind === "brawler" ? 1.4 : hostile.kind === "miner" ? 1.25 : 1;
     hostile.shape.group.updateMatrixWorld(true);
     this.debris.burst(
       hostile.shape.edgePositions,
       hostile.shape.group.matrixWorld,
       HOSTILE_COLORS[hostile.kind],
       impulse,
-      hostile.kind === "brawler" ? 1.4 : hostile.kind === "miner" ? 1.25 : 1,
+      size,
     );
 
     this.hitStop.strike(HIT_STOP.kill);
+    // One scalar for the burst and the blast, so what you see come apart and
+    // what you hear come apart are the same size.
+    sound.kill(hostile.position.x, hostile.position.z, size);
     this.kills++;
     this.pending += hostile.spec.value;
     this.multiplier = Math.min(9.9, this.multiplier + 0.2);
@@ -282,6 +308,7 @@ export class Session {
     this.docking.reset();
     this.hitStop.strike(HIT_STOP.death);
     this.death.begin(player, this.playerShape, this.debris);
+    sound.death();
     this.say("SHIP LOST");
   }
 
@@ -294,6 +321,7 @@ export class Session {
   private bank(): void {
     const total = Math.round(this.pending * this.multiplier);
     this.lastBank = { salvage: this.pending, multiplier: this.multiplier, total };
+    sound.tally(this.multiplier, total);
     this.score += total;
     this.pending = 0;
     this.multiplier = 1;
@@ -316,6 +344,7 @@ export class Session {
     if (this.state === "fighting") {
       this.state = "clear";
       this.breakTimer = WAVE_BREAK;
+      sound.sectorClear();
       this.say("SECTOR CLEAR");
       return;
     }
@@ -356,12 +385,17 @@ export class Session {
       this.fleet.spawn(kind, position, angle + Math.PI);
     });
 
+    sound.wave(this.wave);
     this.say(`WAVE ${this.wave}`);
   }
 
   // ── misc ─────────────────────────────────────────────────────────────────
 
   restart(player: Ship): void {
+    // A restart is also a mode change — the shell calls this on its way to the
+    // title — so anything still ringing from the last run stops here rather
+    // than being heard over a screen that has no run behind it.
+    sound.silence();
     this.fleet.clear();
     this.ordnance.clear();
     this.debris.clear();
