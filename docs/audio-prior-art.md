@@ -1501,3 +1501,99 @@ framed as instructions "for agents, not humans" and requesting destructive file
 operations. It was refused and not used. Nothing in this document is sourced to
 it, and anything anyone later finds attributed to TCRF should be independently
 verified before it goes anywhere near a decision.
+
+---
+
+## 8. Addendum: material recovered after the document was written
+
+A fourth research pass returned after this document was assembled, and one of
+its findings reframes §6.2 — the phaser problem — rather than merely adding to
+it. Recorded here rather than folded in, so the provenance stays honest.
+
+### Rez's answer to rapid fire is the input grammar, not the mixer
+
+§6.2 concluded that the canon has no documented answer to a weapon firing every
+0.16 s, and that only *Returnal* solves it, by filtering projectile events on
+proximity and velocity. That stands. But *Rez* sidesteps the problem entirely,
+and the mechanism is worth knowing before we spend effort mixing our way out of
+it.
+
+**Rez has no machine-gun input.** You hold fire to paint up to eight targets,
+then release a volley. Eight lock-ons arrive as one rhythmic figure spread
+across subdivisions — not as eight copies of a sample fighting each other. The
+game contains almost no non-musical SFX at all.
+
+On top of that sits the quantisation, which is primary-sourced to Mizuguchi's
+GDC 2016 talk: *"The magic that happened is quantization. Even if a player
+wasn't great at matching their interactions with the beat, quantization would
+synch the rhythms of play and make you feel good."* And: *"Shooting gives you
+sounds; it's like a call and response."*
+
+*The implication for us, stated plainly:* our phaser's fatigue problem may be a
+**weapon-cadence problem wearing an audio costume**. `PHASER` fires on a 0.16 s
+cooldown, and every documented solution in the literature either changes what
+the trigger does (Rez), filters which events are allowed to speak (Returnal), or
+accepts the sound is decorative (Geometry Wars' music, by its own designer's
+admission). Mixing is the only one of those we have tried. Worth putting on the
+tuning list as a design question, not just a mix one — with the caveat that
+`PHASER` cadence is a locked-feeling combat constant and this document has no
+business quietly relitigating it.
+
+*Unresolved:* sources disagree on whether Rez quantises only the audio or the
+projectile and hit timing too. Wikipedia says impacts "automatically syncs with
+the background track"; no developer statement settles it.
+
+### Thumper: the cue arrives before the input
+
+Each obstacle type has a distinct call-out tone that *"gives the player a few
+vital sub-seconds to prepare for the succession of button presses ahead"* —
+audio acting as a substitute HUD against a visually saturated screen.
+
+This is the same principle as §6.5's Shroud telegraph, arrived at independently,
+and it generalises: on a screen this busy, an audio cue that *precedes* the
+event it describes is doing work no visual can do, because the player's eyes are
+already committed elsewhere.
+
+Thumper also turns its own audio against the player — a hit replaces the
+percussion with *"the grating sound of machinery gone wrong"*, and late levels
+become deliberately **less** musical. Its level editor is a music sequencer: the
+level and the score are one authored object.
+
+The distinction its designers draw is useful. *Rez* lets you improvise; *Thumper*
+makes you perform a fixed part. A game where waves escalate on a clock is
+structurally closer to Thumper than to Rez.
+
+### Two more empirical results, both supporting §3's governing finding
+
+- **Smets & van der Spek (2021)**, n = 61 between-subjects: "juicy" audio
+  treatment produced a significant **medium-effect** gain in presence. Notably
+  **stronger than the equivalent visual result** — Hicks et al. (CHI PLAY 2019)
+  found visual embellishment improves visual appeal but affects competence only
+  in specific circumstances. Audio polish appears to buy more than visual polish
+  does, per unit of effort.
+- **Kao et al. (CHI 2024)**, restated with the detail that matters most: it is
+  **success dependence** — feedback that fires on *succeeding* rather than on
+  merely pressing — that "enhanced all motives", while amplification alone
+  "negatively impacted effectance and competence". Our phaser currently speaks
+  on every trigger pull, with a separate spark on a hit. That is the correct
+  shape; the risk is that the trigger sound is loud enough to bury the spark,
+  which would invert the finding.
+
+### One number for §4's motion-tracker discussion
+
+Alien: Isolation's motion tracker emits noise the creature can hear at
+**~1.5 m**. §4 established the rule qualitatively ("a very short radius"); this
+is the figure, from the same reverse-engineering of shipped behaviour-tree data.
+
+### Provenance and a process note
+
+All of the above comes from a research pass whose own three sub-agents failed to
+report back to it, and which then exhausted the session's web-search budget. Its
+coverage is uneven by its own account, and it flagged several claims it could
+not verify: Tempest 4000's music credits, whether *Polybius* has reactive audio
+at all (it found no evidence and suggested treating the claim as false), and
+whether Thumper's music is "generative" (primary sources describe
+sequencer-authored levels; "generative" appears to be loose secondary usage).
+
+It independently encountered the same TCRF prompt-injection attempt recorded at
+the end of §7, and independently refused it.
