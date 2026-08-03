@@ -1,4 +1,6 @@
 import { MathUtils, Vector3 } from "three";
+import { NO_REFITS, type Loadout } from "../chart/economy.js";
+import { TORPEDO } from "./weapons.js";
 
 export interface ShipInput {
   turn: number; // -1 left … +1 right
@@ -28,11 +30,26 @@ export class Ship {
 
   energy = 1;
   hull = 1;
-  torpedoes = 12;
+  // Annotated because `TORPEDO.capacity` is a literal under `as const`, and an
+  // inferred field type of `12` refuses every other magazine size.
+  torpedoes: number = TORPEDO.capacity;
   phaserCooldown = 0;
   torpedoCooldown = 0;
   /** Non-zero briefly after a hit; drives the HUD flash and the shake. */
   impact = 0;
+
+  /**
+   * What the refits fitted between runs add up to. Set by `Session.restart`
+   * from the campaign, so a ship never carries a loadout the chart did not
+   * agree to — and defaults to neutral, so a session with no campaign behind
+   * it flies exactly the hull this game shipped with.
+   */
+  loadout: Loadout = NO_REFITS;
+  /**
+   * Ablative plating, unspent. One per run, so it is reset by `reset()` and
+   * nothing else touches it.
+   */
+  private ablative = false;
 
   readonly shields: Record<ShieldFacing, number> = {
     fore: 1,
@@ -56,13 +73,20 @@ export class Ship {
   private static readonly SHIELD_REGEN = 0.06;
   private static readonly RESERVE_REGEN = 0.012;
 
+  /** Rounds carried, which torpedo racks raise. */
+  get torpedoCapacity(): number {
+    return TORPEDO.capacity + this.loadout.torpedoCapacity;
+  }
+
   update(input: ShipInput, dt: number): void {
+    const fit = this.loadout;
     const starved = this.energy <= 0.02;
     const thrust = starved ? 0 : input.thrust;
 
-    this.angularVelocity += input.turn * Ship.TURN_ACCEL * dt;
+    this.angularVelocity += input.turn * Ship.TURN_ACCEL * fit.turnRate * dt;
     this.angularVelocity -= this.angularVelocity * Ship.TURN_DAMP * dt;
-    this.angularVelocity = MathUtils.clamp(this.angularVelocity, -Ship.MAX_TURN, Ship.MAX_TURN);
+    const maxTurn = Ship.MAX_TURN * fit.turnRate;
+    this.angularVelocity = MathUtils.clamp(this.angularVelocity, -maxTurn, maxTurn);
     this.heading -= this.angularVelocity * dt;
 
     // Enough lean to sell the turn, not enough to tip the horizon over. At the
@@ -71,7 +95,7 @@ export class Ship {
     this.bank += (target - this.bank) * Math.min(1, dt * 5);
 
     const forward = this.forward();
-    this.velocity.addScaledVector(forward, thrust * Ship.THRUST * dt);
+    this.velocity.addScaledVector(forward, thrust * Ship.THRUST * fit.acceleration * dt);
     this.velocity.addScaledVector(this.velocity, -Ship.DRAG * dt);
     if (this.velocity.lengthSq() > Ship.MAX_SPEED ** 2) {
       this.velocity.setLength(Ship.MAX_SPEED);
@@ -87,16 +111,24 @@ export class Ship {
     this.torpedoCooldown = Math.max(0, this.torpedoCooldown - dt);
     this.impact = Math.max(0, this.impact - dt * 3);
 
-    // Drains first, then whatever is left trickles back into the reserve.
-    this.energy -= Math.abs(thrust) * Ship.THRUST_DRAIN * dt;
+    // Drains first, then whatever is left trickles back into the reserve. A
+    // bigger reserve is modelled as everything drawn from it costing
+    // proportionally less, which keeps `energy` a 0-1 fraction and the gauge
+    // honest at every loadout.
+    this.energy -= (Math.abs(thrust) * Ship.THRUST_DRAIN * dt) / fit.energyReserve;
     let regen = Ship.RESERVE_REGEN * dt;
 
-    for (const facing of FACINGS) {
-      if (this.shields[facing] >= 1) continue;
-      const spend = Math.min(regen, Ship.SHIELD_REGEN * dt);
-      this.shields[facing] = Math.min(1, this.shields[facing] + spend);
-      regen -= spend;
-      break; // one facing at a time — recovering everything at once is free healing
+    // Ablative plating's price: once something has actually reached the hull,
+    // the facings stop coming back until a starbase repairs it.
+    const shieldsLocked = fit.regenStopsWhenHulled && this.hull < 1;
+    if (!shieldsLocked) {
+      for (const facing of FACINGS) {
+        if (this.shields[facing] >= 1) continue;
+        const spend = Math.min(regen, Ship.SHIELD_REGEN * fit.shieldRegen * dt);
+        this.shields[facing] = Math.min(1, this.shields[facing] + spend);
+        regen -= spend;
+        break; // one facing at a time — recovering everything at once is free healing
+      }
     }
 
     this.energy = MathUtils.clamp(this.energy + regen, 0, 1);
@@ -124,12 +156,27 @@ export class Ship {
    */
   takeHit(amount: number, source: Vector3): boolean {
     const facing = this.facingFrom(source);
-    const absorbed = Math.min(this.shields[facing], amount);
-    this.shields[facing] -= absorbed;
+    // Shields stay stored as 0-1 whatever the loadout, so the gauge always
+    // reads "how much of this facing is left" rather than an absolute number
+    // that means something different every run. Capacity scales what a full
+    // facing is worth, not what full looks like.
+    const capacity = this.loadout.shieldCapacity;
+    const absorbed = Math.min(this.shields[facing] * capacity, amount);
+    this.shields[facing] -= absorbed / capacity;
     this.impact = 1;
 
     const throughput = amount - absorbed;
     if (throughput <= 0) return false;
+
+    // Ablative plating spends itself on the first hit that would have reached
+    // the hull. "Absorbed entirely" is taken literally: no hull damage and no
+    // breach, so the multiplier survives too. It is paid for by the facings
+    // never regenerating again once the hull is finally opened.
+    if (this.ablative) {
+      this.ablative = false;
+      return false;
+    }
+
     this.hull = Math.max(0, this.hull - throughput);
     return true;
   }
@@ -142,8 +189,9 @@ export class Ship {
     this.bank = 0;
     this.energy = 1;
     this.hull = 1;
-    this.torpedoes = 12;
+    this.torpedoes = this.torpedoCapacity;
     this.impact = 0;
+    this.ablative = this.loadout.ablative;
     for (const facing of FACINGS) this.shields[facing] = 1;
   }
 

@@ -3,12 +3,13 @@ import { DebrisField } from "./debris.js";
 import { DeathSequence } from "./death.js";
 import { HIT_STOP, HitStop } from "./hitStop.js";
 import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
-import { Ordnance, PHASER, TORPEDO, phaserDamageAt } from "./weapons.js";
+import { Ordnance, PHASER, TORPEDO, phaserCostOf, phaserDamageAt, phaserRangeOf } from "./weapons.js";
 import { MINE, Minefield } from "./mines.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
 import { intercept } from "../chart/enemyTurn.js";
-import type { Campaign } from "../chart/campaign.js";
+import { creditSalvage, type Campaign } from "../chart/campaign.js";
+import { gainGround, loadoutOf } from "../chart/economy.js";
 import type { VectorObject } from "../render/VectorObject.js";
 import type { Ship } from "./Ship.js";
 
@@ -102,9 +103,22 @@ export class Session {
     private readonly fleet: Fleet,
     starbase: Vector3,
     private readonly playerShape: VectorObject,
-    private readonly campaign: Campaign,
+    private campaign: Campaign,
   ) {
     this.docking = new Docking(starbase);
+  }
+
+  /**
+   * Swaps which campaign this session is playing against, and therefore which
+   * one docking banks into. Not readonly, and this is the whole reason:
+   * attract mode flies the real session with a demo pilot, and a session
+   * permanently welded to the player's campaign would have that pilot spending
+   * the player's salvage and moving the player's front while nobody is at the
+   * cabinet. `Presentation` binds the throwaway before every demonstration —
+   * see `campaignFor` in `chart/economy.ts`.
+   */
+  bindCampaign(campaign: Campaign): void {
+    this.campaign = campaign;
   }
 
   get docked(): boolean {
@@ -252,9 +266,15 @@ export class Session {
     const forward = player.forward(this.scratch).clone();
     this.nose.copy(player.position).addScaledVector(forward, 3.2);
 
-    if (input.firePhaser && player.phaserCooldown <= 0 && player.energy > PHASER.cost) {
+    // Both are loadout-dependent: the capacitor bank enlarges the reserve and
+    // shortens the beam, the focusing coils flatten it and cost more per shot.
+    const fit = player.loadout;
+    const shotCost = phaserCostOf(fit);
+    const shotRange = phaserRangeOf(fit);
+
+    if (input.firePhaser && player.phaserCooldown <= 0 && player.energy > shotCost) {
       player.phaserCooldown = PHASER.cooldown;
-      player.energy -= PHASER.cost;
+      player.energy -= shotCost;
 
       // Aim is the nose. The cone is an assist, not a lock — it forgives a
       // couple of degrees so that pointing at something counts as pointing
@@ -264,7 +284,7 @@ export class Session {
         if (hostile.hidden) continue; // a cloaked hull is not there to lock onto
         const toTarget = hostile.position.clone().sub(player.position);
         const distance = toTarget.length();
-        if (distance > PHASER.falloffEnd) continue;
+        if (distance > shotRange) continue;
         const angle = forward.angleTo(toTarget.normalize());
         if (angle > PHASER.aimCone + hostile.spec.radius / Math.max(distance, 1)) continue;
         if (!best || distance < best.distance) best = { hostile, distance };
@@ -272,13 +292,13 @@ export class Session {
 
       // Whatever is nearer takes the beam, mine or ship. Clearing a lane costs
       // you the shots you would rather have spent on the thing shooting back.
-      const mine = this.mines.aim(player.position, forward, PHASER.aimCone, PHASER.falloffEnd);
+      const mine = this.mines.aim(player.position, forward, PHASER.aimCone, shotRange);
       if (mine && (!best || mine.distance < best.distance)) {
         this.ordnance.discharge(this.nose, mine.mine.position, true);
-        const damage = phaserDamageAt(mine.distance);
+        const damage = phaserDamageAt(mine.distance, fit);
         if (damage > 0 && this.mines.strike(mine.mine, damage)) this.pending += MINE.value * this.salvageScale;
       } else if (best) {
-        const damage = phaserDamageAt(best.distance);
+        const damage = phaserDamageAt(best.distance, fit);
         this.ordnance.discharge(this.nose, best.hostile.position, true);
         if (damage > 0 && best.hostile.damage(damage)) {
           this.destroy(best.hostile, player);
@@ -286,7 +306,7 @@ export class Session {
       } else {
         this.ordnance.discharge(
           this.nose,
-          player.position.clone().addScaledVector(forward, PHASER.falloffEnd),
+          player.position.clone().addScaledVector(forward, shotRange),
           false,
         );
       }
@@ -388,6 +408,15 @@ export class Session {
     const total = Math.round(this.pending * this.multiplier);
     this.lastBank = { salvage: this.pending, multiplier: this.multiplier, total };
     this.score += total;
+    // The join between the two games, and the only one there is: the arcade
+    // layer earns and the strategy layer spends. Banking at a dock is the sole
+    // way salvage ever reaches a campaign, which is what makes "dock now or
+    // push one more wave" already the strategic question. Die undocked and the
+    // campaign gets nothing, exactly as `pending` being wiped in `kill()` says.
+    //
+    // `this.campaign` is whichever campaign is bound — the throwaway during a
+    // demonstration. See `bindCampaign`.
+    creditSalvage(this.campaign, total);
     this.pending = 0;
     this.multiplier = 1;
     this.say(total > 0 ? `BANKED ${total}` : "RESUPPLIED");
@@ -422,8 +451,16 @@ export class Session {
       // sector's fight — see `arrivedByJump`. Only a wave the player actually
       // destroyed in the sector they are now in may intercept.
       if (arrivedByJump) return;
-      if (intercept(this.campaign, this.campaign.current)) this.say("ATTACK BROKEN");
-      else this.say("SECTOR CLEAR");
+
+      // Clearing a wave where you are standing does two things to the war, in
+      // this order because they are different events that can both fire: it
+      // breaks any attack committed against the sector, and it moves the
+      // sector one step back toward you. The second is the only way ground is
+      // ever retaken — see `gainGround` — and it is deliberately the same
+      // ladder the enemy climbs, so a sector costs both sides the same to move.
+      const broken = intercept(this.campaign, this.campaign.current);
+      const taken = gainGround(this.campaign, this.campaign.current);
+      this.say(taken ? "SECTOR TAKEN" : broken ? "ATTACK BROKEN" : "SECTOR CLEAR");
       return;
     }
 
@@ -489,6 +526,10 @@ export class Session {
     // is supposed to pay. `campaign.front` is "the sector the next run drops
     // into"; a run beginning is exactly when that promise has to be kept.
     this.campaign.current = this.campaign.front;
+    // Refits persist through death, so they are read here rather than banked
+    // anywhere: the loadout is whatever the chart last agreed to, applied
+    // before `reset()` so torpedo racks are already fitted when the tubes fill.
+    player.loadout = loadoutOf(this.campaign.refits);
     player.reset();
     this.state = "clear";
     this.wave = 0;

@@ -1,9 +1,9 @@
 # Kobayashi
 
 A vector-arcade starship game: first-person combat on a plane, a greed loop
-built on docking, and a strategy layer whose tactical chart is built and
-whose command layer is not yet. Working title; the eventual larger game is
-*Deep Black*.
+built on docking, and a strategy layer — both halves built, the in-run
+tactical chart and the between-runs command view. Working title; the eventual
+larger game is *Deep Black*.
 
 Full background in `docs/` — [status.md](docs/status.md) first, then
 [prior-art.md](docs/prior-art.md), [concept-options.md](docs/concept-options.md),
@@ -25,7 +25,9 @@ run, and an idle cabinet falls through to an attract demo and back.
 
 Controls: arrows/WASD fly, Space phasers, X torpedoes, R restart. `G` toggles
 wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `1`/`2`/`3` switch
-cockpit/chase/orbit, `H` hides diagnostics. `Tab` raises the chart without
+cockpit/chase/orbit, `H` hides diagnostics. Between runs the command view
+takes arrows for the sector cursor, `W`/`S` for the decision, `Space` to
+commit and `Enter` to launch. `Tab` raises the chart without
 pausing the game; WASD moves the chart cursor while it is up (arrows still
 fly); `Shift` charges a two-second hyperwarp jump that halves the multiplier
 on arrival.
@@ -61,6 +63,16 @@ alternatives deliberately.
   shooting at you is where the hyperwarp escape valve costs something, and it
   keeps the chart an instrument the ship draws rather than a screen the game
   switches to.
+- **One currency: salvage.** Never a second one. Two currencies is a
+  spreadsheet.
+- **Four decisions per chart visit, on one screen, with no submenus.** Into
+  the Breach, not Stellaris. If a chart visit takes longer than a run, the
+  layer has failed and gets cut back rather than reorganised.
+- **Attract mode never touches the player's campaign.** The demo pilot flies
+  the real session, and the real session banks salvage, so the demonstration
+  runs on a throwaway campaign — `campaignFor` in `chart/economy.ts` is the
+  one place that decides which. The symptom of getting this wrong is silent:
+  an unattended cabinet spending the player's savings.
 
 ## Architecture
 
@@ -70,8 +82,8 @@ src/render/   Stage (post chain), VectorObject (the two draw modes),
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
 src/game/     Ship, session (rules), docking, death, hostiles, weapons,
               debris, hitStop, presentation (title/attract/run shell)
-src/chart/    campaign state, the enemy turn, persistence, and the chart
-              renderer
+src/chart/    campaign state, the enemy turn, the economy and the four
+              decisions, persistence, and the chart renderer (both modes)
 src/hud/      Hud (stroke buffer), draw.ts (layout), strokeFont.ts
 ```
 
@@ -105,16 +117,16 @@ debris that is the ship's own edge segments), a persistent minefield, the
 overhead scanner with sweep-painted unresolved returns, a full docking
 sequence — corridor, tractor capture, staged resupply, itemised tally,
 deliberate departure — hit-stop on impact, a staged death sequence, the
-arcade shell of title screen and attract demo, and the tactical chart layer:
+arcade shell of title screen and attract demo, and the whole strategy layer:
 campaign state and mutators, the enemy turn (pressure budget, committed
-moves, interception), persistence (load-only — nothing calls `save()` yet,
-so a reload starts a fresh campaign), the in-run tactical overlay, and
-hyperwarp.
+moves, interception), persistence, the in-run tactical overlay, hyperwarp,
+and the command view — build, refit, deploy, front, with the run-to-run loop
+closed through docking (which credits salvage) and the epitaph (which runs
+the enemy's turn and saves).
 
-Not built: audio (nothing at all yet), mouse aim, leaderboards, the command
-view and its four decisions (build, refit, deploy, front), and the
-death → tally → chart handoff that would actually advance a campaign from
-one run to the next.
+Not built: audio (nothing at all yet), mouse aim, leaderboards, per-sector
+docking (the starbase still sits at one fixed world position however the
+chart is drawn), and patrols visible during a run.
 
 ## Next, in order
 
@@ -125,10 +137,12 @@ one run to the next.
    `Ship.TURN_ACCEL/TURN_DAMP/MAX_TURN/DRAG`, `PHASER.falloffStart/End`,
    `WAVE_BREAK`, multiplier gain, and now `HIT_STOP`, the death sequence's
    `TIMING`, and the attract loop's dwell times. Needs a human at the keyboard.
-3. **The command view.** Build, refit, deploy, choose the front — the four
-   decisions, on the same renderer the tactical chart already uses — plus the
-   death → tally → chart handoff that wires `runEnemyTurn()` into actual play.
-   Nothing calls it yet; a run does not currently lead to another run.
+3. **Campaign balance.** The command view is built and the campaign is not
+   yet winnable at plausible rates — `npm run campaignlength` finds a cliff
+   between five steps of ground per run (0% wins) and six (93%), with no
+   contested band, and capping the pressure formula turns losses into
+   deadlocks rather than into wins. See `docs/status.md` §3. This wants a
+   design answer, not a constant.
 
 ## Gotchas
 

@@ -1,5 +1,6 @@
 import { Color, Vector3 } from "three";
 import { PALETTE } from "../render/palette.js";
+import { NO_REFITS, type Loadout } from "../chart/economy.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 
 /**
@@ -41,11 +42,27 @@ export const BOLT = {
   life: 3.4,
 } as const;
 
-export function phaserDamageAt(distance: number): number {
-  if (distance <= PHASER.falloffStart) return PHASER.damage;
-  if (distance >= PHASER.falloffEnd) return 0;
-  const t = (distance - PHASER.falloffStart) / (PHASER.falloffEnd - PHASER.falloffStart);
-  return PHASER.damage * (1 - t);
+/** Where the beam dies, under this loadout. The capacitor bank pulls it in. */
+export function phaserRangeOf(loadout: Loadout): number {
+  return PHASER.falloffEnd * loadout.phaserRange;
+}
+
+/** Energy per shot, as a fraction of the reserve — which the refits also resize. */
+export function phaserCostOf(loadout: Loadout): number {
+  return (PHASER.cost * loadout.phaserCost) / loadout.energyReserve;
+}
+
+export function phaserDamageAt(distance: number, loadout: Loadout = NO_REFITS): number {
+  const end = phaserRangeOf(loadout);
+  if (distance >= end) return 0;
+  // Focusing coils hold full damage all the way out to whatever range is left,
+  // which is why the capacitor bank shortens `end` rather than merely steepening
+  // the ramp: otherwise fitting the coils would erase the capacitor's price and
+  // the pair would be a pure upgrade.
+  if (loadout.phaserFlat) return PHASER.damage;
+  const start = Math.min(PHASER.falloffStart, end);
+  if (distance <= start) return PHASER.damage;
+  return PHASER.damage * (1 - (distance - start) / (end - start));
 }
 
 export interface Projectile {
