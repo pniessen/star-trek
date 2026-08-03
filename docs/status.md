@@ -248,10 +248,14 @@ command view and its four decisions.
 
 ### Verification
 
-`tools/playtest.mjs` drives a whole run headlessly and asserts eleven rules —
-waves spawn, phasers draw energy, kills bank salvage, the multiplier climbs,
-torpedoes deplete, explosions produce debris, docking banks and resupplies and
-resets, hull loss ends the run, restart is clean.
+`tools/playtest.mjs` drives a whole run headlessly and has grown, feature by
+feature, to twenty-six assertions: waves spawn and escalate, phasers draw
+energy and torpedoes deplete, kills bank salvage and climb the multiplier,
+docking banks and resupplies and resets, hit-stop dilates time and always lets
+go, death breaks the player up and reaches the tally, restart is clean, the
+minelayer and cloaker classes behave as designed, and — the in-run half of
+the chart, covered in §3 above — hyperwarp charges, locks weapons, and costs
+what it should, and a committed fleet move can be intercepted.
 
 **The harness now has to launch its own run.** A fresh load lands on the title
 screen and nothing spawns behind it, so the first assertion needs a keypress —
