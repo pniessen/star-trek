@@ -125,6 +125,24 @@ state = await waitFor((s) => s.debris > 0, 5000);
 check("explosion produces debris", state.debris > 0, `shards=${state.debris}`);
 await page.screenshot({ path: `${OUT}/debris.png` });
 
+// ── hit-stop ────────────────────────────────────────────────────────────────
+// Read the dilation synchronously rather than polling for it: the window is
+// at most HIT_STOP.max real seconds, and racing a 200ms window over an
+// evaluate round-trip is exactly the kind of flake this file avoids.
+const dilated = await page.evaluate(() => {
+  const s = window.__session;
+  s.hitStop.strike(0.2);
+  return s.timeScale;
+});
+check("hit-stop dilates time", dilated < 1 && dilated > 0, `timeScale=${dilated}`);
+
+// The property that actually matters. Hit-stop that never releases is
+// indistinguishable from the clamped-dt slow motion documented in status.md
+// §4, so over-drive it well past its cap and prove it still lets go.
+await page.evaluate(() => window.__session.hitStop.strike(10));
+state = await waitFor((s) => s.timeScale === 1, 3000);
+check("hit-stop always lets go", state.timeScale === 1, `timeScale=${state.timeScale} after a 10s strike`);
+
 // ── docking ─────────────────────────────────────────────────────────────────
 await page.evaluate(() => {
   const p = window.__player;
@@ -157,11 +175,44 @@ await page.keyboard.up("ArrowUp");
 await page.evaluate(() => { window.__player.hull = 0; });
 state = await waitFor((s) => s.state === "dead", 8000);
 check("hull loss ends the run", state.state === "dead", `state=${state.state}`);
+
+// The player's own hull has to come apart the way every hostile's does —
+// reusing the debris field is the whole point of the sequence.
+check("death breaks the player up", state.debris > 0, `shards=${state.debris}`);
 await page.screenshot({ path: `${OUT}/dead.png` });
+
+// Phases, not timings. The sequence is measured in game seconds, which
+// stretch badly under headless GL, so asserting it *arrives* is honest and
+// asserting how long it took is not.
+state = await waitFor((s) => s.death === "tally", 20000);
+check("death reaches the tally", state.death === "tally", `phase=${state.death}`);
 
 await page.keyboard.press("r");
 state = await waitFor((s) => s.score === 0 && s.hull === 1 && s.wave >= 1);
 check("restart begins a fresh run", state.score === 0 && state.hull === 1 && state.wave >= 1, JSON.stringify(state));
+
+// ── the late classes ────────────────────────────────────────────────────────
+// The Harrow enters at wave 4 and the Shroud at wave 6, so a run that never
+// escalates never sees either. Skip ahead by setting the counter and emptying
+// the field: updateWaves() spawns the next one as soon as it is clear.
+// Waves 4 and 6 are lethal enough to end the run mid-assertion, so the hull is
+// pinned for the duration — this is about whether the classes work, not about
+// whether the harness can survive them.
+await page.evaluate(() => {
+  window.__pin = setInterval(() => { window.__player.hull = 1; }, 80);
+});
+
+await page.evaluate(() => { window.__session.wave = 3; window.__fleet.clear(); });
+state = await waitFor((s) => s.wave >= 4 && s.mines > 0, 30000);
+check("the harrow lays a minefield", state.mines > 0, `wave=${state.wave} mines=${state.mines}`);
+await page.screenshot({ path: `${OUT}/minefield.png` });
+
+await page.evaluate(() => { window.__session.wave = 5; window.__fleet.clear(); });
+state = await waitFor((s) => s.wave >= 6 && s.cloaked > 0, 30000);
+check("the shroud arrives cloaked", state.cloaked > 0, `wave=${state.wave} cloaked=${state.cloaked}`);
+await page.screenshot({ path: `${OUT}/cloaked.png` });
+
+await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
 // ── beauty shots: full size, every effect on ────────────────────────────────
 await page.setViewportSize({ width: 1280, height: 800 });

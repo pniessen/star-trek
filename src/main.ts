@@ -384,6 +384,10 @@ function frame(now: number): void {
       mode: presentation.mode,
       death: session.death.phase,
       dock: session.docking.phase,
+      // Hit-stop, so the harness can prove it dilates and then lets go. A
+      // stuck timeScale is indistinguishable from the slow-motion bug that
+      // has already cost an hour once.
+      timeScale: +session.timeScale.toFixed(3),
       wave: session.wave,
       hostiles: fleet.hostiles.length,
       score: session.score,
