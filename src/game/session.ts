@@ -1,9 +1,12 @@
 import { Vector3 } from "three";
 import { DebrisField } from "./debris.js";
+import { DeathSequence } from "./death.js";
+import { HIT_STOP, HitStop } from "./hitStop.js";
 import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
 import { Ordnance, PHASER, TORPEDO, phaserDamageAt } from "./weapons.js";
 import { MINE, Minefield } from "./mines.js";
 import { Docking } from "./docking.js";
+import type { VectorObject } from "../render/VectorObject.js";
 import type { Ship } from "./Ship.js";
 
 /**
@@ -38,6 +41,8 @@ export class Session {
   /** Persists across waves: the field is the run's own history of where you flew. */
   readonly mines = new Minefield();
   readonly docking: Docking;
+  readonly death = new DeathSequence();
+  readonly hitStop = new HitStop();
 
   state: SessionState = "clear";
   wave = 0;
@@ -55,6 +60,12 @@ export class Session {
   displayScore = 0;
   /** Frozen at the moment of banking, so the tally can be shown itemised. */
   lastBank = { salvage: 0, multiplier: 1, total: 0 };
+  /**
+   * Frozen at the moment of dying, because `kill` zeroes the things the
+   * epitaph most wants to report — chiefly what the run was worth one dock
+   * short of home, which is the whole sting of the greed loop.
+   */
+  lastRun = { wave: 0, kills: 0, lost: 0, score: 0 };
 
   breakTimer = WAVE_BREAK;
   message = "STAND BY";
@@ -63,9 +74,14 @@ export class Session {
   private readonly scratch = new Vector3();
   private readonly nose = new Vector3();
 
+  /**
+   * @param playerShape  the player's hull, held only so that dying can fling
+   *   the actual strokes that drew it — the same treatment every hostile gets.
+   */
   constructor(
     private readonly fleet: Fleet,
     starbase: Vector3,
+    private readonly playerShape: VectorObject,
   ) {
     this.docking = new Docking(starbase);
   }
@@ -74,18 +90,46 @@ export class Session {
     return this.docking.held;
   }
 
-  update(dt: number, player: Ship, input: CombatInput): void {
+  /**
+   * Real seconds times this are game seconds. 1 unless a hit is landing; see
+   * `hitStop.ts` for why this is bounded rather than merely small. Callers
+   * outside the session — the flight model — must scale by the same number, so
+   * it is published rather than kept private.
+   */
+  get timeScale(): number {
+    return this.hitStop.scale;
+  }
+
+  /** @param realDt wall-clock seconds. Dilation is applied here, not by the caller. */
+  update(realDt: number, player: Ship, input: CombatInput): void {
+    const dt = realDt * this.timeScale;
+    this.hitStop.advance(realDt);
+
     this.messageTimer = Math.max(0, this.messageTimer - dt);
     // Ease the odometer toward the real score, framerate-independently.
     this.displayScore += (this.score - this.displayScore) * (1 - Math.pow(0.006, dt));
     if (Math.abs(this.score - this.displayScore) < 0.6) this.displayScore = this.score;
 
     if (this.state === "dead") {
+      // The fleet keeps flying and keeps shooting at the wreck. A frozen fleet
+      // reads as a stopped program; a circling one reads as being finished off.
+      // Nothing they fire can land — hit resolution is below this line.
+      for (const hostile of this.fleet.hostiles) hostile.update(dt, player, this.ordnance, this.mines);
       this.ordnance.update(dt);
       // Keeps running so blasts already in flight finish expanding rather than
       // freezing half-drawn on the death screen.
       this.mines.update(dt, player, () => {});
       this.debris.update(dt);
+
+      const before = this.death.phase;
+      this.death.update(dt);
+      // Once the panel comes back up for the readout the screen belongs to it.
+      // The pack circling the wreck is the right thing to watch during the
+      // drift and pure noise across four lines of numbers.
+      if (before !== "tally" && this.death.phase === "tally") {
+        this.fleet.clear();
+        this.ordnance.clear();
+      }
       return;
     }
 
@@ -176,7 +220,11 @@ export class Session {
           if (hostile.hidden) continue; // torpedoes pass straight through a veil
           if (projectile.position.distanceTo(hostile.position) > hostile.spec.radius) continue;
           projectile.dead = true;
+          // Only torpedoes reach here — phasers resolve instantly — which is
+          // what keeps hit-stop an event. A phaser burst lands every 0.16s and
+          // dilating on each of those would be a permanent limp.
           if (hostile.damage(projectile.damage)) this.destroy(hostile, player);
+          else this.hitStop.strike(HIT_STOP.impact);
           break;
         }
         if (projectile.dead) continue;
@@ -202,6 +250,7 @@ export class Session {
    */
   private breach(): void {
     this.multiplier = Math.max(1, this.multiplier * 0.5);
+    this.hitStop.strike(HIT_STOP.breach);
     this.say("HULL BREACH");
   }
 
@@ -216,6 +265,7 @@ export class Session {
       hostile.kind === "brawler" ? 1.4 : hostile.kind === "miner" ? 1.25 : 1,
     );
 
+    this.hitStop.strike(HIT_STOP.kill);
     this.kills++;
     this.pending += hostile.spec.value;
     this.multiplier = Math.min(9.9, this.multiplier + 0.2);
@@ -225,10 +275,14 @@ export class Session {
 
   private kill(player: Ship): void {
     this.state = "dead";
+    // Everything the epitaph reports, taken before the run is wiped.
+    this.lastRun = { wave: this.wave, kills: this.kills, lost: this.bankable, score: this.score };
     this.pending = 0; // die undocked and the run's earnings go with you
     this.multiplier = 1;
+    this.docking.reset();
+    this.hitStop.strike(HIT_STOP.death);
+    this.death.begin(player, this.playerShape, this.debris);
     this.say("SHIP LOST");
-    void player;
   }
 
   // ── banking ──────────────────────────────────────────────────────────────
@@ -313,6 +367,8 @@ export class Session {
     this.debris.clear();
     this.mines.clear();
     this.docking.reset();
+    this.death.reset();
+    this.hitStop.clear();
     player.reset();
     this.state = "clear";
     this.wave = 0;
@@ -322,6 +378,7 @@ export class Session {
     this.pending = 0;
     this.kills = 0;
     this.lastBank = { salvage: 0, multiplier: 1, total: 0 };
+    this.lastRun = { wave: 0, kills: 0, lost: 0, score: 0 };
     this.breakTimer = 1.4;
     this.say("STAND BY");
   }

@@ -22,7 +22,7 @@ import { TORPEDO } from "./weapons.js";
 
 export type DockPhase = "none" | "aligning" | "capture" | "moored" | "released";
 
-const GEOMETRY = {
+export const DOCK_GEOMETRY = {
   /** Where the approach gate sits, along -Z from the station. */
   gateOffset: 15,
   /** Where the ship is held once captured. */
@@ -98,8 +98,8 @@ export class Docking {
     // The corridor runs along -Z, the side you arrive from. Fixed in world
     // space rather than bolted to the station's idle rotation, so it reads as
     // a navigational aid rather than a moving part.
-    this.gate.copy(station).add(new Vector3(0, 0, -GEOMETRY.gateOffset));
-    this.mooring.copy(station).add(new Vector3(0, 0, -GEOMETRY.mooringOffset));
+    this.gate.copy(station).add(new Vector3(0, 0, -DOCK_GEOMETRY.gateOffset));
+    this.mooring.copy(station).add(new Vector3(0, 0, -DOCK_GEOMETRY.mooringOffset));
   }
 
   get controlsLocked(): boolean {
@@ -127,6 +127,18 @@ export class Docking {
     this.status = "";
     this.rearm = false;
     this.releaseTimer = 0;
+    // Guidance is only recomputed while the session is being stepped, so a
+    // stale reading survives into a screen that has no run behind it and draws
+    // a corridor across the title.
+    this.guidance = {
+      lateral: 0,
+      range: 0,
+      speed: 0,
+      speedOk: false,
+      headingOk: false,
+      inGate: false,
+      visible: false,
+    };
   }
 
   /**
@@ -173,10 +185,10 @@ export class Docking {
       lateral,
       range,
       speed: player.speed,
-      speedOk: player.speed < GEOMETRY.maxCaptureSpeed,
-      headingOk: heading < GEOMETRY.alignTolerance,
-      inGate: range < GEOMETRY.captureRadius,
-      visible: player.position.distanceTo(this.station) < GEOMETRY.guidanceRange,
+      speedOk: player.speed < DOCK_GEOMETRY.maxCaptureSpeed,
+      headingOk: heading < DOCK_GEOMETRY.alignTolerance,
+      inGate: range < DOCK_GEOMETRY.captureRadius,
+      visible: player.position.distanceTo(this.station) < DOCK_GEOMETRY.guidanceRange,
     };
   }
 
@@ -191,7 +203,7 @@ export class Docking {
     }
 
     // Having left the zone once, you may dock again.
-    if (g.range > GEOMETRY.captureRadius * 2.2) this.rearm = false;
+    if (g.range > DOCK_GEOMETRY.captureRadius * 2.2) this.rearm = false;
 
     this.phase = "aligning";
     this.status = !g.headingOk
@@ -340,7 +352,7 @@ export class Docking {
     // The gate itself.
     const gateColor = this.guidance.inGate ? PALETTE.trace : PALETTE.traceDim;
     const gateGlow = this.guidance.inGate ? 2.2 : 0.8;
-    const R = GEOMETRY.captureRadius;
+    const R = DOCK_GEOMETRY.captureRadius;
     const segments = 20;
     for (let i = 0; i < segments; i++) {
       if (i % 5 === 4) continue; // broken ring, four arcs

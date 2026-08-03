@@ -4,13 +4,16 @@ import type { Hud } from "./Hud.js";
 import { FACINGS, type Ship } from "../game/Ship.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, type Fleet } from "../game/hostiles.js";
+import type { Presentation } from "../game/presentation.js";
 import { TORPEDO } from "../game/weapons.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
+import { GLYPH_ADVANCE } from "./strokeFont.js";
 
 export interface HudView {
   readonly player: Ship;
   readonly session: Session;
   readonly fleet: Fleet;
+  readonly presentation: Presentation;
   readonly starbase: Vector3;
   readonly fps: number;
   readonly time: number;
@@ -30,6 +33,25 @@ const point = new Vector3();
 
 /** What the scanner has been told, as opposed to what is true. See `scanner.ts`. */
 const contacts = new ScannerModel();
+
+/** Centred on `cx`. Used by every full-screen panel. */
+function centred(hud: Hud, text: string, cx: number, y: number, scale: number, color: Color): void {
+  hud.text(text, cx - (text.length * GLYPH_ADVANCE * scale) / 2, y, scale, color);
+}
+
+/** A dashed rule — the panel divider, in the same vocabulary as the corridor. */
+function rule(hud: Hud, cx: number, y: number, halfWidth: number, color: Color): void {
+  const flat: number[] = [];
+  for (let x = -halfWidth; x < halfWidth; x += 22) {
+    flat.push(cx + x, y, cx + Math.min(x + 13, halfWidth), y);
+  }
+  hud.segments(flat, color);
+}
+
+/** Slow enough to read as a cursor rather than a fault. Time-based, not frame-based. */
+function blink(time: number): boolean {
+  return Math.sin(time * 3.4) > -0.35;
+}
 
 function arc(
   out: number[],
@@ -58,10 +80,31 @@ function pad(value: number, width: number): string {
 
 export function drawHud(hud: Hud, view: HudView): void {
   const { width, height } = hud.size;
-  const { player, session } = view;
+  const { player, session, presentation } = view;
+  const death = session.death;
+
   hud.begin();
+  // The instrument supply. Everything below is scaled by it, so when the ship
+  // loses power the panel browns out whole rather than each readout blinking
+  // out on its own schedule.
+  hud.power = death.power;
+
+  if (presentation.mode === "title") {
+    drawTitle(hud, view, width, height);
+    hud.end();
+    return;
+  }
 
   hud.brackets(18, 18, width - 36, height - 36, 22, PALETTE.traceDim);
+
+  // Once the run is over the panel has nothing live to report, so it stops
+  // pretending: the instruments give the screen up to the epitaph.
+  if (death.phase === "tally") {
+    drawEpitaph(hud, view, width, height);
+    if (view.showDiagnostics) drawDiagnostics(hud, view, width, height);
+    hud.end();
+    return;
+  }
 
   drawScanner(hud, view, width / 2, height - 148);
   drawShields(hud, player, width / 2, 96);
@@ -85,23 +128,107 @@ export function drawHud(hud: Hud, view: HudView): void {
       .copy(session.state === "dead" ? PALETTE.amber : PALETTE.trace)
       .multiplyScalar(0.35 + alpha * 0.9);
     const scale = session.state === "dead" ? 5.5 : 3.6;
-    hud.text(
-      session.message,
-      width / 2 - (session.message.length * 4.2 * scale) / 2,
-      height / 2 + 96,
-      scale,
-      scratch,
-    );
+    centred(hud, session.message, width / 2, height / 2 + 96, scale, scratch);
   }
 
-  if (session.state === "dead") {
-    const hint = "PRESS R TO RUN AGAIN";
-    hud.text(hint, width / 2 - (hint.length * 4.2 * 1.8) / 2, height / 2 + 60, 1.8, dim);
-  }
+  if (presentation.mode === "attract") drawAttractBanner(hud, view, width);
 
   if (view.showDiagnostics) drawDiagnostics(hud, view, width, height);
 
   hud.end();
+}
+
+/**
+ * The title screen, as one of the ship's own instruments.
+ *
+ * A menu would be the wrong object entirely — this game has no DOM text in it
+ * anywhere, and the moment the first screen a player sees is HTML the whole
+ * conceit that everything readable is something the ship is drawing collapses
+ * before the first frame of it. So the title is a panel: brackets, a rule, dim
+ * labels against bright values, and the same stroke font as every other
+ * readout. The spectacle behind it is the game's, not the screen's.
+ */
+function drawTitle(hud: Hud, view: HudView, width: number, height: number): void {
+  const cx = width / 2;
+  const { presentation } = view;
+
+  hud.brackets(18, 18, width - 36, height - 36, 22, PALETTE.traceDim);
+
+  // The ship itself owns the middle of the frame — the camera is orbiting it —
+  // so the panel is composed around that band rather than over it.
+  // The title block sits above the grid's horizon and the legend below the
+  // ship, so the two dense bands of the scene — the plane and the hull — each
+  // land in a gap rather than under type.
+  centred(hud, "KOBAYASHI", cx, 640, 9, PALETTE.trace);
+  rule(hud, cx, 616, 210, PALETTE.traceDim);
+  centred(hud, "NO-WIN SCENARIO   VECTOR COMBAT TRIALS", cx, 584, 1.9, PALETTE.traceDim);
+
+  // The controls as a readout, not as a legend: dim label, bright value, the
+  // same two columns the diagnostics block uses.
+  const rows: [string, string][] = [
+    ["LAUNCH", "ANY KEY"],
+    ["FLY", "ARROWS / WASD"],
+    ["PHASERS", "SPACE"],
+    ["TORPEDOES", "X"],
+    ["BANK SALVAGE", "FLY THE CORRIDOR"],
+  ];
+  rows.forEach(([label, value], index) => {
+    const y = 288 - index * 26;
+    hud.textRight(label, cx - 20, y, 1.7, PALETTE.traceDim);
+    hud.text(value, cx + 20, y, 1.7, dim);
+  });
+
+  if (blink(view.time)) {
+    centred(hud, "PRESS ANY KEY TO LAUNCH", cx, 132, 2.6, PALETTE.amber);
+  }
+
+  if (presentation.best > 0) {
+    centred(hud, `BEST THIS SITTING   ${pad(presentation.best, 6)}`, cx, 88, 1.7, PALETTE.traceDim);
+  }
+}
+
+/**
+ * Says the obvious thing: nobody is flying this, and you could be.
+ *
+ * Bottom centre, in the strip between the shield cluster and the frame — the
+ * one band the instruments leave clear at every window size. Anywhere nearer
+ * the middle and it sits squarely on the ship it exists to show off.
+ */
+function drawAttractBanner(hud: Hud, view: HudView, width: number): void {
+  if (!blink(view.time)) return;
+  centred(hud, "DEMONSTRATION   PRESS ANY KEY TO PLAY", width / 2, 32, 2.2, PALETTE.amber);
+}
+
+/**
+ * The run, added up.
+ *
+ * Deliberately itemised the same way the docking tally is, and for the same
+ * reason: the multiplier is the currency, so the number that has to land
+ * hardest is what the run was worth one dock short of home. "SALVAGE LOST" is
+ * the whole greed loop stated as a single figure.
+ */
+function drawEpitaph(hud: Hud, view: HudView, width: number, height: number): void {
+  const cx = width / 2;
+  const run = view.session.lastRun;
+
+  centred(hud, "SHIP LOST", cx, height / 2 + 96, 5.5, PALETTE.amber);
+  rule(hud, cx, height / 2 + 74, 190, PALETTE.traceDim);
+
+  const rows: [string, string, Color][] = [
+    ["WAVE REACHED", pad(run.wave, 2), PALETTE.trace],
+    ["HOSTILES DESTROYED", pad(run.kills, 3), PALETTE.trace],
+    ["SALVAGE LOST", pad(run.lost, 5), PALETTE.amber],
+    ["FINAL SCORE", pad(run.score, 6), PALETTE.trace],
+  ];
+  rows.forEach(([label, value, color], index) => {
+    const y = height / 2 + 24 - index * 30;
+    hud.textRight(label, cx - 20, y, 1.8, PALETTE.traceDim);
+    hud.text(value, cx + 20, y, 2.4, color);
+  });
+
+  if (blink(view.time)) {
+    centred(hud, "PRESS R TO RUN AGAIN", cx, height / 2 - 132, 2.2, dim);
+  }
 }
 
 /**

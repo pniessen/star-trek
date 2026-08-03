@@ -28,6 +28,16 @@ export class Hud {
   readonly scene = new Scene();
   readonly camera: OrthographicCamera;
 
+  /**
+   * Instrument supply, 0→1, applied to every stroke this buffer takes.
+   *
+   * The panel is one piece of hardware and it browns out as one piece. Asking
+   * each readout to remember to dim itself would have every new instrument
+   * silently opt out of the ship losing power, which is exactly the sort of
+   * thing that only shows up in the one moment it matters.
+   */
+  power = 1;
+
   private readonly geometry = new BufferGeometry();
   private readonly positions = new Float32Array(MAX_SEGMENTS * 6);
   private readonly colors = new Float32Array(MAX_SEGMENTS * 6);
@@ -86,6 +96,7 @@ export class Hud {
 
   /** Flat pairs of (x0,y0,x1,y1) in pixels, origin bottom-left. */
   segments(flat: readonly number[], color: Color): void {
+    const supply = Math.max(0, this.power);
     for (let i = 0; i + 3 < flat.length; i += 4) {
       if (this.count >= MAX_SEGMENTS) {
         this.overflowed = true;
@@ -99,9 +110,9 @@ export class Hud {
       this.positions[p + 4] = flat[i + 3];
       this.positions[p + 5] = 0;
       for (const offset of [p, p + 3]) {
-        this.colors[offset] = color.r;
-        this.colors[offset + 1] = color.g;
-        this.colors[offset + 2] = color.b;
+        this.colors[offset] = color.r * supply;
+        this.colors[offset + 1] = color.g * supply;
+        this.colors[offset + 2] = color.b * supply;
       }
       this.count++;
     }

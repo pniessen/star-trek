@@ -17,6 +17,9 @@ npm run standalone   # dist/kobayashi.html, one self-contained file
 npm run playtest     # headless run + assertions (needs a Playwright browser)
 ```
 
+A fresh load lands on the title; any key that is not a display toggle launches a
+run, and an idle cabinet falls through to an attract demo and back.
+
 Controls: arrows/WASD fly, Space phasers, X torpedoes, R restart. `G` toggles
 wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `1`/`2`/`3` switch
 cockpit/chase/orbit, `H` hides diagnostics.
@@ -49,7 +52,8 @@ alternatives deliberately.
 src/render/   Stage (post chain), VectorObject (the two draw modes),
               PhosphorPass, CrtPass, TraceBuffer, palette
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
-src/game/     Ship, session (rules), docking, hostiles, weapons, debris
+src/game/     Ship, session (rules), docking, death, hostiles, weapons,
+              debris, hitStop, presentation (title/attract/run shell)
 src/hud/      Hud (stroke buffer), draw.ts (layout), strokeFont.ts
 ```
 
@@ -70,18 +74,23 @@ to an sRGB display and every dim trace is crushed to black.
   guides — not new objects and materials.
 - **Time-based, not frame-based.** Anything that decays or accumulates must use
   `dt`. A trail that lengthens on a slow machine is a bug.
+- **Hit-stop is the only thing allowed to scale game time**, through
+  `Session.timeScale`. It is bounded, it never freezes, and it drains on real
+  seconds. Do not add a second time scale and do not touch the frame clamp — a
+  clamped `dt` already looks exactly like slow motion and has cost an hour once.
 - Typecheck before committing. There is no lint step.
 
 ## State
 
 Built: the renderer, combat (five hostile classes, waves, shield facings,
 debris that is the ship's own edge segments), a persistent minefield, the
-overhead scanner with sweep-painted unresolved returns, and a full docking
+overhead scanner with sweep-painted unresolved returns, a full docking
 sequence — corridor, tractor capture, staged resupply, itemised tally,
-deliberate departure.
+deliberate departure — hit-stop on impact, a staged death sequence, and the
+arcade shell of title screen and attract demo.
 
 Not built: audio (nothing at all yet), mouse aim, leaderboards, persistence,
-title/attract mode, and the entire strategy layer.
+and the entire strategy layer.
 
 ## Next, in order
 
@@ -90,7 +99,8 @@ title/attract mode, and the entire strategy layer.
    remaining win per hour.
 2. **Tuning.** Flight and pacing constants are first-draft guesses:
    `Ship.TURN_ACCEL/TURN_DAMP/MAX_TURN/DRAG`, `PHASER.falloffStart/End`,
-   `WAVE_BREAK`, multiplier gain. Needs a human at the keyboard.
+   `WAVE_BREAK`, multiplier gain, and now `HIT_STOP`, the death sequence's
+   `TIMING`, and the attract loop's dwell times. Needs a human at the keyboard.
 3. **The chart** (weeks 6–8): 8×8 sectors, hyperwarp, fleets advancing on a
    clock. Turns this into Deep Black and doubles as the empire screen.
 4. **The campaign** (weeks 9–12): build, refit, deploy, choose the front.
@@ -103,5 +113,10 @@ title/attract mode, and the entire strategy layer.
 - Headless Chromium on software GL takes ~0.5s per frame for the post chain at
   1280×800, and the `dt` clamp then puts game logic into slow motion. The
   playtest harness therefore runs at 640×400 with post disabled. Not a bug.
-- `window.__probe`, `__session`, `__player`, `__fleet`, `__stage` are exposed on
-  localhost only, for headless inspection.
+- `window.__probe`, `__session`, `__player`, `__fleet`, `__stage`,
+  `__presentation` are exposed on localhost only, for headless inspection.
+  `__probe.state` is still only `clear`/`fighting`/`dead`; the title and attract
+  screens are `__probe.mode`, which is the shell around a run, not a combat
+  phase. **A headless run must launch itself** — the page now lands on the
+  title, so a harness has to press a key (or call
+  `window.__presentation.startRun()`) before anything spawns.

@@ -68,6 +68,13 @@ await page.evaluate(() => {
   window.__stage.phosphor.enabled = false;
   window.__stage.crt.enabled = false;
 });
+
+// A fresh load lands on the title screen with nothing spawning behind it, and
+// left alone it drops into the attract demo, which then fights the harness for
+// the keyboard. Launch a real run through the same door a player uses.
+await page.keyboard.press("Enter");
+await waitFor((s) => s.mode === "run", 10000);
+
 // ── wave one arrives ────────────────────────────────────────────────────────
 let state = await waitFor((s) => s.wave >= 1 && s.hostiles > 0);
 check("wave spawns", state.wave >= 1 && state.hostiles > 0, JSON.stringify(state));
