@@ -214,6 +214,136 @@ await page.screenshot({ path: `${OUT}/cloaked.png` });
 
 await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
+// ── hyperwarp ───────────────────────────────────────────────────────────────
+await page.evaluate(() => {
+  window.__session.wave = 1;
+  window.__fleet.clear();
+  window.__player.energy = 1;
+});
+state = await waitFor((s) => s.hostiles > 0, 20000);
+
+// Build a multiplier worth losing, so halving it is observable.
+await page.evaluate(() => { window.__session.multiplier = 4; });
+
+// A jump to the sector you are already in is refused, so point somewhere
+// else first — the same thing a player does with Tab and WASD. Driven
+// through beginHyperwarp() indirectly, via the real Shift input below: the
+// raw hyperwarp.begin() has no destination of its own, and going through it
+// would arrive somewhere stale (see the comment on Session.hyperwarp).
+await page.evaluate(() => {
+  const { neighbours } = window.__chart;
+  window.__chartCursor.set(neighbours(window.__campaign.current)[0]);
+});
+
+await page.keyboard.down("Shift");
+state = await waitFor((s) => s.hyperwarp === "charging", 5000);
+check("hyperwarp charges", state.hyperwarp === "charging", `phase=${state.hyperwarp}`);
+
+// The charge is the commitment. Firing through it would make fleeing free,
+// and the whole price the multiplier halving teaches collapses — this is the
+// assertion that matters most in this file.
+//
+// Read with a synchronous dt=0 call into the real update() rather than
+// holding a key and polling after a timeout. PHASER.cost and a torpedo round
+// are one-shot deductions, but the charge's own drain is continuous, so a
+// wall-clock window would confound "the phaser fired" with "the charge
+// drained energy anyway" — exactly the kind of race this file's waitFor
+// exists to avoid elsewhere. dt=0 walks the exact same handlePlayerFire()
+// path a real frame would while freezing every dt-scaled effect, the charge
+// drain included, so only a discrete fire would move either number.
+const lockedBefore = await page.evaluate(() => {
+  const p = window.__player;
+  return { torpedoes: p.torpedoes, energy: p.energy };
+});
+await page.evaluate(() => {
+  window.__session.update(0, window.__player, { firePhaser: true, fireTorpedo: true, thrust: false });
+});
+const lockedAfter = await page.evaluate(() => {
+  const p = window.__player;
+  return { torpedoes: p.torpedoes, energy: p.energy };
+});
+check(
+  "weapons are locked while charging",
+  lockedAfter.torpedoes === lockedBefore.torpedoes && lockedAfter.energy === lockedBefore.energy,
+  `torpedoes ${lockedBefore.torpedoes}→${lockedAfter.torpedoes}, energy ${lockedBefore.energy.toFixed(3)}→${lockedAfter.energy.toFixed(3)}`,
+);
+
+const sectorBefore = (await probe()).sector;
+state = await waitFor((s) => s.multiplier <= 2, 15000);
+await page.keyboard.up("Shift");
+check("arriving halves the multiplier", state.multiplier <= 2, `x${state.multiplier}`);
+check("...and you arrive cold", state.energy < 0.6, `energy=${state.energy}`);
+// Without this the jump is a reset button rather than travel.
+check("...and somewhere else", state.sector !== sectorBefore, `${sectorBefore} → ${state.sector}`);
+
+// ── the overlay does not pause the game ─────────────────────────────────────
+const waveBefore = (await probe()).wave;
+await page.keyboard.down("Tab");
+await waitFor((s) => s.wave > waveBefore, 30000);
+await page.keyboard.up("Tab");
+check("the chart does not stop the wave clock", (await probe()).wave > waveBefore, `wave>${waveBefore}`);
+
+// ── a jump intercepts a committed attack on the destination ─────────────────
+// Flagged by Task 7's implementer as untested: reaching a sector the enemy
+// has already committed to attacking should cancel that attack — see the
+// comment on Session.updateWaves(). Prove it the way a player actually would:
+// jump to a threatened sector, then clear the wave that greets you there.
+//
+// Arriving is deliberately checked *before* the clear. Arrival empties the
+// fleet on its own (`arrive()` calls `fleet.clear()`), and the "fighting →
+// clear" transition that fires interception doesn't care which sector taught
+// it "fighting" — so a charge begun while a fight was already under way could
+// look like an interception by accident, on a sector nothing was ever fought
+// in. Forcing a clean "clear" state before the jump, and asserting inbound is
+// still untouched the instant the jump lands, is what rules that out and
+// makes the drop below actually attributable to clearing the destination's
+// own wave.
+await page.evaluate(() => {
+  window.__hullPin = setInterval(() => { window.__player.hull = 1; }, 80);
+  window.__fleet.clear();
+  window.__session.state = "clear";
+  // Pinned so the break timer can't sneak a wave in before the setup below
+  // finishes pointing the jump.
+  window.__session.breakTimer = 999;
+});
+
+const interceptSetup = await page.evaluate(() => {
+  const { neighbours } = window.__chart;
+  const from = window.__campaign.current;
+  const to = neighbours(from)[0];
+  window.__campaign.incoming.push({ sector: to, runsUntil: 5 });
+  window.__player.energy = 1;
+  window.__chartCursor.set(to);
+  return { from, to, inboundBefore: window.__campaign.incoming.length };
+});
+
+await page.keyboard.down("Shift");
+state = await waitFor((s) => s.sector === interceptSetup.to, 8000);
+await page.keyboard.up("Shift");
+check(
+  "jump lands on the threatened sector",
+  state.sector === interceptSetup.to,
+  `${interceptSetup.from} → ${state.sector}, wanted ${interceptSetup.to}`,
+);
+check(
+  "arrival alone does not intercept",
+  state.inbound === interceptSetup.inboundBefore,
+  `inbound=${state.inbound}`,
+);
+
+// Now actually fight — spawn the sector's own wave and clear it for real.
+await page.evaluate(() => { window.__session.breakTimer = 0; });
+state = await waitFor((s) => s.hostiles > 0, 10000);
+await page.evaluate(() => { window.__fleet.clear(); });
+state = await waitFor((s) => s.inbound < interceptSetup.inboundBefore, 10000);
+check(
+  "clearing a wave there intercepts the committed attack",
+  state.inbound < interceptSetup.inboundBefore,
+  `inbound ${interceptSetup.inboundBefore} → ${state.inbound}`,
+);
+
+await page.evaluate(() => { clearInterval(window.__hullPin); delete window.__hullPin; });
+
 // ── beauty shots: full size, every effect on ────────────────────────────────
 await page.setViewportSize({ width: 1280, height: 800 });
 await page.evaluate(() => {
