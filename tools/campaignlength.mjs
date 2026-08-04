@@ -110,7 +110,25 @@ const TRACE = args.some((a) => a.startsWith("--trace=")) ? flag("trace", 1) : nu
 /** Sweeps salvage banked per run at a fixed reach — does the chart matter at all? */
 const ECONOMY = args.includes("--economy");
 const ECONOMY_TAKES = [0, 300, 600, 1200, 2400, 6000];
-const CEILING = 200;
+/**
+ * Runs before a campaign is called unresolved. Two hundred is the honest
+ * upper bound on the model; it is not the honest upper bound on a player's
+ * patience, and the difference matters — a war scored as a deadlock at two
+ * hundred may be a defeat by boredom at forty. Sweep both before believing
+ * either.
+ */
+const CEILING = flag("ceiling", 200);
+/**
+ * Patrol capacity, overridden.
+ *
+ * `--economy` shows salvage above about three hundred a run buying nothing,
+ * because the spend list saturates and patrol capacity — one, plus one per
+ * yard — is the binding constraint. This is here to test the obvious reply:
+ * if salvage had a sink, would the chart start deciding wars? Reaching into
+ * `PATROL` is deliberate and is why it lives in the instrument rather than in
+ * `economy.ts`; it is a question being asked, not a rule being changed.
+ */
+if (args.some((a) => a.startsWith("--patrols="))) PATROL.baseCapacity = flag("patrols", 1);
 
 /** The board the enemy opens holding. Every "how far has the front moved" reads against this. */
 const START_THEIRS = ENEMY_START_DEPTH * GRID;
@@ -158,7 +176,9 @@ function spend(campaign) {
   const line = frontLine(campaign);
   const held = campaign.sectors.filter((s) => s.control === "ours");
 
-  for (let step = 0; step < 12; step++) {
+  // Enough passes to exhaust the list even with `--patrols` raised well past
+  // its shipped value; the loop breaks as soon as nothing more can be bought.
+  for (let step = 0; step < 32; step++) {
     // A patrol on undefended front-line ground, if there is room for one.
     const bare = line.find((i) => !campaign.sectors[i].patrol);
     if (bare !== undefined && patrolCount(campaign) < patrolCapacity(campaign)) {
