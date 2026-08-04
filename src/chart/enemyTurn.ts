@@ -1,5 +1,6 @@
 import { countControl, hasStructure, ENEMY_START_DEPTH, type Campaign, type Sector } from "./campaign.js";
 import { GRID, neighbours } from "./sectors.js";
+import { feedbackOn, SUPPLY } from "./feedback.js";
 import type { Rng } from "./rng.js";
 
 /**
@@ -51,11 +52,18 @@ function sectorsHeldBeyondStart(campaign: Campaign): number {
 }
 
 export function pressureBudget(campaign: Campaign): number {
-  return (
-    PRESSURE.base +
-    Math.floor(campaign.runsElapsed / PRESSURE.runsPerStep) +
-    sectorsHeldBeyondStart(campaign)
-  );
+  const clock = Math.floor(campaign.runsElapsed / PRESSURE.runsPerStep);
+
+  // Candidate: supply lines. Everything the invasion spends, escalation
+  // included, is drawn from the ground it holds — so losing ground weakens it
+  // in proportion rather than only above the depth it opened with. Off unless
+  // `tools/campaignlength.mjs` turns it on; see `feedback.ts`.
+  if (feedbackOn("supply")) {
+    const share = countControl(campaign, "theirs") / (ENEMY_START_DEPTH * GRID);
+    return Math.max(SUPPLY.floor, Math.round((PRESSURE.base + clock) * share));
+  }
+
+  return PRESSURE.base + clock + sectorsHeldBeyondStart(campaign);
 }
 
 function defenceOf(sector: Sector): number {

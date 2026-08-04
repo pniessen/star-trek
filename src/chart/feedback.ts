@@ -26,7 +26,28 @@
  * typo that silently measures the unmodified game as though it were a
  * candidate is the one failure mode worth spending eight lines to prevent.
  */
-export const TERMS: readonly string[] = [];
+export const TERMS: readonly string[] = ["supply"];
+
+/**
+ * **Supply lines.** The invasion is supplied from the space it occupies, so
+ * everything it spends scales with the ground it holds — including the
+ * escalation. Today the clock term `floor(runs / 2)` grows for ever whatever
+ * the board looks like, and the territory term is floored at zero, so pushing
+ * the enemy below the depth it started at buys nothing at all. Under this term
+ * there is no floor and no free clock: reduce them to half their ground and
+ * their whole war effort halves.
+ *
+ * The fiction is the plainest of the three and the player can read it straight
+ * off the chart — the command view already reports what the enemy bought, so
+ * "they did less this turn because I took CASSEN 12 last run" is a sentence the
+ * screen can already almost say.
+ *
+ * `floor` exists because a budget of zero reads as a bug rather than as a
+ * broken invasion; one point still buys a consolidate.
+ */
+export const SUPPLY = {
+  floor: 1,
+} as const;
 
 const active = new Set<string>();
 
