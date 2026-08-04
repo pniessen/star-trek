@@ -44,7 +44,8 @@ the reasoning matters more than the conclusions.
 
 | Decision | Why |
 |---|---|
-| **The play space is a plane** | The overhead scanner is only trustworthy if the world is flat. In 3D the map has to lie about altitude and the player learns to distrust it. Planar means every contact is exactly where the scanner says, and the skill becomes rotational. |
+| ~~**The play space is a plane**~~ **— unlocked, see below** | *The original reasoning, kept:* the overhead scanner is only trustworthy if the world is flat. In 3D the map has to lie about altitude and the player learns to distrust it. Planar means every contact is exactly where the scanner says, and the skill becomes rotational. |
+| **The play space is a shallow slab, floored at `y = 0`** | What replaced it, with the owner's approval. One key: hold to rise, release to sink, so descent is not an input and the whole thing costs one binding — there were no fingers for a second held axis. Ceiling ~14 units against engagement ranges of 14–78. Climbing draws on the one energy pool and holding altitude keeps drawing on it. Hostiles use it too, at a per-class fraction. Behind a switch (`Y`), defaulting on. |
 | **Occluded geometry, not pure wireframe** | Pure wireframe is authentic and unreadable the moment two ships overlap — you cannot tell which is in front. Same glowing strokes over near-void opaque faces gives unambiguous depth and loses nothing of the look. |
 | **One energy pool** | Thrust, shields and weapons all draw from one reserve. Every burn is a shot you cannot take later; that tension is the combat design. |
 | **Four separate shield facings** | Turning a fresh quarter toward whatever is shooting is the defensive skill. Without it this is *Asteroids* with glow. |
@@ -54,6 +55,59 @@ the reasoning matters more than the conclusions.
 | **Vector, with a hybrid** | Not a literal 1982 XY monitor. Glowing stroked edges, opaque black faces, depth-faded lines — nostalgic in recipe, current in execution. |
 | **Web, no engine** | TypeScript, Vite, Three.js, WebGL2. Instant playability, shareable by link, and this look is cheap in WebGL because it is lines and post-processing rather than models and lightmaps. |
 | **Our own universe** | The genre is not protectable; the marks are. No LCARS, no delta, no familiar species. |
+
+### Why the plane was unlocked
+
+Recorded at length because a decision that changed is more useful with its
+history attached than without, and because this one was load-bearing for three
+years of reasoning in this document.
+
+**It carried two loads and neither survived scrutiny.**
+
+*The scanner.* "A 2D tube cannot honestly describe a 3D world" is simply not
+true and has not been since 1984: **Elite** drew a vertical stalk from every
+blip down to the plane, and Elite is in this project's own
+[prior-art.md](./prior-art.md). Height reads instantly — you draw a line under
+it. The *base* of the stalk is still exactly where the contact is, so nothing is
+misplaced and the promise this instrument was built on is kept intact. What the
+top of the stalk costs is that an elevated contact reads slightly further
+"ahead" than it is, which is the trade Elite took and the reason the stalk is
+drawn at all rather than the mark simply being moved.
+
+*The shield facings.* This one was never even at risk. `Ship.facingFrom`
+resolves a hit with `atan2(x, z)` and has never looked at `y` — **the four
+facings are a ring, not a sphere.** A shot from above at bearing 40° already hit
+the same quarter a level shot from 40° would. A cylinder is the correct model
+and it is precisely what lets four facings survive a third dimension without
+becoming six. Turning a fresh quarter toward the shooter is exactly the skill it
+was.
+
+**The objection that did land was the controls**, and it came from the owner.
+Left/right yaw, up/down throttle, `Space`, `X`, `C`, `Z`, `Shift`, `Tab`, `R` —
+both hands are full, and WASD has to stay identical to the arrows. A second held
+axis had no fingers available. So the design has no second axis: **one key, hold
+to rise, release to sink.** The plane became the floor rather than the middle,
+descent stopped being an input, and the binding count went from two to one.
+
+Three consequences follow and each is doing real work:
+
+- **Nothing ever goes below `y = 0`**, so every stalk on the scanner points the
+  same way and the tube reads as a bar chart rather than as a set of signed
+  offsets. Own ship gets a stalk at the centre, so "am I above that Raider" is a
+  comparison of two lengths sitting next to each other.
+- **The guns train in elevation; the hull does not.** There is no pitch input
+  and there is never going to be one, so a shot fired dead level could not reach
+  anything that was not at exactly the player's own height. Every aim test is
+  therefore a *bearing* — which is what the hostiles have always used, since
+  `aimError` in `hostiles.ts` is `atan2(x, z)`. This is why the slab has to be
+  shallow: a turret can only train so far.
+- **Altitude is not free.** It is drawn from the one energy pool for as long as
+  the key is held, ceiling included, and a starved reserve cannot hold you up at
+  all — run the pool dry and you sink back onto whatever you were flying over.
+
+What is still true, stated plainly: the scanner is still trustworthy, now
+because of the stalk rather than because of the flatness; and the facings are
+still four and still a ring.
 
 ---
 
@@ -114,6 +168,103 @@ scene → bloom → phosphor persistence → CRT glass → output encode → scr
   score odometer rolling, and a deliberate departure under thrust. An approach
   instrument shows lateral offset and speed so lining up is something you do.
   Waves keep coming while you are moored — you can turn and shoot, but not move.
+
+### Altitude — a third dimension, shallow
+
+The unlocked decision, built. `src/game/altitude.ts` holds every number and the
+switch; §2 holds the argument. What exists in the running game:
+
+- **One key.** `Q` held climbs at 9 units a second; released, the ship falls
+  back at 11. `Q` because it is free, because it sits directly above `A` for a
+  WASD flyer's little finger, and because an arrows flyer's left hand is already
+  parked one row down on `Z`/`X`/`C`. It is deliberately *not* remapped while the
+  chart is up, exactly as the arrows are not — pulling the chart up over a
+  minefield is precisely when you want to still be able to climb.
+- **A ceiling of 14 units**, drawn against `preferredRange` of 14–62 and
+  `PHASER.falloffEnd` of 78. Every one of those four numbers is a first-draft
+  guess of the same species as `Ship.TURN_ACCEL`.
+- **It costs the reserve**, at 0.055 a second against thrust's 0.035 at full
+  burn — so a full pool buys about eighteen seconds of being upstairs, and the
+  cost continues while you merely *hold* altitude, because a lid you can park
+  under for free is a lid everybody parks under.
+- **Hostiles use it too**, because a slab the player alone could reach would
+  make altitude a pure escape and probably strictly dominant. Each class gets a
+  fraction of the ceiling and a preferred altitude that drifts on its own slow
+  sine — 7 to 13 seconds a cycle, its own phase, so a wave arrives at assorted
+  heights rather than breathing in formation. It is explicitly *not* a 3D
+  pursuit brain: horizontal steering is untouched, every hostile still holds its
+  range and strafes exactly as it did, and none of them chase you upward.
+  Raider 0.9 — "comes from anywhere" is the whole brief of the class and
+  anywhere now includes above. Shroud 1.0 — it commits from nowhere and the full
+  slab is more nowhere. Lance 0.65 — it takes a perch, and at its 62-unit
+  station height barely changes the duel. Bastion 0.15 — the anvil stays on the
+  anvil, which also makes it the class you can reliably out-climb. Harrow 0.1 —
+  its ordnance goes on the floor and stays there.
+- **The scanner grew stalks**, and own ship grew one too. See "The scanner"
+  below.
+- **The tape.** A vertical ladder beside the shield cluster, mirroring the
+  `SHIELDS` label across the ship glyph: the whole slab, three ticks, a bar
+  where you are with a tail back down to the deck, and a number once there is
+  one worth reading. Vertical because this is the one quantity in the game whose
+  direction on screen can be the direction it means. It goes amber on exactly
+  one condition — a reserve too thin to hold you up — which is the same hue and
+  the same rule the energy gauge already uses.
+- **The floor keeps its furniture.** Mines, the docking corridor, the gate and
+  the starbase are all still at `y = 0`. Having to come down to bank is a
+  feature. The corridor enforced it for free — `inGate` is a 3D range against a
+  7-unit radius — but *silently*, so the approach panel now leads its status
+  ladder with `DESCEND TO PLANE`: a ship holding the centreline fourteen units
+  up reads as perfectly lined up on every needle and simply never captures,
+  which is indistinguishable from a bug.
+- **The minefield is what altitude is actually for**, and this needed no code at
+  all: the trigger and the blast are both `distanceTo`, which has always been
+  three-dimensional, so 6.5 units of height clears the trigger and 13 clears the
+  damage. A field you could no longer circle is a field you can now fly over,
+  paid for out of the reserve. It is the one place in the game where the trade
+  is unambiguous.
+- **Behind a switch.** `Y`, in `DISPLAY_KEYS` so it does not launch a run off
+  the title, defaulting on. With it off the ship, every hostile and every
+  projectile are pinned to `y = 0` structurally rather than arithmetically, the
+  altitude tape is not drawn, and the scanner's stalks fall below their
+  half-pixel threshold. Nobody has flown either version, which is why it is a
+  switch rather than a fact.
+
+Three things turned out to need nothing, which is the pleasing part of the
+change and is recorded so nobody re-derives it:
+
+- **Swept collision** (`sweepDistance` / `sweepHits`) is a point-to-segment
+  distance written in `Vector3` arithmetic and has been correct in three
+  dimensions since the day it replaced point sampling.
+- **The torpedo lead pip's intercept solve.** `|r + vt| = st` is a quadratic in
+  `t` written in `lengthSq` and `dot`; it has been solving the 3D intercept all
+  along and simply never saw a non-zero `y`. Exactly one line in that function
+  was planar — it flattened the *finished* answer onto the deck before
+  projecting it, so the mark would have sat under the ship it belonged to.
+- **Hostile fire.** The lead is a plain vector subtraction, so a climbing player
+  is led upward without a line changing; and `aimError` was already a bearing,
+  so hostiles have been training their guns in elevation since before there was
+  any elevation to train them in. The player's weapons now copy that precedent
+  rather than inventing one.
+
+Two things did change under combat and both are design decisions rather than
+plumbing. The **phaser's assist cone is measured in bearing** — the beam still
+runs to the hull's true position and the falloff is still charged on the true
+range, so height costs a distant target damage; what it does not cost is the
+ability to point at it at all, which no amount of turning could have bought back
+on a ship that cannot pitch. And **the torpedo tube elevates**, onto the nearest
+hull within a generous 0.7-radian bearing window, taking only that hull's
+elevation and passing the player's bearing through untouched. Leading the shot
+is still entirely the player's, which is the whole of what distinguishes a
+torpedo from a phaser; what the ship does for them is the one axis they cannot
+fly. Point at where a crossing Raider *is* and the torpedo still sails behind
+it, exactly as it always did.
+
+The demo pilot stays on the floor. It has no `climb` and nothing asks for one on
+its behalf: a demo that climbed would need a *reason* to, and a wrong reason
+reads as a ship wandering vertically for no cause, which is worse than one that
+never does. The hostiles are using the slab around it either way, so the
+demonstration still shows a sector with height in it — what it does not show is
+the key, and that is an honest gap rather than a hidden one.
 
 ### Feel
 
@@ -262,8 +413,27 @@ identifiable as that before the first note.
 ### The scanner
 
 Heading-up, contacts glyphed by class, off-range contacts pinned to the rim.
-This is the reason the play space is planar, so it is not optional dressing —
-it is half the interface, exactly as it was on the 1982 cabinet.
+This used to be *the* reason the play space was planar; it is not any more, and
+it did not have to be. It is still half the interface, exactly as it was on the
+1982 cabinet.
+
+**Height is a stalk.** Every mark that can leave the floor is lifted off its
+true position and a line is drawn back down to it, with a two-pixel foot on the
+deck so the base reads as a position rather than as the end of a line. Read the
+base for where, the length for how high. Own ship gets one at the centre, which
+is half the answer to "how does the player read their own altitude" — the half
+that works in a fight, because it is in the instrument the eyes are already on
+and because it is *comparative*. Three details are deliberate. The lift is
+measured from the **floor**, not from the player, so every stalk points the same
+way and the tube reads as a bar chart; that is worth more than the symmetry a
+signed measure would buy. The vertical scale is 1.4 px per unit against the
+horizontal's 0.69 — at true scale the whole slab would be ten pixels and a
+Raider at the ceiling would be indistinguishable from one on the deck. And
+**unresolved returns get no stalk at all**: a return the tube could not resolve
+into a contact could not have resolved its height either, and inventing one
+would be the first lie this instrument has ever told. The Shroud uses the whole
+slab, so which way it is coming from vertically is genuinely unknown until it
+materialises, which is the class working as designed rather than a gap.
 
 It is now an instrument rather than a readout, in two tiers. Anything with a
 hull you could shoot is still drawn at its true position — a planar world is
@@ -481,14 +651,14 @@ not need a smaller number, it needs a feedback term it currently has none of.
 That is a design decision for a human, not a constant to nudge, and no
 constant was changed on the strength of this measurement.
 
-`tools/playtest.mjs` is unchanged at 34 assertions. The lifecycle it drives
-did change — see §7's note on the command view — so it wants re-running
-before this is merged.
+`tools/playtest.mjs` is at 47 assertions and green — see "Verification" below.
+Nothing in the slab touches `src/chart/`, so `campaigntest` (135) and
+`audiotest` (73) are untouched and green too.
 
 ### Verification
 
 `tools/playtest.mjs` drives a whole run headlessly and has grown, feature by
-feature, to thirty-four assertions: waves spawn and escalate, phasers draw
+feature, to forty-seven assertions: waves spawn and escalate, phasers draw
 energy and torpedoes deplete, kills bank salvage and climb the multiplier,
 docking banks and resupplies and resets, hit-stop dilates time and always lets
 go, death breaks the player up and reaches the tally, restart is clean, the
@@ -497,6 +667,19 @@ the chart, covered in §3 above — hyperwarp charges, locks weapons, and costs
 what it should, the overlay itself raises and steps the cursor without
 walking it off the grid, WASD hands off between the ship and the cursor
 correctly, and a committed fleet move can be intercepted.
+
+The nine added with the slab are written so each would fail outright if the
+feature were absent, which for a toggleable mechanic takes a little care.
+Holding the key gains altitude and stops at the ceiling rather than continuing.
+The reserve pays for it — checked against a known 0.9 with the facings full and
+nothing being fired, because passive regeneration would otherwise push that
+number *up*, so a missing drain cannot pass. Releasing returns the ship to the
+floor, checked promptly, before the drain can starve the reserve: a starved ship
+sinks on its own and a check taken later would pass whether or not releasing
+does anything. A hostile leaves the floor. And `Y` flips the switch, after which
+holding the key does nothing to the player *or* to the fleet — the hostile count
+is asserted alongside the height, since a max over an empty list is zero and an
+empty sector would otherwise satisfy it.
 
 **The harness now has to launch its own run.** A fresh load lands on the title
 screen and nothing spawns behind it, so the first assertion needs a keypress —
@@ -576,8 +759,12 @@ takes longer than the run, the layer has failed and we cut it back.
 
 ## 6. What is deliberately not built
 
-- **Mouse aim.** Aiming is currently the nose, which is the Sega model and
-  correct for a planar game. Mouse aim is worth testing but may make it too easy.
+- **Mouse aim.** Aiming is the nose, which is the Sega model. It is now more
+  load-bearing than it was: with a slab overhead, "point the hull" is the only
+  aiming the player does at all, since the guns train in elevation on their own.
+  Mouse aim is still worth testing and is now a bigger change than it looked.
+- **A pitch input.** Never. The controls are the reason the plane survived as
+  long as it did, and one held key is the whole of what the slab could afford.
 - **Leaderboards, and run-level persistence.** `localStorage` and a seeded RNG
   now exist for the campaign (§3, "The chart") but nothing analogous covers a
   run or a high-score table; no backend, no accounts. The title screen shows
@@ -670,6 +857,19 @@ Three open questions from this section and from `strategy-layer.md`'s own
 
 ### Open questions
 
+- **Does the slab earn its key?** `ALTITUDE.ceiling = 14`, `climbRate = 9`,
+  `fallRate = 11`, `drain = 0.055`, the five per-class `slab` fractions,
+  `SCANNER.altitudeScale = 1.4` and `TUBE_WINDOW = 0.7` are all first-draft
+  guesses and nobody has flown any of them. `Y` toggles the whole mechanic, so
+  the A/B is free. The two questions no constant answers: does one key with no
+  descent read as *flying*, and does the guns' automatic elevation feel like the
+  ship helping or like the ship aiming? See §3, "Altitude", and
+  [todo.md](todo.md) §2.
+- **Should the demo pilot use the slab?** It does not, and the demonstration
+  therefore never shows the key. Giving it a reason to climb — over a field, off
+  a Bastion — is a small piece of work; giving it a *wrong* reason reads as a
+  ship wandering vertically for no cause. Deferred until a human has flown it
+  and knows what the right reason is.
 - Is mouse aim an improvement or does it remove the reason to turn the ship?
 - **Is the jump's distance curve right?** `JUMP.baseCharge = 1.4` and
   `JUMP.perStep = 0.35` are first-draft guesses and they change combat: a hop
