@@ -25,7 +25,10 @@ npm run campaignlength # simulates thousands of campaigns, reports the length di
 ```
 
 A fresh load lands on the title; any key that is not a display toggle launches a
-run, and an idle cabinet falls through to an attract demo and back.
+run, and an idle cabinet falls through to an attract demo and back. The first
+run of a new war opens on the **deck log** — a scrolling briefing built from the
+board it describes, which any key skips. It never plays for the demo and never
+twice for the same war.
 
 Controls: arrows/WASD fly, Space phasers, X torpedoes, `C` cracks a warhead for
 its charge when the reserve is under half, R restart. `G` toggles
@@ -136,8 +139,8 @@ debris that is the ship's own edge segments), a persistent minefield, the
 overhead scanner with sweep-painted unresolved returns, a full docking
 sequence — corridor, tractor capture, staged resupply, itemised tally,
 deliberate departure — hit-stop on impact, a staged death sequence, the
-arcade shell of title screen and attract demo, synthesised audio across all of
-it, and the whole strategy layer: campaign state and mutators, the enemy turn
+arcade shell of title screen, attract demo and deck log, synthesised audio
+across all of it, and the whole strategy layer: campaign state and mutators, the enemy turn
 (pressure budget, committed moves, interception), persistence, the in-run
 tactical overlay, hyperwarp, and the command view — build, refit, deploy,
 front, with the run-to-run loop closed through docking (which credits salvage)
