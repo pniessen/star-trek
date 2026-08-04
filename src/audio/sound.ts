@@ -7,14 +7,15 @@ import { Synth, type Bed } from "./Synth.js";
  * the picture already follows.
  *
  * **Colour is information.** The palette gives each class a hue and never
- * spends one on decoration; the same discipline applies here to timbre and to
- * direction. Yours are clean — triangle and sine, bright, centred, because you
- * are always at the middle of the tube. Theirs are dirty — sawtooth and square,
- * lower, and placed in the stereo field by where they actually are, so a bolt
- * fired from your port quarter arrives on your left. The Shroud gets the one
- * timbre nothing else uses: two detuned oscillators beating against each other,
- * which is what "unresolved" sounds like, exactly as magenta is what it looks
- * like.
+ * spends one on decoration; the same discipline applies here to band and to
+ * direction. Yours are high and centred, because you are always at the middle
+ * of the tube; theirs are low and placed in the stereo field by where they
+ * actually are, so a bolt fired from your port quarter arrives on your left.
+ * Timbre follows from that rather than leading it — the panel and the Warden
+ * speak in triangles and sines because they are talking to you, and the guns
+ * on both sides are harsh because a gun is. The Shroud gets the one timbre
+ * nothing else uses: two detuned oscillators beating against each other, which
+ * is what "unresolved" sounds like, exactly as magenta is what it looks like.
  *
  * **The sound is where the event is.** Distance attenuates and bearing pans,
  * from one listener updated once a frame. That is not atmosphere — it is the
@@ -49,6 +50,39 @@ const PAN_WIDTH = 0.8;
 const ARPEGGIO = [0, 4, 7, 12, 16, 19, 24];
 /** The four service stages, as a plain rising figure. */
 const SERVICE_NOTES = [523.25, 659.25, 783.99, 987.77];
+
+/**
+ * The one level the alert ever uses, in any condition, at any urgency.
+ *
+ * This is the CHI 2024 contract made literal: escalation is spectral, so there
+ * is a single number here and nothing is allowed to scale it. It is the figure
+ * the old yellow beat used, because a bare fundamental is what the new beat is
+ * at its plainest — red's louder figure only ever existed to buy urgency, and
+ * urgency now comes from `AlertPulse.components`.
+ */
+const ALERT_LEVEL = 0.075;
+/**
+ * A minor second above the fundamental. Below 500 Hz one critical band is about
+ * 100 Hz wide, so at the alert's register a semitone is comfortably inside it —
+ * this is genuine roughness rather than the cultural kind.
+ */
+const ALERT_SECOND = 1.06;
+/**
+ * The top tier, written as sidebands rather than as a modulator. Amplitude
+ * modulation of a carrier at `rate` *is* a pair of partials at ±rate, so this
+ * needs no new voice type and stays inside the two-voice vocabulary. 40 Hz is
+ * where Arnal's 2019 follow-up puts peak aversion; the depth is a guess between
+ * "15% is tense" and "100% is a klaxon nobody tolerates for ten seconds".
+ */
+const ALERT_AM_RATE = 40;
+const ALERT_AM_DEPTH = 0.35;
+/**
+ * Patterson: flight-deck warnings that went from off to full in under 10 ms
+ * triggered a startle reflex, and startled responses "often prove incorrect".
+ * A warning that makes the player flinch makes them fly worse, which is not
+ * the same thing as making them nervous.
+ */
+const ALERT_RISE = 0.02;
 
 function clamp(value: number, low: number, high: number): number {
   return value < low ? low : value > high ? high : value;
@@ -135,35 +169,55 @@ export class Sound {
   // ── weapons ──────────────────────────────────────────────────────────────
 
   /**
-   * The hardest mixing problem in the game: 0.16s between shots, held down for
-   * whole waves at a time. Kept short, kept quiet, kept on its own bus, and
-   * alternated in pitch. The hit is the same shot with a spark on the end —
-   * hitting has to be audible without being a second sound to get tired of.
+   * A zap, built to sfxr's Laser/Shoot recipe, which is the closest thing this
+   * medium has to a written spec for the sound.
+   *
+   * Four things make it a zap rather than a beep, and only one of them is the
+   * pitch. Zero attack. An **exponential** downsweep of a octave and a half.
+   * A floor it reaches and **stops dead at**, because the hard stop is the
+   * whole difference between a zap and a fade. And no noise layer at all —
+   * the folk recipe is "falling tone plus noise burst" and the actual preset
+   * has none, because grit in a laser is the waveform's own harmonics and
+   * anything else just fills the band the alert pulse needs.
+   *
+   * The 0.16 s cooldown is still the constraint that binds, and this answers it
+   * better than the sound it replaces: 60 ms total against a 160 ms repeat, so
+   * two shots can never overlap or accumulate, and one voice per shot instead
+   * of two. Alternating pitches is `EOR #$14` from the Asteroids ROM, lifted
+   * straight; the small jitter on top is there because held fire at 6.25 Hz is
+   * the one place a perfectly identical repeat stops reading as an event.
+   *
+   * @param hit   something took damage; the return down the beam says so.
+   * @param reach fraction of full damage delivered, so the falloff rule the
+   *              player cannot see is a thing they can hear. A shot at the far
+   *              edge barely glides and cuts off early; point blank runs the
+   *              full sweep down to the band limit.
    */
-  phaser(hit: boolean): void {
+  phaser(hit: boolean, reach = 1): void {
     this.phaserFlip ^= 1;
-    const base = this.phaserFlip ? 1240 : 1120;
+    // A minor third apart. Wide enough to read as a machine cycling, narrow
+    // enough that it never reads as two different weapons.
+    const base = (this.phaserFlip ? 1900 : 2260) * (0.98 + Math.random() * 0.04);
+    const landed = clamp(reach, 0, 1);
     this.synth.play({
       bus: "weapon",
-      wave: "triangle",
+      wave: "square",
       freq: base,
-      to: base * 0.42,
+      // The floor, and the floor is a hard rule rather than a consequence: the
+      // reason phasers are allowed to be this frequent is that they never touch
+      // the bass, where the alert pulse and the torpedo live.
+      to: Math.max(700, base * (0.9 - 0.56 * landed)),
       level: 0.15,
-      attack: 0.002,
-      decay: 0.07,
-    });
-    this.synth.play({
-      kind: "noise",
-      bus: "weapon",
-      filter: "bandpass",
-      q: 6,
-      freq: 2700,
-      to: 1500,
-      level: 0.05,
       attack: 0.001,
-      decay: 0.05,
+      // Runs flat and then stops. The 12 ms is not a decay anyone hears as one;
+      // it is the shortest ramp that ends a tone without a click.
+      hold: 0.018 + 0.027 * landed,
+      decay: 0.012,
     });
     if (hit) {
+      // Something came back down the beam. A separate transient rather than a
+      // louder shot: the CHI 2024 finding is that differentiating outcomes is
+      // what earns its place and amplifying them is what costs.
       this.synth.play({
         kind: "noise",
         bus: "weapon",
@@ -171,33 +225,91 @@ export class Sound {
         freq: 1900,
         level: 0.07,
         attack: 0.001,
-        decay: 0.09,
-        delay: 0.02,
+        decay: 0.06,
+        delay: 0.018,
       });
     }
   }
 
-  /** Heavy and downward, where the phaser is light and short. */
-  torpedo(): void {
+  /**
+   * A rifle shell, where the phaser is a zap — opposed on every axis the
+   * weapons themselves are opposed on. The phaser is instant, thin, pitched and
+   * high; this is slow, broadband, percussive and low, and almost all of it
+   * happens in the first ten milliseconds.
+   *
+   * Four layers fired on the same instant, which is §5's explosion stack with
+   * the proportions of a report rather than a detonation: the punch, which is
+   * sfxr's 1.8× on the first fifteen milliseconds and is the difference between
+   * a crack and a whoosh; the crack itself, a highpass sweeping down through
+   * the presence band; the body, a sine falling into the sub; and a short tail
+   * that is the report leaving. Nothing here is a sample — a rifle crack out of
+   * swept noise is the interesting half of the problem.
+   *
+   * This is the cue that most wanted the compressor gone. A crack is a peak,
+   * not a loudness, and six milliseconds of lookahead is six milliseconds of
+   * the only part of it that carries information.
+   *
+   * @param last the rack going empty, which is worth knowing without looking.
+   */
+  torpedo(last = false): void {
+    // The punch. Ten milliseconds, and the loudest thing in the cue.
+    this.synth.play({
+      kind: "noise",
+      bus: "weapon",
+      filter: "highpass",
+      freq: 3000,
+      level: 0.3,
+      attack: 0.0005,
+      decay: 0.012,
+    });
+    // The crack, falling out of the presence band into the body.
+    this.synth.play({
+      kind: "noise",
+      bus: "weapon",
+      filter: "highpass",
+      freq: 1700,
+      to: 480,
+      level: 0.26,
+      attack: 0.001,
+      decay: 0.055,
+    });
+    // The body. Under 120 Hz within a tenth of a second, which is the band
+    // reserved for the alert, the torpedoes, the mines and the death.
     this.synth.play({
       bus: "weapon",
       wave: "sine",
-      freq: 190,
-      to: 62,
+      freq: 160,
+      to: 46,
       level: 0.24,
-      attack: 0.005,
-      decay: 0.34,
+      attack: 0.002,
+      decay: 0.2,
     });
+    // The report leaving. Short, because there is no room out here for it to
+    // leave into and a long tail would read as an explosion instead.
     this.synth.play({
       kind: "noise",
       bus: "weapon",
       filter: "lowpass",
-      q: 1.2,
-      freq: 1300,
-      to: 220,
-      level: 0.17,
-      attack: 0.004,
-      decay: 0.3,
+      q: 0.8,
+      freq: 620,
+      to: 150,
+      level: 0.1,
+      attack: 0.02,
+      decay: 0.26,
+    });
+    if (!last) return;
+    // Twelve of these exist and the twelfth should say so. A dry mechanical
+    // tick behind the report — the rack finding nothing to load.
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "bandpass",
+      q: 18,
+      freq: 2600,
+      level: 0.06,
+      attack: 0.001,
+      decay: 0.03,
+      delay: 0.13,
     });
   }
 
@@ -596,30 +708,52 @@ export class Sound {
    * and only ever shortened the silence between beats; at its very worst the
    * duty cycle was about a third. This is that, with the pitch axis Alien:
    * Isolation's tracker added.
+   *
+   * And with the level nailed down. Everything urgency does here it does by
+   * adding partials: the minor second at the first threshold, the modulation
+   * sidebands at the second. Nothing scales `ALERT_LEVEL`, in either
+   * direction — de-escalation takes components away rather than turning down.
+   *
+   * @param components 1, 2 or 4; see `AlertPulse.components`.
    */
-  alertBeat(frequency: number, red: boolean): void {
+  alertBeat(frequency: number, components: number): void {
+    // One shape for every partial, so they fuse into a single beat with a
+    // timbre rather than reading as a chord of separate notes.
+    const shape = { attack: ALERT_RISE, hold: 0.045, decay: 0.07 };
+
     this.synth.play({
       bus: "panel",
-      wave: red ? "sawtooth" : "triangle",
+      // The waveform follows the tier for the same reason the partials do: a
+      // plain beat should be plain all the way down.
+      wave: components > 1 ? "sawtooth" : "triangle",
       freq: frequency,
-      level: red ? 0.115 : 0.075,
-      attack: 0.006,
-      hold: 0.045,
-      decay: 0.07,
+      level: ALERT_LEVEL,
+      ...shape,
     });
-    if (!red) return;
-    // A second partial a minor second up, only at red. Genuine critical-band
-    // roughness rather than a volume increase — the CHI 2024 result is that
-    // amplification alone hurts, so urgency is bought with dissonance.
+    if (components < 2) return;
+
     this.synth.play({
       bus: "panel",
       wave: "sawtooth",
-      freq: frequency * 1.06,
-      level: 0.055,
-      attack: 0.006,
-      hold: 0.045,
-      decay: 0.07,
+      freq: frequency * ALERT_SECOND,
+      level: ALERT_LEVEL * 0.73,
+      ...shape,
     });
+    if (components < 4) return;
+
+    // The sidebands. Sines, because the roughness wanted here is between these
+    // and the fundamental, not inside them. Phase drifts between voices where
+    // a real modulator would hold it, which moves where in the beat the
+    // beating starts but not how fast it beats.
+    for (const offset of [-ALERT_AM_RATE, ALERT_AM_RATE]) {
+      this.synth.play({
+        bus: "panel",
+        wave: "sine",
+        freq: Math.max(30, frequency + offset),
+        level: ALERT_LEVEL * ALERT_AM_DEPTH * 0.5,
+        ...shape,
+      });
+    }
   }
 
   /**
@@ -629,15 +763,29 @@ export class Sound {
    * Our own cadence deliberately: alert conditions are naval usage that long
    * predates any television programme, but the specific sound anyone would
    * recognise belongs to that programme, and "our own universe" is locked.
+   *
+   * Red and yellow are told apart by **rhythm**, which is Patterson's confusion
+   * finding: warnings that share a pulse-repetition rate get mistaken for one
+   * another even when their spectra are grossly different. So red is three
+   * pulses closing up and yellow is two spaced out, and they sit at the same
+   * level — red used to be simply louder, which is the move CHI 2024 measured
+   * as actively costing perceived competence.
    */
   conditionChange(red: boolean): void {
     const base = red ? 320 : 240;
-    // Two sweeps up, the second higher and later — a whoop is a shape, not a
-    // pitch, and two of them read as an alarm rather than as an event.
-    for (const [mul, delay, level] of [
-      [1, 0, red ? 0.13 : 0.085],
-      [1.34, 0.19, red ? 0.11 : 0.07],
-    ]) {
+    // Rising within the burst, never falling: Patterson's startle-avoidance
+    // rule is that the first pulse is the quietest one.
+    const burst = red
+      ? [
+          [1, 0, 0.07],
+          [1.19, 0.14, 0.078],
+          [1.34, 0.25, 0.085],
+        ]
+      : [
+          [1, 0, 0.07],
+          [1.34, 0.19, 0.085],
+        ];
+    for (const [mul, delay, level] of burst) {
       this.synth.play({
         bus: "panel",
         wave: red ? "sawtooth" : "triangle",

@@ -317,7 +317,7 @@ export class Session {
     // Real seconds: an alarm that slows down because the game dilated for a
     // hit-stop is an alarm that lies about how fast things are happening.
     if (this.alert.update(realDt, this.condition, Math.min(1, this.threat / 1100))) {
-      sound.alertBeat(this.alert.frequency, this.condition === "red");
+      sound.alertBeat(this.alert.frequency, this.alert.components);
     }
 
     this.handleReinforce(dt, player, input);
@@ -524,15 +524,21 @@ export class Session {
       // you the shots you would rather have spent on the thing shooting back.
       const mine = this.mines.aim(player.position, forward, PHASER.aimCone, shotRange);
       let landed = false;
+      // Fraction of full damage delivered, so the falloff rule is audible
+      // rather than merely invisible. A shot into empty space keeps the full
+      // figure: there was nothing out there for the range to eat.
+      let reach = 1;
       if (mine && (!best || mine.distance < best.distance)) {
         this.ordnance.discharge(this.nose, mine.mine.position, true);
         const damage = phaserDamageAt(mine.distance, fit);
         landed = damage > 0;
+        reach = damage / PHASER.damage;
         if (landed && this.mines.strike(mine.mine, damage)) this.pending += MINE.value * this.salvageScale;
       } else if (best) {
         const damage = phaserDamageAt(best.distance, fit);
         this.ordnance.discharge(this.nose, best.hostile.position, true);
         landed = damage > 0;
+        reach = damage / PHASER.damage;
         if (landed && best.hostile.damage(damage)) {
           this.destroy(best.hostile, player);
         }
@@ -545,14 +551,14 @@ export class Session {
       }
       // Connecting is a spark on the end of the same shot rather than a second
       // sound: at 6.25 shots a second, two distinct sounds is one too many.
-      sound.phaser(landed);
+      sound.phaser(landed, reach);
     }
 
     if (input.fireTorpedo && player.torpedoCooldown <= 0 && player.torpedoes > 0) {
       player.torpedoCooldown = TORPEDO.cooldown;
       player.torpedoes--;
       this.ordnance.fire(this.nose, forward, "torpedo", true, player.velocity);
-      sound.torpedo();
+      sound.torpedo(player.torpedoes === 0);
     } else if (input.scram && player.torpedoCooldown <= 0 && player.torpedoes > 0) {
       // Refused above the ceiling, so this cannot become a routine top-up
       // between waves — it is the thing you do when the reserve is gone and

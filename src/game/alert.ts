@@ -11,6 +11,18 @@ import type { Fleet } from "./hostiles.js";
  */
 export type Condition = "green" | "yellow" | "red";
 
+/**
+ * The two points on the drive curve where the beat gains spectral content.
+ *
+ * `audio-prior-art.md` §6.3 asks for exactly two thresholds and gives numbers
+ * for neither, so these are first-draft guesses of the same species as
+ * `FULL_THREAT` and the flight model's constants: chosen so that all of yellow
+ * and all of a wearied red sit plain, an ordinary red roughens, and only a red
+ * with most of a wave still alive reaches the top tier. They want an ear.
+ */
+const ROUGHEN = 0.5;
+const SIDEBANDS = 0.8;
+
 export const CONDITION = {
   /** A facing this thin is a hole, and a hole is a red condition on its own. */
   thinShield: 0.2,
@@ -56,6 +68,14 @@ export function conditionOf(player: Ship, fleet: Fleet): Condition {
  * To that it adds the one thing Asteroids lacks, because an Asteroids wave does
  * not last ten minutes: Patterson's decay. Hold a condition unchanged and the
  * alarm backs off, returning to full urgency only when something changes.
+ *
+ * Patterson's own de-escalation is "drop pitch, level and speed", and the CHI
+ * 2024 result (n=1,699) is that dropping *level* is the one axis that costs us:
+ * raw amplification measurably hurt perceived competence, and differentiation
+ * is what earns its place. The two reconcile on a third axis. Urgency here is
+ * bought and sold entirely in **spectral content** — `components` below — and
+ * the level of the beat never moves in either direction. A weary alarm is not
+ * a quieter alarm, it is a plainer one.
  */
 export class AlertPulse {
   /** Toggles every beat, so consecutive pulses differ in pitch. */
@@ -68,11 +88,18 @@ export class AlertPulse {
   sounding = 0;
   /** The pitch of the beat currently sounding. */
   frequency = 0;
+  /**
+   * How many spectral components the beat carries: 1 plain, 2 with the minor
+   * second, 4 with the modulation sidebands as well. This is the urgency axis
+   * in its entirety — the cue's level is a constant.
+   */
+  components = 1;
 
   reset(): void {
     this.timer = 0;
     this.held = 0;
     this.sounding = 0;
+    this.components = 1;
   }
 
   /**
@@ -115,6 +142,11 @@ export class AlertPulse {
     // first-party. Two teams thirty-five years apart, one of them with both.
     const base = (condition === "red" ? 96 : 64) + drive * 34;
     this.frequency = this.high ? base * 1.19 : base;
+    // And the third axis. Note that `weary` halves `drive`, so Patterson's
+    // step-down falls out of the same two thresholds: an alarm nobody has
+    // answered for eight seconds loses its partials before it loses anything
+    // else, and gets them back the moment the situation changes.
+    this.components = drive >= SIDEBANDS ? 4 : drive >= ROUGHEN ? 2 : 1;
     return true;
   }
 }
