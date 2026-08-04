@@ -12,9 +12,12 @@ import type { Ship } from "../game/Ship.js";
  * Two tiers, and the split is deliberate:
  *
  *  - **Resolved contacts** — anything with a hull you could shoot — are still
- *    drawn at their true position. The locked decision is that a planar world
- *    makes the scanner trustworthy, and a scanner that misplaces a Bastion
- *    breaks that for no gain. What degrades instead is *brightness*: a contact
+ *    drawn at their true position — on the deck by the base of the stalk, and
+ *    off it by the stalk's height. The old argument was that the tube is only
+ *    trustworthy if the world is flat; the actual requirement was that it never
+ *    misplace a Bastion, and Elite showed in 1984 that a stalk keeps that
+ *    promise over a world with height in it. What degrades instead is
+ *    *brightness*, exactly as before: a contact
  *    dims between sweeps and flares as the arm repaints it. You lose confidence
  *    over time, never accuracy.
  *
@@ -23,6 +26,11 @@ import type { Ship } from "../game/Ship.js";
  *    is drawn as the circle it actually is, and the offset is always smaller
  *    than the circle, so the true contact is genuinely somewhere inside the
  *    mark. The scanner admits what it does not know rather than lying about it.
+ *    They carry no altitude and get no stalk, for the same reason: a return the
+ *    tube could not resolve into a contact could not have resolved its height
+ *    either, and inventing one would be the first lie this instrument has told.
+ *    The Shroud uses the whole slab, so which way it is coming from vertically
+ *    is genuinely unknown until it materialises — the class working as designed.
  *
  * The consequence is the thing worth having: three returns in a row, each ring
  * tighter than the last, is a Shroud closing on you, and reading that before it
@@ -48,6 +56,22 @@ export const SCANNER = {
   errorNear: 5,
   /** How faint a resolved contact gets just before the arm comes back round. */
   faintest: 0.5,
+  /**
+   * Pixels of stalk per world unit of altitude. Elite's answer, 1984: a top-down
+   * tube cannot show height as a direction, so it shows it as a stalk — the mark
+   * lifts off the deck and a line is drawn under it back down to where the
+   * contact actually is. The *base* of the stalk is the truth and the tube stays
+   * exactly as honest as it was; what the top of it costs is that an elevated
+   * contact reads a little further "ahead" than it is, which is the trade Elite
+   * took and the reason the stalk is drawn at all rather than the mark simply
+   * being moved.
+   *
+   * Deliberately not the horizontal scale, which is 0.69 px per unit: at true
+   * scale the whole fourteen-unit slab would be ten pixels and a Raider at the
+   * ceiling would be indistinguishable from one on the deck. Another guess for
+   * the tuning list.
+   */
+  altitudeScale: 1.4,
   /** A return this fresh lights the annunciator. */
   alertAge: 1.8,
 } as const;

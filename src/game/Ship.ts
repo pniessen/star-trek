@@ -1,10 +1,16 @@
 import { MathUtils, Vector3 } from "three";
 import { NO_REFITS, type Loadout } from "../chart/economy.js";
+import { ALTITUDE, flight } from "./altitude.js";
 import { TORPEDO } from "./weapons.js";
 
 export interface ShipInput {
   turn: number; // -1 left … +1 right
   thrust: number; // -1 reverse … +1 forward
+  /**
+   * The one altitude key, held. There is deliberately no matching "descend":
+   * the floor is where you end up when you stop asking. See `altitude.ts`.
+   */
+  climb?: boolean;
   /** Moored: the ship may turn but cannot translate. */
   held?: boolean;
 }
@@ -13,13 +19,18 @@ export type ShieldFacing = "fore" | "starboard" | "aft" | "port";
 export const FACINGS: readonly ShieldFacing[] = ["fore", "starboard", "aft", "port"];
 
 /**
- * Flight on a plane, Asteroids-style: you rotate, you thrust along your facing,
- * and momentum carries you. Not because 1979 did it, but because the scanner
- * has to be trustworthy — on a flat sheet every contact is exactly where the
- * map says it is, and the skill becomes rotational.
+ * Flight on a floor, Asteroids-style: you rotate, you thrust along your facing,
+ * and momentum carries you. The skill is still rotational — there is no pitch
+ * input and there never will be, because both hands are already full.
  *
- * One energy pool feeds thrust, shields and weapons. Every burn is a shot you
- * cannot take later; that tension is the whole combat design.
+ * What there is, is one held key that lifts the ship off the floor into a
+ * shallow slab and one that puts it back: the same one, let go. See
+ * `altitude.ts` for why the plane was unlocked and what replaced it. Everything
+ * else here is unchanged, including `facingFrom` — the four shields are a ring
+ * and were always a ring.
+ *
+ * One energy pool feeds thrust, shields, weapons and now height. Every burn is a
+ * shot you cannot take later; that tension is the whole combat design.
  */
 export class Ship {
   readonly position = new Vector3();
@@ -62,6 +73,19 @@ export class Ship {
 
   /** Roll into turns — pure yaw on a plane reads as a sliding cursor. */
   bank = 0;
+
+  /**
+   * Nose attitude, radians, positive climbing. Cosmetic in exactly the way
+   * `bank` is: the hull does not fly on its nose — there is no pitch input and
+   * the guns train in elevation on their own — but a ship that gains fourteen
+   * units of height while holding a perfectly level attitude reads as an
+   * elevator rather than as a ship.
+   */
+  pitch = 0;
+  /** Units per second of climb or fall this frame. Drives `pitch` and the tape. */
+  verticalRate = 0;
+  /** True while the key is held *and* the reserve can still pay for it. */
+  climbing = false;
 
   private static readonly TURN_ACCEL = 5.4;
   private static readonly TURN_DAMP = 3.6;
@@ -122,7 +146,7 @@ export class Ship {
     } else {
       this.position.addScaledVector(this.velocity, dt);
     }
-    this.position.y = 0;
+    this.updateAltitude(input, dt);
 
     this.phaserCooldown = Math.max(0, this.phaserCooldown - dt);
     this.torpedoCooldown = Math.max(0, this.torpedoCooldown - dt);
@@ -137,6 +161,14 @@ export class Ship {
     // strand you again by a longer route.
     if (!this.starved) {
       this.energy -= (Math.abs(thrust) * Ship.THRUST_DRAIN * dt) / fit.energyReserve;
+    }
+    // Altitude is paid for out of the same pool as everything else, scaled by
+    // the reserve the same way thrust is — a capacitor bank buys height as well
+    // as shots. Charged for as long as the key is held, not only while the
+    // number is going up: the ceiling is somewhere you hold, not somewhere you
+    // arrive.
+    if (this.climbing) {
+      this.energy -= (ALTITUDE.drain * dt) / fit.energyReserve;
     }
     let regen = Ship.RESERVE_REGEN * dt;
 
@@ -154,6 +186,48 @@ export class Ship {
     }
 
     this.energy = MathUtils.clamp(this.energy + regen, 0, 1);
+  }
+
+  /**
+   * The slab, and the one key that reaches it.
+   *
+   * Two rules do all the work. Nothing goes below the floor, so the scanner's
+   * stalks only ever point one way. And a starved reserve cannot hold you up —
+   * the same shape as the impulse rule above, and legible for the same reason:
+   * running the pool dry costs you the fight, and now it costs you the height
+   * too. You sink back onto whatever you were flying over.
+   *
+   * Moored is not a state that can climb. `held` means the clamps have you, and
+   * the docking sequence owns `y` for the whole of it.
+   */
+  private updateAltitude(input: ShipInput, dt: number): void {
+    if (!flight.threeD) {
+      this.position.y = 0;
+      this.verticalRate = 0;
+      this.climbing = false;
+      this.pitch = 0;
+      return;
+    }
+
+    this.climbing = Boolean(input.climb) && !this.starved && !input.held;
+    const before = this.position.y;
+    if (!input.held) {
+      const target = this.climbing ? ALTITUDE.ceiling : 0;
+      const step = (this.climbing ? ALTITUDE.climbRate : ALTITUDE.fallRate) * dt;
+      this.position.y =
+        target > before ? Math.min(target, before + step) : Math.max(target, before - step);
+    }
+    this.verticalRate = (this.position.y - before) / Math.max(dt, 1e-6);
+
+    // Same treatment `bank` gets: a transient lean toward what the ship is
+    // actually doing, eased so a tap does not snap the hull.
+    const target = MathUtils.clamp(this.verticalRate / ALTITUDE.climbRate, -1, 1) * 0.22;
+    this.pitch += (target - this.pitch) * Math.min(1, dt * 6);
+  }
+
+  /** Height above the floor. Zero is the plane everything else still lives on. */
+  get altitude(): number {
+    return this.position.y;
   }
 
   forward(out = new Vector3()): Vector3 {
@@ -209,6 +283,9 @@ export class Ship {
     this.heading = 0;
     this.angularVelocity = 0;
     this.bank = 0;
+    this.pitch = 0;
+    this.verticalRate = 0;
+    this.climbing = false;
     this.energy = 1;
     this.hull = 1;
     this.torpedoes = this.torpedoCapacity;
@@ -217,7 +294,17 @@ export class Ship {
     for (const facing of FACINGS) this.shields[facing] = 1;
   }
 
-  /** Which shield eats a hit arriving from `source`. */
+  /**
+   * Which shield eats a hit arriving from `source`.
+   *
+   * **A ring, not a sphere, and deliberately so.** This has only ever read `x`
+   * and `z`, and adding a slab above the floor does not change that: a bolt
+   * arriving from above at bearing 40 degrees hits the same quarter a level bolt
+   * from 40 degrees would. A cylinder is the correct model — it is what lets
+   * four facings survive a third dimension without becoming six, and turning a
+   * fresh quarter toward the shooter stays exactly the skill it was. Do not
+   * "fix" this by adding a dorsal and a ventral facing.
+   */
   facingFrom(source: Vector3): ShieldFacing {
     const toSource = source.clone().sub(this.position);
     const relative = Math.atan2(toSource.x, toSource.z) - this.heading;

@@ -30,10 +30,12 @@ run of a new war opens on the **deck log** — a scrolling briefing built from t
 board it describes, which any key skips. It never plays for the demo and never
 twice for the same war.
 
-Controls: arrows/WASD fly, Space phasers, X torpedoes, `C` cracks a warhead for
-its charge when the reserve is under half, R restart. `G` toggles
-wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
-`1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics.
+Controls: arrows/WASD fly, **`Q` held climbs and released sinks**, Space
+phasers, X torpedoes, `C` cracks a warhead for its charge when the reserve is
+under half, `Z` pours the reserve into the thinnest facing, R restart. `G`
+toggles wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
+**`Y` switches the altitude slab off and back on**, `1`/`2`/`3` switch
+cockpit/chase/orbit, `H` hides diagnostics.
 
 **WASD moves the sector cursor on every screen that has a grid**, and nothing
 else ever does. `Tab` raises the chart without pausing the game; WASD moves its
@@ -47,8 +49,31 @@ arrows for the decision list, `Space` to commit and `Enter` to launch.
 Do not quietly revisit these; they are load-bearing and each closed off
 alternatives deliberately.
 
-- **The play space is a plane.** The scanner is only trustworthy if the world is
-  flat. Everything else follows from this.
+- ~~**The play space is a plane.** The scanner is only trustworthy if the world
+  is flat. Everything else follows from this.~~ **Unlocked, deliberately, with
+  the owner's approval.** Neither load path survived scrutiny. *The scanner*:
+  Elite solved a 2D tube over a 3D world in 1984 with a vertical stalk from each
+  blip down to the plane, and Elite is in our own `prior-art.md` — height reads
+  instantly and nothing is misplaced. *The facings*: `Ship.facingFrom` has always
+  resolved a hit with `atan2(x, z)` and never looked at `y`, so **the four
+  shields are a ring, not a sphere** — a shot from above at bearing 40° already
+  hit the same quarter a level one did. A cylinder was always the model.
+  The old reasoning is kept because a decision that changed is worth more with
+  its history attached.
+- **The play space is a shallow slab, floored at `y = 0`, reached with one
+  key.** This is what replaced it. `Q` held climbs, released sinks; descent is
+  not an input, which is the whole reason it costs one binding rather than two —
+  and there were no fingers for a second held axis. Nothing ever goes below the
+  floor, so every scanner stalk points the same way. Climbing draws on the one
+  energy pool, and holding altitude keeps drawing on it. The ceiling is ~14
+  units against engagement ranges of 14–78, which is what keeps it an evasive
+  option rather than a 3D search problem — and what lets **the guns train in
+  elevation while the hull does not**, since there is no pitch input and never
+  will be. The hostiles get the slab too, at a per-class fraction, or altitude
+  would be a pure escape. All of it is behind `flight.threeD` in
+  `game/altitude.ts`, defaulting on; off, the game is exactly what it was.
+  What is still true: the scanner is still trustworthy — now because of the
+  stalk — and the facings are still four and still a ring.
 - **Occluded geometry, not pure wireframe.** Glowing edges over near-void opaque
   faces. Pure wireframe is unreadable the moment two ships overlap.
 - **One energy pool** feeds thrust, shields and weapons.
@@ -93,9 +118,9 @@ alternatives deliberately.
 src/render/   Stage (post chain), VectorObject (the two draw modes),
               PhosphorPass, CrtPass, TraceBuffer, palette
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
-src/game/     Ship, session (rules), docking, death, hostiles, allies (the
-              Warden), weapons, debris, hitStop, presentation (the
-              title/attract/run shell)
+src/game/     Ship, altitude (the slab, its constants and its switch), session
+              (rules), docking, death, hostiles, allies (the Warden), weapons,
+              debris, hitStop, presentation (the title/attract/run shell)
 src/chart/    campaign state, the enemy turn, the economy and the four
               decisions, persistence, and the chart renderer (both modes)
 src/hud/      Hud (stroke buffer), draw.ts (layout), strokeFont.ts
@@ -109,7 +134,16 @@ to an sRGB display and every dim trace is crushed to black.
 
 ## Conventions
 
-- **+Z is forward, +Y is up, play happens on the XZ plane.**
+- **+Z is forward, +Y is up, the XZ plane is the floor.** `y = 0` is where
+  everything rests and nothing goes below it. Mines, the docking corridor, the
+  gate and the starbase stay on it always — having to come down to bank is a
+  feature.
+- **Aim is a bearing.** Nothing in this game has a pitch axis, so every "am I
+  pointed at it" test is `atan2(x, z)` — the hostiles always did it that way and
+  the player's weapons now do too, through `bearingOffset` in `weapons.ts`.
+  Elevation is the guns' problem, and a shallow slab is what makes that
+  solvable. Do not add a pitch input; the controls were the reason the plane
+  survived as long as it did.
 - **No DOM text over the scene.** Every glyph is stroke-drawn through the same
   bloom as the ships. The HUD draws in a fixed 800-unit-tall design space.
 - **Colour is information**: cyan is *ours* — the player and the Warden both —
@@ -135,8 +169,10 @@ to an sRGB display and every dim trace is crushed to black.
 ## State
 
 Built: the renderer, combat (five hostile classes, waves, shield facings,
-debris that is the ship's own edge segments), a persistent minefield, the
-overhead scanner with sweep-painted unresolved returns, a full docking
+debris that is the ship's own edge segments), **a shallow third dimension —
+one key, a floor at `y = 0`, a ~14-unit ceiling, hostiles that use it too, and
+Elite's stalks on the scanner** — a persistent minefield you can now fly over,
+the overhead scanner with sweep-painted unresolved returns, a full docking
 sequence — corridor, tractor capture, staged resupply, itemised tally,
 deliberate departure — hit-stop on impact, a staged death sequence, the
 arcade shell of title screen, attract demo and deck log, synthesised audio
@@ -164,8 +200,11 @@ sits at one fixed world position however the chart is drawn).
    guesses in exactly the way the flight model is: `Ship.TURN_ACCEL/TURN_DAMP/
    MAX_TURN/DRAG`, `PHASER.falloffStart/End`, `WAVE_BREAK`, multiplier gain,
    `HIT_STOP`, the death sequence's `TIMING`, the attract loop's dwell times,
-   the scanner sweep rate, and the `1 + yield` salvage curve. Needs a human at
-   the keyboard with the speakers on.
+   the scanner sweep rate, and the `1 + yield` salvage curve. **The whole of
+   `ALTITUDE` joins that list** — ceiling, climb rate, fall rate, drain — along
+   with `SCANNER.altitudeScale`, `TUBE_WINDOW` and the five `slab` fractions,
+   and it is the block most worth flying first: it is the newest thing here and
+   `Y` makes the A/B free. Needs a human at the keyboard with the speakers on.
 2. **Campaign balance.** The command view is built and the campaign is not
    yet winnable at plausible rates — `npm run campaignlength` finds a cliff
    between five steps of ground per run (0% wins) and six (93%), with no

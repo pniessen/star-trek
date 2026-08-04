@@ -162,6 +162,94 @@ await page.evaluate(() => window.__session.hitStop.strike(10));
 state = await waitFor((s) => s.timeScale === 1, 3000);
 check("hit-stop always lets go", state.timeScale === 1, `timeScale=${state.timeScale} after a 10s strike`);
 
+// ── altitude ────────────────────────────────────────────────────────────────
+// The slab. Every assertion here is written so it would fail outright if the
+// feature were absent: with the old planar game, `altitude` is pinned to zero
+// by construction and `hostileAltitude` never leaves it either.
+//
+// Pinned for the block. Holding a key for two seconds next to a live wave is
+// about the flight model, not about whether the harness can survive combat.
+await page.evaluate(() => {
+  window.__altPin = setInterval(() => { window.__player.hull = 1; }, 80);
+});
+state = await waitFor((s) => s.hostiles > 0, 20000);
+
+// A known reserve and full facings, so the only thing that can move the number
+// is the climb itself: thrust is not held, nothing is being fired, and passive
+// regeneration (+0.012/s) would otherwise push it *up*. That is the property
+// that makes this check honest — without the drain, energy strictly rises.
+await page.evaluate(() => {
+  const p = window.__player;
+  p.energy = 0.9;
+  for (const facing of ["fore", "starboard", "aft", "port"]) p.shields[facing] = 1;
+});
+
+await page.keyboard.down("q");
+state = await waitFor((s) => s.altitude > 3, 8000);
+check("holding the climb key gains altitude", state.altitude > 3, `alt=${state.altitude}`);
+check("...and the reserve pays for it", state.energy < 0.9, `energy=${state.energy}`);
+
+// The ceiling is a ceiling. Held long enough, it stops rather than keeps going.
+state = await waitFor((s) => s.altitude >= s.ceiling - 0.01, 8000);
+check(
+  "the climb stops at the ceiling",
+  state.altitude <= state.ceiling + 0.01 && state.altitude > state.ceiling - 0.5,
+  `alt=${state.altitude} ceiling=${state.ceiling}`,
+);
+await page.screenshot({ path: `${OUT}/altitude.png` });
+
+// Descent is not an input. Letting go is the whole of it — and this is checked
+// with the key released *promptly*, before the drain can starve the reserve:
+// a starved ship sinks on its own, and a check taken after that would pass
+// whether or not releasing does anything.
+await page.keyboard.up("q");
+state = await waitFor((s) => s.altitude < 0.05, 8000);
+check("releasing returns the ship to the floor", state.altitude < 0.05, `alt=${state.altitude}`);
+
+// Hostiles use the slab too — one the player alone could reach would make
+// altitude a pure escape and probably strictly dominant. They wander on their
+// own slow clocks, so this is the one check here that waits rather than acts.
+state = await waitFor((s) => s.hostileAltitude > 1, 25000);
+check("hostiles leave the floor as well", state.hostileAltitude > 1, `highest=${state.hostileAltitude}`);
+
+// ── and with the slab switched off, the old game ────────────────────────────
+// Y is in DISPLAY_KEYS, so it must flip the setting rather than launching or
+// interrupting anything — and with it off, holding the climb key must do
+// nothing at all, to the player *and* to the fleet.
+await page.keyboard.press("y");
+state = await waitFor((s) => s.flight3d === false, 3000);
+check("Y switches the slab off", state.flight3d === false, `flight3d=${state.flight3d}`);
+
+await page.keyboard.down("q");
+await page.waitForTimeout(1500);
+state = await probe();
+await page.keyboard.up("q");
+check("with the slab off the ship cannot leave the plane", state.altitude === 0, `alt=${state.altitude}`);
+// `hostileAltitude` is a max over an empty list when nothing is alive, so the
+// hostile count is asserted alongside it — otherwise an empty sector would
+// satisfy this without the pin ever being exercised.
+check(
+  "...and neither can anything else",
+  state.hostiles > 0 && state.hostileAltitude === 0,
+  `hostiles=${state.hostiles} highest=${state.hostileAltitude}`,
+);
+
+// Back on for everything below, and for the beauty shots.
+await page.keyboard.press("y");
+state = await waitFor((s) => s.flight3d === true, 3000);
+check("Y switches it back on", state.flight3d === true, `flight3d=${state.flight3d}`);
+
+// Hand the docking section a light, fresh wave rather than whatever this block
+// has been keeping alive under a hull pin — the same courtesy the hyperwarp
+// section already extends to itself, and for the same reason: what follows is
+// about the corridor, not about surviving wave nine.
+await page.evaluate(() => {
+  clearInterval(window.__altPin);
+  delete window.__altPin;
+  window.__session.wave = 1;
+  window.__fleet.clear();
+});
+
 // ── docking ─────────────────────────────────────────────────────────────────
 await page.evaluate(() => {
   const p = window.__player;

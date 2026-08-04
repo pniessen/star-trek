@@ -68,6 +68,39 @@ heard. This is the one block of work that cannot be done by thinking harder.
 `WAVE_BREAK`, multiplier gain, `HIT_STOP`, the death sequence's `TIMING`, the
 attract loop's dwell times, the scanner sweep rate.
 
+**The altitude slab — the newest block, and the one to fly first.** Everything
+in `src/game/altitude.ts` was reasoned about and none of it has been flown.
+`Y` toggles the whole mechanic off, so the A/B costs nothing and there is no
+excuse for guessing twice.
+
+- **`ALTITUDE.ceiling = 14`.** The load-bearing number. Set against
+  `preferredRange` of 14–62 and `PHASER.falloffEnd = 78`, so it should be a real
+  evasive option without making a fight a 3D search problem. Too low and the
+  key is decoration; too high and the guns' automatic elevation starts doing
+  more of the aiming than the player is.
+- **`climbRate = 9` / `fallRate = 11`.** About 1.6s up and 1.3s down. Falling
+  is faster than climbing on purpose — letting go should feel like letting go —
+  but whether that reads as responsive or as being dropped is not decidable from
+  the source.
+- **`drain = 0.055` a second**, against thrust's 0.035 at full burn, charged for
+  as long as the key is held. A full reserve buys about eighteen seconds
+  upstairs. This is the number that decides whether altitude is a tactic or a
+  habit.
+- **The five `slab` fractions** in `HOSTILE_SPECS` — Raider 0.9, Shroud 1.0,
+  Lance 0.65, Bastion 0.15, Harrow 0.1 — and the 7–13 second wander period.
+  Watch for whether a Raider at the ceiling reads as a threat or as clutter.
+- **`SCANNER.altitudeScale = 1.4`** px per world unit, deliberately double the
+  horizontal 0.69 so the slab is legible at all. Too high and an elevated
+  contact appears to be somewhere it is not; too low and the stalks vanish.
+- **`TUBE_WINDOW = 0.7`** rad, the bearing window the torpedo tube looks in for
+  something to take an elevation from. Wide because a player leading a crossing
+  Raider is pointed twenty degrees off it. Too wide and the tube elevates onto
+  the wrong hull.
+
+The two questions no constant answers, both for the same sitting: does one key
+with no descent actually read as flying, and does the automatic elevation feel
+like the ship helping or like the ship aiming?
+
 **The mix** — `BUS_LEVELS`, the phaser's cadence and pitch pair, the alert's
 `FULL_THREAT`. Three to sit with first:
 

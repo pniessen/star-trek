@@ -3,7 +3,7 @@ import { sound } from "../audio/sound.js";
 import { PALETTE } from "../render/palette.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 import type { Ship } from "./Ship.js";
-import { sweepHits, type Projectile } from "./weapons.js";
+import { bearingOffset, sweepHits, type Projectile } from "./weapons.js";
 
 /**
  * The minefield: the one thing in the game that is dangerous without being
@@ -19,6 +19,15 @@ import { sweepHits, type Projectile } from "./weapons.js";
  * Mines persist across waves. Space accumulates a history of the run, and by
  * wave ten the sector you have been circling is the sector you can no longer
  * circle.
+ *
+ * **They stay on the floor, and that is what altitude is for.** A field is now
+ * something you can fly over — and this needed no code, which is the pleasing
+ * part: the trigger and the blast are both `distanceTo`, which has always been
+ * three-dimensional, so six and a half units of height clears the trigger and
+ * thirteen clears the damage entirely. Climbing costs energy for as long as you
+ * hold it, so "fly over the field" trades the reserve for the shots you would
+ * otherwise have spent clearing a lane. That is the trade the slab exists for,
+ * and it is the one place in the game where it is unambiguous.
  */
 
 export const MINE = {
@@ -167,6 +176,13 @@ export class Minefield {
    * Closest mine inside the aim cone. Mirrors the hostile scan in `session`, so
    * a mine sitting between you and a Raider eats the beam meant for the Raider —
    * which is exactly the tax the field is supposed to levy.
+   *
+   * Mirrors it in the *bearing* sense too, and has to: the field lies on the
+   * floor and the ship may be fourteen units above it, and a cone measured as a
+   * solid angle would quietly stop the phaser being able to clear a lane the
+   * moment the player climbed. The beam still runs to the mine's real position
+   * and the falloff is still charged on the real range, so shooting a field from
+   * height costs damage — it just does not cost the ability to aim.
    */
   aim(
     origin: Vector3,
@@ -179,7 +195,7 @@ export class Minefield {
       const toTarget = mine.position.clone().sub(origin);
       const distance = toTarget.length();
       if (distance > maxRange || distance < 1e-3) continue;
-      if (forward.angleTo(toTarget.normalize()) > cone + R / distance) continue;
+      if (bearingOffset(forward, toTarget.x, toTarget.z) > cone + R / distance) continue;
       if (!best || distance < best.distance) best = { mine, distance };
     }
     return best;
