@@ -1,6 +1,7 @@
 import { Color } from "three";
 import { PALETTE } from "../render/palette.js";
 import type { Hud } from "../hud/Hud.js";
+import { GLYPH_ADVANCE } from "../hud/strokeFont.js";
 import { colOf, rowOf, GRID } from "./sectors.js";
 import { canDock, countControl, isLost, isWon, type Campaign, type Control } from "./campaign.js";
 import { DECISIONS, HEADINGS, loadoutSummary, refusal, sectorName } from "./command.js";
@@ -144,15 +145,43 @@ function drawGrid(hud: Hud, campaign: Campaign, place: GridPlacement): void {
 
     if (holdings) drawHoldings(hud, campaign, i, x, y, cell, opacity);
 
-    // Where you are, versus where you are pointing. Two different marks:
-    // confusing them is how a player jumps somewhere they did not mean to.
+    // Where you are, versus where you are pointing. These were both thin
+    // outlines in the same cyan, which made them the same mark to anyone not
+    // already holding the code in their head. They are now different in
+    // *shape* and in *colour*: you are a filled block, the cursor is an amber
+    // frame with corners — the same amber that marks the selected decision, so
+    // "amber is what I am pointing at" holds across the whole screen.
     if (i === campaign.current) {
-      ring(hud, x + cell / 2, y + cell / 2, cell * 0.42, fade(PALETTE.trace, opacity));
+      fillCell(hud, x + 3, y + 3, cell - 6, cell - 6, fade(PALETTE.trace, opacity * 0.55));
+      hud.rect(x + 2, y + 2, cell - 4, cell - 4, fade(PALETTE.trace, opacity));
     }
     if (i === cursor) {
-      hud.rect(x, y, cell, cell, fade(PALETTE.trace, opacity));
+      hud.rect(x, y, cell, cell, fade(PALETTE.amber, opacity));
+      // Corners outside the box, so the cursor still reads on a cell that is
+      // already filled because you are standing in it.
+      const a = 5;
+      hud.segments(
+        [
+          x - 2, y - 2, x - 2 + a, y - 2, x - 2, y - 2, x - 2, y - 2 + a,
+          x + cell + 2, y - 2, x + cell + 2 - a, y - 2, x + cell + 2, y - 2, x + cell + 2, y - 2 + a,
+          x - 2, y + cell + 2, x - 2 + a, y + cell + 2, x - 2, y + cell + 2, x - 2, y + cell + 2 - a,
+          x + cell + 2, y + cell + 2, x + cell + 2 - a, y + cell + 2,
+          x + cell + 2, y + cell + 2, x + cell + 2, y + cell + 2 - a,
+        ],
+        fade(PALETTE.amber, opacity),
+      );
     }
   }
+}
+
+/**
+ * A hatched block. The HUD draws segments, so "solid" is close-spaced lines —
+ * the same trick `Hud.gauge` uses to fill a bar, reused rather than reinvented.
+ */
+function fillCell(hud: Hud, x: number, y: number, w: number, h: number, color: Color): void {
+  const flat: number[] = [];
+  for (let i = 2; i < h; i += 3) flat.push(x, y + i, x + w, y + i);
+  hud.segments(flat, color);
 }
 
 /**
@@ -268,6 +297,7 @@ export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): 
   });
 
   drawSectorReadout(hud, campaign, frame.cursor, left, chartY - 30);
+  drawLegend(hud, left + COLUMN.chart, chartY - 62, CHART.commandSize);
 
   // ── the four decisions ──
   const optionsX = left + COLUMN.options;
@@ -292,11 +322,33 @@ export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): 
     const color = fitted ? PALETTE.magenta : no ? PALETTE.traceDim : PALETTE.trace;
 
     if (chosen) {
-      hud.segments([optionsX - 16, y + 4, optionsX - 7, y + 4], PALETTE.amber);
-      hud.segments([optionsX - 12, y, optionsX - 12, y + 8], PALETTE.amber);
+      // A whole bracketed row, not a tick beside one. The old mark was nine
+      // pixels of amber next to twelve near-identical lines of text, and it
+      // was reported as "tough to navigate" by the first person to try it.
+      const top = y + 15;
+      const bottom = y - 7;
+      hud.segments(
+        [
+          optionsX - 20, top, optionsX - 20, bottom,
+          optionsX - 20, top, optionsX - 12, top,
+          optionsX - 20, bottom, optionsX - 12, bottom,
+          costX + 20, top, costX + 20, bottom,
+          costX + 20, top, costX + 12, top,
+          costX + 20, bottom, costX + 12, bottom,
+        ],
+        PALETTE.amber,
+      );
+      // A caret that points at the row it has selected.
+      hud.segments(
+        [optionsX - 34, y + 4, optionsX - 26, y + 4, optionsX - 30, y + 8, optionsX - 26, y + 4,
+         optionsX - 30, y, optionsX - 26, y + 4],
+        PALETTE.amber,
+      );
     }
-    hud.text(decision.label, optionsX, y, 2, color);
-    if (decision.cost > 0) hud.textRight(pad(decision.cost, 4), costX, y, 2, color);
+    hud.text(decision.label, optionsX, y, 2, chosen && !no && !fitted ? PALETTE.amber : color);
+    if (decision.cost > 0) {
+      hud.textRight(pad(decision.cost, 4), costX, y, 2, chosen && !no ? PALETTE.amber : color);
+    }
 
     // Only the highlighted row explains itself. Twelve permanently-expanded
     // rows is a spreadsheet, which is the thing this layer is defined against.
@@ -310,6 +362,58 @@ export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): 
   // ── the footer: what just happened, and what to press ──
   drawReport(hud, campaign, frame, cx, left, right, over);
 }
+
+/**
+ * What the marks on the map mean, drawn as the marks themselves.
+ *
+ * Every symbol here was already on the chart and none of them said what they
+ * were. A key costs two rows and is the difference between a map you can read
+ * at a glance and one you have to be told about — and being told about it is
+ * exactly what happened.
+ */
+function drawLegend(hud: Hud, x: number, y: number, width: number): void {
+  const swatch = 13;
+  let cursorX = x;
+
+  const entry = (label: string, draw: (sx: number, sy: number) => void): void => {
+    // Wrap to a second row rather than running off the map's right edge.
+    if (cursorX + swatch + 10 + label.length * GLYPH_ADVANCE * 1.4 > x + width) {
+      cursorX = x;
+      y -= 18;
+    }
+    draw(cursorX, y);
+    cursorX += swatch + 5;
+    cursorX += hud.text(label, cursorX, y + 3, 1.4, PALETTE.traceDim) + 16;
+  };
+
+  entry("YOU", (sx, sy) => {
+    fillCell(hud, sx, sy, swatch, swatch, scaled(PALETTE.trace, 0.55));
+    hud.rect(sx, sy, swatch, swatch, PALETTE.trace);
+  });
+  entry("CURSOR", (sx, sy) => hud.rect(sx, sy, swatch, swatch, PALETTE.amber));
+  entry("OURS", (sx, sy) => hud.rect(sx, sy, swatch, swatch, CONTROL_COLOR.ours));
+  entry("CONTESTED", (sx, sy) => hud.rect(sx, sy, swatch, swatch, CONTROL_COLOR.contested));
+  entry("THEIRS", (sx, sy) => hud.rect(sx, sy, swatch, swatch, CONTROL_COLOR.theirs));
+  entry("DOCK", (sx, sy) =>
+    ring(hud, sx + swatch / 2, sy + swatch / 2, swatch * 0.3, PALETTE.trace),
+  );
+  entry("ATTACK INBOUND", (sx, sy) =>
+    ring(hud, sx + swatch / 2, sy + swatch / 2, swatch * 0.46, CONTROL_COLOR.theirs),
+  );
+  entry("THREAT / YIELD", (sx, sy) => {
+    hud.segments([sx + 2, sy, sx + 2, sy + 5, sx + 6, sy, sx + 6, sy + 5], PALETTE.trace);
+    hud.segments(
+      [sx + 2, sy + swatch, sx + 2, sy + swatch - 5, sx + 6, sy + swatch, sx + 6, sy + swatch - 5],
+      PALETTE.traceDim,
+    );
+  });
+}
+
+/** A palette entry at a given brightness, without disturbing the shared scratch. */
+function scaled(color: Color, amount: number): Color {
+  return LEGEND_SCRATCH.copy(color).multiplyScalar(amount);
+}
+const LEGEND_SCRATCH = new Color();
 
 function drawSectorReadout(
   hud: Hud,
@@ -370,14 +474,20 @@ function drawReport(
 
   if (frame.message) centred(hud, frame.message, cx, 116, 2, PALETTE.trace);
 
-  centred(
-    hud,
-    "ARROWS  SECTOR      W/S  DECISION      SPACE  COMMIT",
-    cx,
-    74,
-    1.7,
-    PALETTE.traceDim,
-  );
+  // The controls were here all along, dim and small, and the first player to
+  // reach this screen still could not tell how to choose anything. Keys are
+  // bright and their meanings stay quiet, so the row reads as a keyboard
+  // rather than as a sentence.
+  const keys: [string, string][] = [
+    ["W/S", "CHOOSE"],
+    ["SPACE", "BUY"],
+    ["ARROWS", "SECTOR"],
+  ];
+  let keyX = cx - 210;
+  for (const [key, meaning] of keys) {
+    keyX += hud.text(key, keyX, 74, 2, PALETTE.amber) + 8;
+    keyX += hud.text(meaning, keyX, 74, 2, PALETTE.traceDim) + 26;
+  }
   if (blink(frame.time)) {
     centred(hud, over ? "ENTER FOR A NEW WAR" : "ENTER TO LAUNCH", cx, 44, 2.6, PALETTE.amber);
   }
