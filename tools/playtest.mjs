@@ -62,7 +62,11 @@ const waitFor = async (predicate, timeout = 25000) => {
   return state;
 };
 
-await page.goto("http://127.0.0.1:5173/", { waitUntil: "networkidle" });
+// The default is the dev server's own port. It is overridable because a
+// worktree cannot have 5173 — the checkout it was branched from is usually
+// still holding it, and a harness pointed at that server silently tests the
+// wrong tree, which is a confusing way to lose an hour.
+await page.goto(process.env.PLAYTEST_URL ?? "http://127.0.0.1:5173/", { waitUntil: "networkidle" });
 await page.evaluate(() => {
   window.__stage.bloom.enabled = false;
   window.__stage.phosphor.enabled = false;
@@ -186,6 +190,48 @@ await page.screenshot({ path: `${OUT}/dead.png` });
 // asserting how long it took is not.
 state = await waitFor((s) => s.death === "tally", 20000);
 check("death reaches the tally", state.death === "tally", `phase=${state.death}`);
+
+// ── the press that opens the chart is still a press ─────────────────────────
+// The tally hands off to the command view on any key but R, and that handoff
+// used to *consume* the key: a player who died and reached for D got the
+// command view and a cursor that had not moved, and had to press it again.
+// Worse, it looked like a cursor reset rather than a dropped key, because the
+// mode change takes the cursor to campaign.current on its way in.
+//
+// So: press a direction once, and require both halves — the view opened AND
+// the cursor sits one sector along from where this run's aftermath left it.
+// The direction is computed rather than hardcoded because campaign.current can
+// sit on either edge of the grid, and a step off the grid is clamped, which
+// would make this assertion pass by doing nothing.
+const firstStep = await page.evaluate(() => {
+  const { indexOf, colOf, rowOf } = window.__chart;
+  const current = window.__campaign.current;
+  const col = colOf(current);
+  const row = rowOf(current);
+  // Away from whichever edge we are nearer, so the step is always in bounds.
+  const key = col < 7 ? "d" : "a";
+  const want = indexOf(col < 7 ? col + 1 : col - 1, row);
+  // Aim the cursor somewhere else entirely first. The mode change is entitled
+  // to pull it back to campaign.current — that is what stops a stale front
+  // carrying into the next run — so the expected answer is one step from
+  // current, not one step from here. Starting on top of current would let a
+  // fix that only half works look right.
+  window.__chartCursor.set(indexOf(col < 7 ? col : 0, row === 7 ? 0 : 7));
+  return { key, want, current };
+});
+
+await page.keyboard.press(firstStep.key);
+state = await waitFor((s) => s.mode === "command" && s.chartCursor === firstStep.want, 5000);
+check(
+  "the first key at the tally opens the command view",
+  state.mode === "command",
+  `mode=${state.mode}`,
+);
+check(
+  "and that same key still steps the cursor",
+  state.chartCursor === firstStep.want,
+  `${firstStep.key} from sector ${firstStep.current}: cursor=${state.chartCursor}, wanted ${firstStep.want}`,
+);
 
 await page.keyboard.press("r");
 state = await waitFor((s) => s.score === 0 && s.hull === 1 && s.wave >= 1);
