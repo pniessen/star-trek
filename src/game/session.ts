@@ -22,7 +22,8 @@ import { creditSalvage, type Campaign } from "../chart/campaign.js";
 import { gainGround, loadoutOf } from "../chart/economy.js";
 import { sound } from "../audio/sound.js";
 import type { VectorObject } from "../render/VectorObject.js";
-import type { Ship } from "./Ship.js";
+import { FACINGS, type Ship, type ShieldFacing } from "./Ship.js";
+import { AlertPulse, conditionOf, type Condition } from "./alert.js";
 
 /**
  * Combat phase only. Docking is tracked separately on `docking`, because the
@@ -38,6 +39,8 @@ export interface CombatInput {
   readonly thrust: boolean;
   /** Feed a torpedo to the reactor. See `SCRAM` and `handlePlayerFire`. */
   readonly scram: boolean;
+  /** Pour the reserve into the thinnest facing. See `REINFORCE`. */
+  readonly reinforce: boolean;
 }
 
 const WAVE_BREAK = 2.6;
@@ -57,6 +60,30 @@ const SCRAM = {
   energy: 0.22,
   /** Above this there is no emergency, and this stops it being a free top-up. */
   ceiling: 0.5,
+} as const;
+
+/**
+ * Pouring the reserve into a facing.
+ *
+ * Four shields that deplete separately is a locked decision, and turning a
+ * fresh quarter toward the shooter is meant to be the defensive skill — but
+ * until now that was the *only* thing a player could do about them, and
+ * passive regeneration runs at 0.012 a second, which is eighty-three seconds
+ * for one dead facing. So the shields were a thing that happened to you.
+ *
+ * `prior-art.md` credits Starfleet Command and Bridge Commander with two
+ * combat verbs: per-facing shields and *energy allocation*. We built the first
+ * and never built the second. This is the second, in its smallest honest form.
+ *
+ * The rate is deliberately brutal on the reserve: a facing from nothing to
+ * full costs about four fifths of everything you have, which is forty phaser
+ * shots you will not be firing. Turning is still cheaper than paying.
+ */
+const REINFORCE = {
+  drain: 0.45,
+  restore: 0.55,
+  /** Below this there is nothing left to give and the pumps just stop. */
+  floor: 0.02,
 } as const;
 
 /**
@@ -100,6 +127,16 @@ export class Session {
    * on the far side of the jump.
    */
   arrivalFlash = 0;
+
+  /** Naval condition, recomputed each frame. Drives the panel and the alarm. */
+  condition: Condition = "green";
+  private readonly alert = new AlertPulse();
+  /**
+   * The facing currently being fed, or null. Published so the shield cluster
+   * can show where the reserve is going — a player pouring four fifths of
+   * their energy into a quarter should be able to see which quarter.
+   */
+  reinforcing: ShieldFacing | null = null;
 
   state: SessionState = "clear";
   wave = 0;
@@ -208,6 +245,21 @@ export class Session {
       return;
     }
 
+    // Condition first: the alarm and the panel should describe the frame the
+    // player is about to see, not the one they just survived.
+    const wasCondition = this.condition;
+    this.condition = conditionOf(player, this.fleet);
+    if (this.condition !== wasCondition && this.condition !== "green") {
+      sound.conditionChange(this.condition === "red");
+      this.say(this.condition === "red" ? "RED ALERT" : "YELLOW ALERT");
+    }
+    // Real seconds: an alarm that slows down because the game dilated for a
+    // hit-stop is an alarm that lies about how fast things are happening.
+    if (this.alert.update(realDt, this.condition, Math.min(1, this.threat / 1100))) {
+      sound.alertBeat(this.alert.frequency, this.condition === "red");
+    }
+
+    this.handleReinforce(dt, player, input);
     this.handlePlayerFire(dt, player, input);
 
     for (const hostile of this.fleet.hostiles) {
@@ -307,6 +359,38 @@ export class Session {
   }
 
   // ── shooting ─────────────────────────────────────────────────────────────
+
+  /**
+   * Feed the thinnest facing from the reserve, while the key is held.
+   *
+   * Thinnest rather than the one facing the threat, deliberately: under fire a
+   * player should not also have to work out which quarter the game thinks is
+   * being shot at. The thin one is the one being shot at.
+   */
+  private handleReinforce(dt: number, player: Ship, input: CombatInput): void {
+    this.reinforcing = null;
+    if (!input.reinforce || this.state === "dead") return;
+    if (player.energy <= REINFORCE.floor) return;
+
+    let weakest: ShieldFacing | null = null;
+    for (const facing of FACINGS) {
+      if (player.shields[facing] >= 1) continue;
+      if (!weakest || player.shields[facing] < player.shields[weakest]) weakest = facing;
+    }
+    if (!weakest) return;
+
+    // Take the energy first and convert what was actually available, so a
+    // reserve running out mid-pour tapers rather than giving a free last tick.
+    const wanted = REINFORCE.drain * dt;
+    const spent = Math.min(wanted, player.energy - REINFORCE.floor);
+    if (spent <= 0) return;
+    player.energy -= spent;
+    player.shields[weakest] = Math.min(
+      1,
+      player.shields[weakest] + (spent / REINFORCE.drain) * REINFORCE.restore,
+    );
+    this.reinforcing = weakest;
+  }
 
   private handlePlayerFire(_dt: number, player: Ship, input: CombatInput): void {
     // Firing through the charge would make fleeing free, and the whole price
@@ -612,6 +696,9 @@ export class Session {
     // title — so anything still ringing from the last run stops here rather
     // than being heard over a screen that has no run behind it.
     sound.silence();
+    this.alert.reset();
+    this.condition = "green";
+    this.reinforcing = null;
     this.fleet.clear();
     this.ordnance.clear();
     this.debris.clear();

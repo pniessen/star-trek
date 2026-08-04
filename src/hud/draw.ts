@@ -137,7 +137,8 @@ export function drawHud(hud: Hud, view: HudView): void {
   }
 
   drawScanner(hud, view, width / 2, height - 148);
-  drawShields(hud, player, width / 2, 96);
+  drawShields(hud, player, width / 2, 96, view);
+  drawCondition(hud, view, width);
   drawStatus(hud, view);
   drawTally(hud, view, width);
 
@@ -465,7 +466,9 @@ function diamond(cx: number, cy: number, r: number): number[] {
   ];
 }
 
-function drawShields(hud: Hud, player: Ship, cx: number, cy: number): void {
+function drawShields(hud: Hud, player: Ship, cx: number, cy: number, view?: HudView): void {
+  const fed = view?.session.reinforcing ?? null;
+
   FACINGS.forEach((facing, index) => {
     const charge = player.shields[facing];
     const segments: number[] = [];
@@ -475,6 +478,15 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number): void {
       .copy(charge < 0.3 ? PALETTE.amber : PALETTE.trace)
       .multiplyScalar(0.2 + charge * 0.8);
     hud.segments(segments, scratch);
+
+    // The quarter currently drinking the reserve gets a second arc outside the
+    // first. Four fifths of your energy can go into one of these, and which
+    // one should never be a guess.
+    if (facing === fed) {
+      const outer: number[] = [];
+      arc(outer, cx, cy, 41, centre - Math.PI / 4 + 0.18, centre + Math.PI / 4 - 0.18, 7);
+      hud.segments(outer, PALETTE.amber);
+    }
   });
 
   hud.segments(
@@ -565,6 +577,37 @@ function drawReticle(hud: Hud, cx: number, cy: number, impact: number): void {
  * It sits in the same clear band the docking panel uses, and cannot collide
  * with it — `beginHyperwarp` refuses while docking.
  */
+/**
+ * Green, yellow, red — reusing the palette rather than inventing a third
+ * alert colour. `bastion` is the heavy's red-orange, and a red condition
+ * sharing a hue with the class that punishes a neglected shield facing is a
+ * coincidence worth keeping rather than an accident worth fixing.
+ */
+const CONDITION_COLOR = {
+  green: PALETTE.traceDim,
+  yellow: PALETTE.amber,
+  red: PALETTE.bastion,
+} as const;
+
+/**
+ * The condition, top-left, where nothing else lives.
+ *
+ * At red it breathes rather than sits still — a static word is furniture, and
+ * this one has to be legible from the corner of an eye that is busy.
+ */
+function drawCondition(hud: Hud, view: HudView, width: number): void {
+  const condition = view.session.condition;
+  const color = CONDITION_COLOR[condition];
+  const pulse =
+    condition === "red" ? 0.72 + 0.28 * (0.5 + 0.5 * Math.sin(view.time * 7.4)) : 1;
+
+  scratch.copy(color).multiplyScalar(pulse);
+  hud.text(`CONDITION ${condition.toUpperCase()}`, 34, 148, 1.9, scratch);
+  // A bar under it, which is the part that carries at the edge of vision.
+  hud.segments([34, 140, 34 + (condition === "green" ? 60 : 150), 140], scratch);
+  void width;
+}
+
 const leadTarget = new Vector3();
 const leadRelative = new Vector3();
 const leadAim = new Vector3();

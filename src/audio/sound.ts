@@ -109,15 +109,11 @@ export class Sound {
     const pressure = clamp(scene.threat / FULL_THREAT, 0, 1);
     const hurt = 1 - clamp(scene.hull, 0, 1);
 
-    // The alarm's rate is the part you read without meaning to: a slow throb is
-    // a sector with something in it, a fast one is a sector you are losing.
-    this.alert?.set(
-      scene.alive ? 0.05 + pressure * 0.1 + hurt * 0.07 : 0,
-      42 + pressure * 9,
-      170 + pressure * 520 + hurt * 220,
-      0.55 + pressure * 1.8 + hurt * 1.3,
-      0.16 + pressure * 0.3,
-    );
+    // The alert used to be a sustained bed riding threat. It is now a pulse —
+    // see `alertBeat`, and `AlertPulse` for why — so this bed is held at
+    // silence rather than removed: the machinery is one voice, and a future
+    // sustained layer (a reactor, a hull under load) would want it back.
+    this.alert?.set(0, 42 + pressure * 9, 170 + hurt * 220, 0, 0);
 
     // Engine. Under thrust it opens up; moored it is off, because a ship in the
     // clamps is a ship with its drive shut down.
@@ -588,6 +584,83 @@ export class Sound {
       attack: 0.01,
       decay: 0.26,
       delay: 0.05,
+    });
+  }
+
+  /**
+   * One beat of the alert. Short, low, and mostly not happening.
+   *
+   * The bed this replaces was a continuous drone, which `audio-prior-art.md`
+   * argues is the wrong shape for exactly the reason the ear adapts to a
+   * steady tone within seconds. Asteroids held its note at a fixed four ticks
+   * and only ever shortened the silence between beats; at its very worst the
+   * duty cycle was about a third. This is that, with the pitch axis Alien:
+   * Isolation's tracker added.
+   */
+  alertBeat(frequency: number, red: boolean): void {
+    this.synth.play({
+      bus: "panel",
+      wave: red ? "sawtooth" : "triangle",
+      freq: frequency,
+      level: red ? 0.115 : 0.075,
+      attack: 0.006,
+      hold: 0.045,
+      decay: 0.07,
+    });
+    if (!red) return;
+    // A second partial a minor second up, only at red. Genuine critical-band
+    // roughness rather than a volume increase — the CHI 2024 result is that
+    // amplification alone hurts, so urgency is bought with dissonance.
+    this.synth.play({
+      bus: "panel",
+      wave: "sawtooth",
+      freq: frequency * 1.06,
+      level: 0.055,
+      attack: 0.006,
+      hold: 0.045,
+      decay: 0.07,
+    });
+  }
+
+  /**
+   * The whoop, when the condition changes. Once per change, never on a loop —
+   * a klaxon that repeats forever is the thing players mute.
+   *
+   * Our own cadence deliberately: alert conditions are naval usage that long
+   * predates any television programme, but the specific sound anyone would
+   * recognise belongs to that programme, and "our own universe" is locked.
+   */
+  conditionChange(red: boolean): void {
+    const base = red ? 320 : 240;
+    // Two sweeps up, the second higher and later — a whoop is a shape, not a
+    // pitch, and two of them read as an alarm rather than as an event.
+    for (const [mul, delay, level] of [
+      [1, 0, red ? 0.13 : 0.085],
+      [1.34, 0.19, red ? 0.11 : 0.07],
+    ]) {
+      this.synth.play({
+        bus: "panel",
+        wave: red ? "sawtooth" : "triangle",
+        freq: base * mul,
+        to: base * mul * 1.9,
+        level,
+        attack: 0.09,
+        hold: 0.04,
+        decay: 0.16,
+        delay,
+      });
+    }
+    if (!red) return;
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "bandpass",
+      q: 4,
+      freq: 700,
+      to: 2100,
+      level: 0.045,
+      attack: 0.1,
+      decay: 0.24,
     });
   }
 

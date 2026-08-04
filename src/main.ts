@@ -567,6 +567,9 @@ function frame(now: number): void {
       // panicking player leaning on C converts one warhead per press rather
       // than emptying the magazine into the reactor by accident.
       scram: alive && !demo && pressed.has("c"),
+      // Held, not tapped: pouring the reserve into a facing is a thing you do
+      // for as long as you dare, and letting go is how you stop.
+      reinforce: alive && !demo && held.has("z"),
     });
   }
   pressed.clear();
