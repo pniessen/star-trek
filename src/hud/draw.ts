@@ -499,7 +499,14 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number, view?: HudV
 function drawStatus(hud: Hud, view: HudView): void {
   const { player } = view;
 
-  hud.text("ENERGY", 34, 128, 1.5, PALETTE.traceDim);
+  // A dry reserve is not a dead ship any more, so the gauge says which drive
+  // you are on rather than leaving the player to work out why they are slow.
+  if (player.starved) {
+    hud.text("ENERGY", 34, 128, 1.5, PALETTE.traceDim);
+    hud.text("IMPULSE", 96, 128, 1.5, PALETTE.amber);
+  } else {
+    hud.text("ENERGY", 34, 128, 1.5, PALETTE.traceDim);
+  }
   hud.gauge(34, 100, 200, 16, player.energy, player.energy < 0.25 ? PALETTE.amber : PALETTE.trace, 5);
   hud.text(`${pad(player.energy * 100, 3)}%`, 244, 104, 1.8, PALETTE.trace);
 

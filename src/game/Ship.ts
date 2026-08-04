@@ -37,6 +37,8 @@ export class Ship {
   torpedoCooldown = 0;
   /** Non-zero briefly after a hit; drives the HUD flash and the shake. */
   impact = 0;
+  /** True while the reserve is dry and the drive is running on impulse alone. */
+  starved = false;
 
   /**
    * What the refits fitted between runs add up to. Set by `Session.restart`
@@ -72,6 +74,10 @@ export class Ship {
   private static readonly THRUST_DRAIN = 0.035;
   private static readonly SHIELD_REGEN = 0.06;
   private static readonly RESERVE_REGEN = 0.012;
+  /** Reserve at or below which the drive falls back to impulse. */
+  private static readonly IMPULSE_FLOOR = 0.02;
+  /** Fraction of full thrust available with nothing in the reserve. */
+  private static readonly IMPULSE = 0.32;
 
   /** Rounds carried, which torpedo racks raise. */
   get torpedoCapacity(): number {
@@ -80,8 +86,19 @@ export class Ship {
 
   update(input: ShipInput, dt: number): void {
     const fit = this.loadout;
-    const starved = this.energy <= 0.02;
-    const thrust = starved ? 0 : input.thrust;
+    // Impulse: the drive never actually stops.
+    //
+    // A dry reserve used to mean thrust of exactly zero, and with drag pulling
+    // you down that is not a slow ship, it is a stranded one — you float,
+    // waiting on a 0.012-a-second trickle, while the wave closes. Running the
+    // pool dry should cost you the fight, not the controls.
+    //
+    // So the reserve buys *speed*, not the right to move at all. Starved, the
+    // ship still makes way at a third of full burn, which drag settles at
+    // roughly 19 units a second against the usual 59 — enough to limp toward a
+    // station, nowhere near enough to run from a Raider doing 44.
+    this.starved = this.energy <= Ship.IMPULSE_FLOOR;
+    const thrust = this.starved ? input.thrust * Ship.IMPULSE : input.thrust;
 
     this.angularVelocity += input.turn * Ship.TURN_ACCEL * fit.turnRate * dt;
     this.angularVelocity -= this.angularVelocity * Ship.TURN_DAMP * dt;
@@ -115,7 +132,12 @@ export class Ship {
     // bigger reserve is modelled as everything drawn from it costing
     // proportionally less, which keeps `energy` a 0-1 fraction and the gauge
     // honest at every loadout.
-    this.energy -= (Math.abs(thrust) * Ship.THRUST_DRAIN * dt) / fit.energyReserve;
+    // Impulse is free, which is the whole point of it: charging for thrust you
+    // only get because you are broke would just hold the reserve at zero and
+    // strand you again by a longer route.
+    if (!this.starved) {
+      this.energy -= (Math.abs(thrust) * Ship.THRUST_DRAIN * dt) / fit.energyReserve;
+    }
     let regen = Ship.RESERVE_REGEN * dt;
 
     // Ablative plating's price: once something has actually reached the hull,
