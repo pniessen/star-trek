@@ -134,7 +134,7 @@ export function drawHud(hud: Hud, view: HudView): void {
   // under it. It runs inside mode "run" rather than as a mode of its own — see
   // `game/briefing.ts` — so it is checked here rather than in the switch above.
   if (presentation.briefing.active) {
-    drawBriefing(hud, presentation.briefing, view.time, width, height);
+    drawBriefing(hud, presentation.briefing, width, height);
     hud.end();
     return;
   }

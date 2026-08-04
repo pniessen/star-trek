@@ -25,17 +25,18 @@ npm run campaignlength # simulates thousands of campaigns, reports the length di
 ```
 
 A fresh load lands on the title; any key that is not a display toggle launches a
-run, and an idle cabinet falls through to an attract demo and back. The first
-run of a new war opens on the **deck log** — a scrolling briefing built from the
-board it describes, which any key skips. It never plays for the demo and never
-twice for the same war.
+run, and an idle cabinet falls through to an attract demo and back. **Every run
+opens on the deck log** — a briefing built from the board it describes, legible
+from the frame it appears, which any key skips and `L` switches off. The first
+run of a war teaches the rules with it; every run after that is the situation
+alone. It never plays for the demo.
 
 Controls: arrows/WASD fly, **`Q` held climbs and released sinks**, Space
 phasers, X torpedoes, `C` cracks a warhead for its charge when the reserve is
 under half, `Z` pours the reserve into the thinnest facing, R restart. `G`
 toggles wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
-**`Y` switches the altitude slab off and back on**, `1`/`2`/`3` switch
-cockpit/chase/orbit, `H` hides diagnostics.
+**`L` turns the deck log off and back on**, **`Y` switches the altitude slab off
+and back on**, `1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics.
 
 **WASD moves the sector cursor on every screen that has a grid**, and nothing
 else ever does. `Tab` raises the chart without pausing the game; WASD moves its
@@ -238,6 +239,11 @@ sits at one fixed world position however the chart is drawn).
   phase. **A headless run must launch itself** — the page now lands on the
   title, so a harness has to press a key (or call
   `window.__presentation.startRun()`) before anything spawns.
+- **No display setting persists**, the deck log switch included. The shape
+  mode, the three post passes, the diagnostics, the mute, the slab and `L` are
+  all plain in-memory fields that reset on reload; `kobayashi.campaign` is the
+  only thing this game writes to storage. Adding persistence is a decision to
+  make once, for all of them, not a second key beside the campaign's.
 - `src/chart/` logic modules must not import `three` or touch the DOM.
   `tools/campaigntest.mjs` imports them in bare node, via a `tsc` emit to
   `.campaign-build/` driven by `tsconfig.campaign.json`. `ChartView.ts` is the

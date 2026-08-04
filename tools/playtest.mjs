@@ -74,25 +74,152 @@ await page.evaluate(() => {
   window.__stage.crt.enabled = false;
 });
 
+// ── the deck log ────────────────────────────────────────────────────────────
+// `L` is a display key, so it must reach the switch without launching anything
+// — the same contract `Y` has. Checked before the first run, which is also the
+// only moment the title screen is up.
+await page.keyboard.press("l");
+let state = await waitFor((s) => s.deckLog === false, 3000);
+check(
+  "L toggles the log without launching a run",
+  state.deckLog === false && state.mode === "title",
+  `deckLog=${state.deckLog} mode=${state.mode}`,
+);
+await page.keyboard.press("l");
+state = await waitFor((s) => s.deckLog === true, 3000);
+check("...and back on again", state.deckLog === true, `deckLog=${state.deckLog}`);
+
 // A fresh load lands on the title screen with nothing spawning behind it, and
 // left alone it drops into the attract demo, which then fights the harness for
 // the keyboard. Launch a real run through the same door a player uses.
+//
+// The pacing assertion is the reason this block exists in the shape it does.
+// The log shipped starting its whole crawl *below* the readable band: it was
+// `briefing === true` from the first frame while the screen showed nothing but
+// a prompt telling the player to press a key, and the first words did not
+// arrive for four seconds. An assertion on `briefing` alone passed that
+// happily. So this one waits for words — `briefingLines` is what a player
+// could actually read this instant — and it waits against a clock.
+const LEGIBLE_BUDGET = 1200;
+const launchedAt = Date.now();
 await page.keyboard.press("Enter");
-await waitFor((s) => s.mode === "run", 10000);
+let legibleAfter = Infinity;
+while (Date.now() - launchedAt < 8000) {
+  state = await probe();
+  if (state.briefingLines?.length) {
+    legibleAfter = Date.now() - launchedAt;
+    break;
+  }
+  await page.waitForTimeout(50);
+}
+check(
+  "the log is legible within a moment of launching",
+  legibleAfter <= LEGIBLE_BUDGET,
+  `first readable line after ${legibleAfter}ms, budget ${LEGIBLE_BUDGET}ms`,
+);
+check(
+  "...and the first thing readable is the top of the log",
+  (state.briefingLines?.[0] ?? "").startsWith("DECK LOG"),
+  `lines=${JSON.stringify(state.briefingLines)}`,
+);
 
-// ── the opening log ─────────────────────────────────────────────────────────
-// A fresh browser context has an empty localStorage, so the campaign the page
-// boots with is a new war — the one time the log plays. It is a hold inside
-// mode "run", not a mode of its own, so it is read off its own probe field.
-let state = await waitFor((s) => s.briefing, 5000);
-check("a new campaign opens with the log", state.briefing === true, `briefing=${state.briefing}`);
+// Both pacing shots, timed off the launch rather than off each other, so they
+// can be eyeballed side by side. Small and unadorned like everything else in
+// this half of the file — this is about where the words are, not how they glow.
+await page.waitForTimeout(Math.max(0, launchedAt + 500 - Date.now()));
+await page.screenshot({ path: `${OUT}/log-0.5s.png` });
+await page.waitForTimeout(Math.max(0, launchedAt + 2000 - Date.now()));
+await page.screenshot({ path: `${OUT}/log-2s.png` });
 await page.screenshot({ path: `${OUT}/briefing.png` });
+// And once more after the skip hint has been offered, which is the other half
+// of what went wrong: the prompt used to be the first thing on the screen and
+// the only thing on it.
+await page.waitForTimeout(Math.max(0, launchedAt + 3200 - Date.now()));
+await page.screenshot({ path: `${OUT}/log-hint.png` });
+
+// Everything it says is read off the board, which is the only reason a player
+// should believe any of it. Two numbers are checkable without leaving the page:
+// what the sector it drops into is worth, and how much ground the enemy still
+// holds.
+const truth = await page.evaluate(() => {
+  const campaign = window.__campaign;
+  const sector = campaign.sectors[campaign.current];
+  return {
+    lines: window.__presentation.briefing.lines.map((l) => l.text).filter(Boolean),
+    threat: `THREAT ${sector.threat}   PAYS X${1 + sector.yield}`,
+    theirs: campaign.sectors.filter((s) => s.control === "theirs").length,
+  };
+});
+check(
+  "the log reports the sector the run actually drops into",
+  truth.lines.includes(truth.threat),
+  `wanted "${truth.threat}", got ${JSON.stringify(truth.lines)}`,
+);
+check(
+  "...and counts the ground they really hold",
+  truth.lines.includes(`THEY HOLD ${truth.theirs} SECTORS`),
+  `wanted "THEY HOLD ${truth.theirs} SECTORS", got ${JSON.stringify(truth.lines)}`,
+);
+
+// The first run of a war teaches; every run briefs. A fresh browser context
+// has an empty localStorage, so this campaign is a new war and the rules are
+// part of this one.
+check(
+  "the first log of a war states the rules",
+  truth.lines.includes("CLEAR A SECTOR TO TAKE IT"),
+  JSON.stringify(truth.lines),
+);
 
 // And any key ends it on the frame it arrives. Everything below this line
 // depends on that: the log holds the session, so a wave would never spawn.
 await page.keyboard.press("Enter");
 state = await waitFor((s) => !s.briefing, 3000);
 check("any key skips the log", state.briefing === false, `briefing=${state.briefing}`);
+
+// ── and the same log in front of the next run ───────────────────────────────
+// The gate this replaced ran the log only on the first run of a new war, which
+// is why the owner of this repo never saw it. Every run gets one now — R is a
+// new run — and the second one drops the four onboarding sentences and keeps
+// the situation.
+await page.keyboard.press("r");
+state = await waitFor((s) => s.briefing, 5000);
+check("a second run opens with a log too", state.briefing === true, `briefing=${state.briefing}`);
+
+const second = await page.evaluate(() =>
+  window.__presentation.briefing.lines.map((l) => l.text).filter(Boolean),
+);
+check(
+  "the second log still briefs the sector",
+  second.some((line) => line.startsWith("COMMAND PUTS US AT")),
+  JSON.stringify(second),
+);
+check(
+  "...and does not teach the rules again",
+  !second.includes("CLEAR A SECTOR TO TAKE IT") && !second.includes("WE GO ANYWAY"),
+  JSON.stringify(second),
+);
+
+// Abortable from the very first frame, not merely once it is under way: the
+// key goes in immediately after the one that opened it.
+await page.keyboard.press("Enter");
+state = await waitFor((s) => !s.briefing, 3000);
+check("the log can be skipped immediately", state.briefing === false, `briefing=${state.briefing}`);
+
+// ── the switch actually suppresses it ───────────────────────────────────────
+// Off, and the next run goes straight to flying. This is left off for the rest
+// of the file deliberately: everything below restarts runs to set up combat,
+// and a briefing in front of each one is a seven-second hold on every setup.
+await page.keyboard.press("l");
+state = await waitFor((s) => s.deckLog === false, 3000);
+check("L switches the log off", state.deckLog === false, `deckLog=${state.deckLog}`);
+
+await page.keyboard.press("r");
+state = await waitFor((s) => s.mode === "run" && s.wave >= 1 && s.hostiles > 0, 20000);
+check(
+  "with the log off a run starts flying at once",
+  state.briefing === false && state.hostiles > 0,
+  `briefing=${state.briefing} hostiles=${state.hostiles}`,
+);
 
 // ── wave one arrives ────────────────────────────────────────────────────────
 state = await waitFor((s) => s.wave >= 1 && s.hostiles > 0);
@@ -411,16 +538,17 @@ check("hyperwarp charges", state.hyperwarp === "charging", `phase=${state.hyperw
 // exists to avoid elsewhere. dt=0 walks the exact same handlePlayerFire()
 // path a real frame would while freezing every dt-scaled effect, the charge
 // drain included, so only a discrete fire would move either number.
-const lockedBefore = await page.evaluate(() => {
+//
+// All three steps in one evaluate, deliberately: split across three round
+// trips the game loop keeps running between them, and the charge's own drain
+// — 0.25/second — moves energy by about 0.01 in the ~40ms each trip costs.
+// That is the same order as a phaser shot, so the split version failed roughly
+// one run in three on a hit the assertion never fired.
+const { lockedBefore, lockedAfter } = await page.evaluate(() => {
   const p = window.__player;
-  return { torpedoes: p.torpedoes, energy: p.energy };
-});
-await page.evaluate(() => {
-  window.__session.update(0, window.__player, { firePhaser: true, fireTorpedo: true, thrust: false });
-});
-const lockedAfter = await page.evaluate(() => {
-  const p = window.__player;
-  return { torpedoes: p.torpedoes, energy: p.energy };
+  const before = { torpedoes: p.torpedoes, energy: p.energy };
+  window.__session.update(0, p, { firePhaser: true, fireTorpedo: true, thrust: false });
+  return { lockedBefore: before, lockedAfter: { torpedoes: p.torpedoes, energy: p.energy } };
 });
 check(
   "weapons are locked while charging",

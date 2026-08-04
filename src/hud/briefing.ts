@@ -34,14 +34,15 @@ function centred(hud: Hud, text: string, cx: number, y: number, scale: number, c
   hud.text(text, cx - (text.length * GLYPH_ADVANCE * scale) / 2, y, scale, color);
 }
 
-/** @param time real seconds, for the blinking prompt — the same clock as the title's. */
-export function drawBriefing(
-  hud: Hud,
-  briefing: Briefing,
-  time: number,
-  width: number,
-  height: number,
-): void {
+/**
+ * How long the log has the screen to itself before the escape hatches are
+ * offered. Long enough that the head and the sector under it have been read —
+ * a hint that arrives with the first line is a hint that arrives before there
+ * is anything to skip.
+ */
+const HINT_DELAY = 2.4;
+
+export function drawBriefing(hud: Hud, briefing: Briefing, width: number, height: number): void {
   const cx = width / 2;
 
   hud.brackets(18, 18, width - 36, height - 36, 22, PALETTE.traceDim);
@@ -56,12 +57,19 @@ export function drawBriefing(
     centred(hud, line.text, cx, y, scale, scratch);
   }
 
-  // Says outright that the log is skippable, in the same blink and the same
-  // amber the title screen uses to say the cabinet is waiting for you. A crawl
-  // whose escape hatch is undocumented is a crawl the player sits through once
-  // and resents twice.
-  if (Math.sin(time * 3.4) > -0.35) {
-    centred(hud, "ANY KEY   LAUNCH", cx, 40, 2.2, PALETTE.amber);
+  // The two ways out, offered once there is something to leave.
+  //
+  // This line used to read "ANY KEY   LAUNCH", in blinking amber, and it was
+  // the only thing on screen for the first second and a half of the log — a
+  // blinking order to press a key, in front of a briefing a key destroys.
+  // Three things changed and each one is the same correction: it waits until
+  // the log has said something, it states a permission rather than an
+  // instruction, and it is dim and still. Amber on this panel means *act on
+  // this*, and a hint you are free to ignore is the opposite of that; blinking
+  // is how the title screen says the cabinet is waiting for you, which is
+  // exactly the wrong thing to say while the ship is talking.
+  if (briefing.elapsed >= HINT_DELAY) {
+    centred(hud, "ANY KEY SKIPS   L STOPS IT PLAYING", cx, 40, 1.9, PALETTE.traceDim);
   }
 
   void height;

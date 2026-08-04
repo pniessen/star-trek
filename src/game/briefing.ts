@@ -4,7 +4,7 @@ import { regionName, sectorCode, stationName } from "../chart/naming.js";
 import { sound } from "../audio/sound.js";
 
 /**
- * The opening log — the mission, stated once, at the top of a war.
+ * The opening log — where we are, what it is worth, and what we are here for.
  *
  * **Why it exists.** A run used to begin with "STAND BY" and a wave, and the
  * campaign underneath it — a board, a front, a war with a win condition —
@@ -22,11 +22,25 @@ import { sound } from "../audio/sound.js";
  * person plural, no proper nouns that are not places on this chart. See
  * `allies.ts`.
  *
- * **Why it is not in front of every run.** This is a cabinet. A crawl the
- * player cannot skip, in front of the fifth run of the evening, is how a loop
- * starts feeling like homework — so it plays when a campaign is new, which is
- * the only time a mission needs stating, and any key ends it on the frame it
- * arrives. Later runs already get the arrival card.
+ * **Why it is in front of every run, in two lengths.** It shipped playing only
+ * once per war, and the owner of this repo never saw it — which is the whole
+ * argument: a briefing nobody encounters is not a briefing. So it opens every
+ * run now, because every run drops into a sector with its own threat, its own
+ * yield and its own mooring, and *that* is what a briefing is for. What does
+ * not repeat is the teaching: the rules of the war — clearing takes ground,
+ * zero enemy sectors wins, an unbanked multiplier dies with the ship, the
+ * waves never stop — are onboarding, and reading them before run forty is
+ * noise. `teach` is true exactly once per seed and adds those four sentences
+ * back. Two escape hatches, because this is a cabinet: any key ends it on the
+ * frame it arrives, and `L` stops it playing at all.
+ *
+ * **Why it opens with content already on screen.** The first cut started the
+ * whole crawl below the readable band, so the opening seconds were an empty
+ * screen with one amber line at the bottom saying a key would launch — an
+ * instruction to destroy the content before the content arrived. It is
+ * measured now rather than reasoned about: the head stands at `entry`, inside
+ * the band, on the frame the log opens, and `hold` gives the eye a beat to
+ * land on it before anything moves.
  *
  * **Everything it says is read off the board.** Sector, region, threat, yield,
  * how much ground the enemy holds, how far away the nearest of it is, whether
@@ -57,8 +71,22 @@ export const CRAWL = {
    * zero against an additive buffer is nothing at all.
    */
   fade: 96,
-  /** How far below the band the first line starts, so the log rises into frame. */
-  lead: 70,
+  /**
+   * Where the first line stands when the log opens — inside the band, at full
+   * brightness, on the first frame. This replaced a `lead` that started the
+   * head *below* the band: the crawl then spent 1.2 seconds showing an empty
+   * screen and another second fading the head in, measured, on a machine
+   * faster than the one that reported the bug. High enough that the opening
+   * stanza is already legible, low enough that everything under it still
+   * arrives as a crawl rather than as a page.
+   */
+  entry: 300,
+  /**
+   * Real seconds the log stands still before it starts moving. A beat for the
+   * eye to land on the head, and the difference between opening on a document
+   * and opening mid-scroll.
+   */
+  hold: 0.5,
 } as const;
 
 /**
@@ -67,6 +95,14 @@ export const CRAWL = {
  * panel. No new hue: cyan is ours and the log is ours.
  */
 export type CrawlTone = "head" | "body" | "note" | "flag";
+
+/**
+ * Brightness at which a line counts as read rather than as arriving. Not a
+ * drawing threshold — the crawl draws everything down to nothing — but the bar
+ * `readable()` holds a line to, and therefore the bar the pacing assertion in
+ * `tools/playtest.mjs` holds the whole log to.
+ */
+export const LEGIBLE = 0.6;
 
 export const CRAWL_SCALE: Record<CrawlTone, number> = {
   head: 3.4,
@@ -102,8 +138,12 @@ function plural(count: number, noun: string): string {
  * words are the rules of the war, which are true by construction — clearing a
  * sector is the one thing that takes ground, zero enemy sectors is the win, an
  * unbanked multiplier dies with the ship, and a run has no end but yours.
+ *
+ * @param teach the first run of this war, so the rules are worth stating. Every
+ *   run gets the situational half — sector, region, threat, yield, what they
+ *   still hold, how far out it is, whether there is anywhere here to bank.
  */
-function compose(campaign: Campaign): [string, CrawlTone][] {
+function compose(campaign: Campaign, teach: boolean): [string, CrawlTone][] {
   const here = campaign.current;
   const sector = campaign.sectors[here];
   const theirs = countControl(campaign, "theirs");
@@ -130,20 +170,30 @@ function compose(campaign: Campaign): [string, CrawlTone][] {
       "note",
     ]);
     gap();
-    out.push(["CLEAR A SECTOR TO TAKE IT", "body"]);
-    out.push(["THE WAR ENDS WHEN THEY HOLD NOTHING", "note"]);
-    gap();
+    if (teach) {
+      out.push(["CLEAR A SECTOR TO TAKE IT", "body"]);
+      out.push(["THE WAR ENDS WHEN THEY HOLD NOTHING", "note"]);
+      gap();
+    }
   }
 
+  // Amber appears exactly once, on whichever sentence in this log is about
+  // banking — the rule, the first time, and afterwards the fact that there is
+  // nowhere here to obey it. A sector with a mooring and a player who has
+  // already been taught gets no amber at all, which is correct: nothing on
+  // this screen is asking to be acted on.
+  const moored = canDock(sector);
   out.push([
-    canDock(sector) ? `MOORING AT ${stationName(campaign.seed, here)}` : "NO MOORING IN THIS SECTOR",
-    "body",
+    moored ? `MOORING AT ${stationName(campaign.seed, here)}` : "NO MOORING IN THIS SECTOR",
+    teach || moored ? "body" : "flag",
   ]);
-  out.push(["WHAT WE DO NOT BANK WE LOSE", "flag"]);
-  gap();
 
-  out.push(["THE WAVES DO NOT STOP", "body"]);
-  out.push(["WE GO ANYWAY", "body"]);
+  if (teach) {
+    out.push(["WHAT WE DO NOT BANK WE LOSE", "flag"]);
+    gap();
+    out.push(["THE WAVES DO NOT STOP", "body"]);
+    out.push(["WE GO ANYWAY", "body"]);
+  }
 
   return out;
 }
@@ -170,11 +220,26 @@ function layout(copy: readonly [string, CrawlTone][]): CrawlLine[] {
  * is done or dismissed.
  */
 export class Briefing {
+  /**
+   * Whether the log plays at all. `L` flips it — see `main.ts` — and it is the
+   * answer to a player who has read enough of these.
+   *
+   * **In memory, not on disk.** There is no pattern in this repo for persisting
+   * a display setting: the shape mode, the three post passes, the diagnostics,
+   * the mute and the slab are all plain fields that reset on reload. Inventing
+   * a second storage key next to `kobayashi.campaign` for the sixth such
+   * setting would be inventing a convention rather than following one.
+   */
+  enabled = true;
+
   /** Up, and holding the run at the gate. */
   active = false;
 
   /** Composed once at `begin`; the band scrolls past them, they do not move. */
   lines: readonly CrawlLine[] = [];
+
+  /** Real seconds this log has been up, `hold` included. Paces the skip hint. */
+  elapsed = 0;
 
   /** Design units travelled. The whole clock, and it is fed real seconds. */
   private travel = 0;
@@ -182,26 +247,60 @@ export class Briefing {
   private span = 0;
   /** How many lines have already blipped. The log prints rather than appears. */
   private spoken = 0;
+  /** Real seconds still owed to the opening hold. */
+  private holding = 0;
 
-  begin(campaign: Campaign): void {
-    this.lines = layout(compose(campaign));
+  /**
+   * @param teach the first run of this war; adds the rules to the brief.
+   *
+   * A no-op while `enabled` is false, so the switch is honoured in one place
+   * rather than at every call site — and `active` stays false, which is what
+   * every caller actually reads.
+   */
+  begin(campaign: Campaign, teach: boolean): void {
+    if (!this.enabled) return;
+    this.lines = layout(compose(campaign, teach));
     this.travel = 0;
     this.spoken = 0;
+    this.elapsed = 0;
+    this.holding = CRAWL.hold;
     const last = this.lines[this.lines.length - 1];
-    this.span = CRAWL.top + CRAWL.fade - CRAWL.bottom + CRAWL.lead + (last?.offset ?? 0);
+    this.span = CRAWL.top + CRAWL.fade - CRAWL.entry + (last?.offset ?? 0);
     this.active = this.lines.length > 0;
+
+    // The opening stanza is already in the band, so its blips are already
+    // owed. Firing them would be four service cues inside one frame; counting
+    // them as printed and marking the moment with a single blip is the same
+    // gesture at the volume it deserves. Everything below still prints as it
+    // rises.
+    while (this.spoken < this.lines.length && this.yOf(this.lines[this.spoken]) > CRAWL.bottom) {
+      this.spoken++;
+    }
+    if (this.active) sound.service(0);
   }
 
   /** Any key, at any point, and the run starts on the next frame. */
   skip(): void {
     this.active = false;
     this.travel = 0;
+    this.elapsed = 0;
     this.lines = [];
   }
 
   /** @param realDt wall-clock seconds. Nothing here is ever frame-counted. */
   update(realDt: number): void {
     if (!this.active) return;
+    this.elapsed += realDt;
+
+    // The opening hold. Spent before any travel is, so the log is a document
+    // that starts moving rather than one caught mid-scroll — and the remainder
+    // of a frame that ends the hold still moves the crawl, which is what keeps
+    // this time-based rather than a frame that vanishes.
+    if (this.holding > 0) {
+      const spent = Math.min(this.holding, realDt);
+      this.holding -= spent;
+      realDt -= spent;
+    }
     this.travel += realDt * CRAWL.speed;
 
     // One panel blip per line as it clears the bottom of the band, so the log
@@ -218,7 +317,21 @@ export class Briefing {
 
   /** Where a line is right now, in the HUD's design space. */
   yOf(line: CrawlLine): number {
-    return CRAWL.bottom - CRAWL.lead + this.travel - line.offset;
+    return CRAWL.entry + this.travel - line.offset;
+  }
+
+  /**
+   * The lines a player could actually read this instant.
+   *
+   * Exists for the harness, and deliberately so: `active` was the only thing a
+   * test could see, and `active === true` is exactly what an empty screen with
+   * the whole log still below the band reports. A pacing assertion has to be
+   * able to ask for words.
+   */
+  readable(): string[] {
+    return this.lines
+      .filter((line) => line.text && this.levelAt(this.yOf(line)) >= LEGIBLE)
+      .map((line) => line.text);
   }
 
   /**
