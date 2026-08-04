@@ -152,6 +152,10 @@ export function drawHud(hud: Hud, view: HudView): void {
     drawLeadPip(hud, view, width, height);
   }
 
+  if (session.state !== "dead") {
+    drawEscortTag(hud, view, width, height);
+  }
+
   if (session.hyperwarp.charging) {
     drawHyperwarp(hud, view, width / 2, 420);
   }
@@ -437,6 +441,43 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     hud.segments(ring, scratch);
   }
 
+  // The Warden.
+  //
+  // Cyan, because cyan is ours, and the only glyph on the tube that shows a
+  // *heading* — an open chevron pointing where the ship is actually going,
+  // turned into scanner space with everything else. Two things follow, and both
+  // are the point: it cannot be read as a hostile, because every hostile glyph
+  // is a closed symmetric outline with no front to it, and it cannot be read as
+  // an unresolved return, because those are broken magenta rings around a
+  // cross. The one glyph it resembles is the player's own arrowhead at the
+  // centre, which is exactly the family resemblance wanted — and that one never
+  // moves off the middle of the tube.
+  //
+  // Drawn after the hostiles and before own ship, so a Warden closing on a
+  // contact is on top of it rather than under it.
+  const escort = session.escort;
+  if (escort) {
+    const mark = project(escort.position);
+    // Heading-up, so what is drawn is its bearing relative to your nose.
+    const relative = escort.heading - player.heading;
+    const fx = Math.sin(relative);
+    const fy = Math.cos(relative);
+    const r = mark.clamped ? 4.5 : 6.5;
+    // Nose, and two arms swept back from it: a chevron rather than a closed
+    // arrowhead, so it stays legible at the rim where it is drawn smaller.
+    const marks: number[] = [];
+    for (const side of [-1, 1]) {
+      marks.push(
+        mark.x + fx * r,
+        mark.y + fy * r,
+        mark.x - fx * r * 0.6 - fy * side * r * 0.7,
+        mark.y - fy * r * 0.6 + fx * side * r * 0.7,
+      );
+    }
+    scratch.copy(PALETTE.trace).multiplyScalar(mark.clamped ? 0.5 : 1);
+    hud.segments(marks, scratch);
+  }
+
   // Own ship, fixed at the centre pointing up.
   hud.segments(
     [cx, cy + 8, cx - 5, cy - 6, cx - 5, cy - 6, cx, cy - 2.5, cx, cy - 2.5, cx + 5, cy - 6, cx + 5, cy - 6, cx, cy + 8],
@@ -652,6 +693,56 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
   // Amber, the alert colour, only while a torpedo is actually ready to use it.
   scratch.copy(session.docked || player.torpedoCooldown > 0 ? PALETTE.traceDim : PALETTE.amber);
   hud.segments(flat, scratch);
+}
+
+const tagPoint = new Vector3();
+
+/**
+ * The Warden, named in the forward view.
+ *
+ * The lead pip already proved the case: a mark the ship draws around something
+ * in the world is worth more than the same information on an instrument at the
+ * edge of the screen, because it is read without looking away. This is that
+ * argument spent on identification rather than on a firing solution — a hull
+ * you might otherwise shoot at, with its class, its name and its range hung off
+ * a leader line.
+ *
+ * Two lines and no more. It is a label, not a panel, and the moment it is
+ * bigger than the ship it points at it is competing with the thing it exists to
+ * explain. Dim, for the same reason: it must never be brighter than the hull.
+ */
+function drawEscortTag(hud: Hud, view: HudView, width: number, height: number): void {
+  const escort = view.session.escort;
+  if (!escort) return;
+
+  // Only while it is on the tube. Naming something at 160 km is naming a dot,
+  // and the label would be bigger than the hull it points at.
+  const range = escort.position.distanceTo(view.player.position);
+  if (range > SCANNER.range) return;
+
+  // Lifted off the plane so the leader starts above the hull rather than
+  // through it. Everything else in this game is planar; a label is allowed a
+  // couple of units of headroom.
+  tagPoint.copy(escort.position);
+  tagPoint.y = 1.2;
+  tagPoint.project(view.camera);
+  if (tagPoint.z > 1) return; // behind the camera
+
+  const x = (tagPoint.x * 0.5 + 0.5) * width;
+  const y = (tagPoint.y * 0.5 + 0.5) * height;
+  // Kept clear of the frame: a label half off the edge is worse than no label.
+  if (x < 70 || x > width - 70 || y < 60 || y > height - 90) return;
+  // And out of the scanner's box. A ship near the horizon projects high up the
+  // screen, which is exactly where the tube is, and two instruments drawn
+  // through each other are neither of them legible. The scanner is the one that
+  // must never be obscured, so this is the label that gives way.
+  if (Math.abs(x - width / 2) < 150 && Math.abs(y - (height - 148)) < 150) return;
+
+  hud.segments([x, y + 8, x, y + 20, x, y + 20, x + 8, y + 20], PALETTE.traceDim);
+
+  scratch.copy(PALETTE.trace).multiplyScalar(0.7);
+  hud.text(escort.label, x + 11, y + 34, 1.7, scratch);
+  hud.text(`ALLY   ${pad(range, 3)} KM`, x + 11, y + 22, 1.3, PALETTE.traceDim);
 }
 
 function drawHyperwarp(hud: Hud, view: HudView, cx: number, cy: number): void {

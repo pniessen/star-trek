@@ -192,6 +192,73 @@ run an `AudioContext` until the page has been touched — the keypress that
 launches a run off the title is the gesture, which is why the title screen is
 silent on a fresh load and correct to be.
 
+### The Warden
+
+Until this, the sector held exactly two kinds of object: you, and things trying
+to kill you. The Warden is the third — an allied hull that turns up for one of
+two reasons, and the difference between them is the design.
+
+A **patrol** is a thing the command view has let you buy since it was built, at
+200 salvage, and the only evidence you had ever bought one was a number on a
+chart between runs. Drop into a garrisoned sector now, or hyperwarp into one,
+and the ship you paid for is in it, for the whole run. That is the "patrols
+visible during a run" line from the chart design doc, which was designed,
+priced and never built, and it is the cheapest thing on the list that makes the
+map feel like it is describing somewhere. Everywhere else, once in a long
+while, one crosses the sector, says something, and leaves — a sector somebody
+else is also flying in is a sector; a sector nobody else has ever been seen in
+is a shooting gallery.
+
+Four decisions carry the weight:
+
+- **It gets no colour of its own.** Cyan already means *ours*; the palette
+  called it "friendly hull, player" and the starbase, the only other friendly
+  object, is drawn in its dim variant. A sixth hue would say "another class"
+  when the only thing an ally has to say is "not a target", and there is no gap
+  left on the wheel that is clear of five hostile hues and still reads as
+  friendly. What tells the two cyan ships apart is the outline — the Warden is
+  squat, level and symmetrical with nothing reaching forward, against five
+  hostile silhouettes that are all asymmetric or leaning at you — and the fact
+  that the camera is welded to the other one.
+- **Its kills pay nothing.** No salvage, no multiplier, no entry in the run's
+  kill count, no hit-stop. The multiplier is the currency and the greed loop is
+  locked, so income the player did not earn is a hole cut in the one rule
+  everything else hangs off, and an escort that banked for you would make the
+  best play "stay behind the Warden". What it pays instead is the only thing
+  worth paying: the hostile is gone and the shot is still in your reserve. Help,
+  priced as breathing room rather than as income. Its gun is set to match — one
+  phaser shot's damage every 2.4 seconds, which thins Raiders and merely annoys
+  a Bastion, and can never clear a wave for you.
+- **On the scanner it is the only glyph with a front.** An open cyan chevron
+  pointing where the ship is actually going. Every hostile glyph is a closed
+  symmetric outline and every unresolved return is a broken magenta ring, so it
+  cannot be misread as either; the one mark it resembles is the player's own
+  arrowhead, which is the family resemblance wanted and which never leaves the
+  centre of the tube.
+- **It can be lost, and nothing replaces it.** Nothing aims at a Warden —
+  hostiles lead the player and always have — so what kills one is the volume of
+  ordnance in the air around a fight it flew into. It comes apart into its own
+  edge segments like everything else. The campaign's `patrol` is deliberately
+  *not* cleared when it dies: attrition is already modelled between runs in
+  `wearPatrols`, and charging the same loss twice would price a patrol once on
+  the chart and again in the cockpit. The player cannot hurt it at all —
+  friendly fire would turn a gift into a trap.
+
+It talks, on the same comms row the panel uses, in the same terse uppercase:
+`TIDEMARK: ON STATION`, `SALTIRE: PASSING THROUGH`, `MIND YOUR SIX`,
+`GOING DOWN`. Its own class name and eight hull names — nouns of watchkeeping
+and navigation, a lodestar and a tidemark and a cairn all being things left out
+for somebody else to steer by. No prefix, no rank, no registry. In the forward
+view it carries a two-line datablock off a leader line, class and name over
+`ALLY nnn KM`, which is the lead pip's argument spent on identification rather
+than on a firing solution.
+
+Audio: a squelch — a very short, very tight band of noise, the one gesture
+nothing else in the bank makes — and then two clean triangle notes, rising for
+a hail and falling for a loss. It is the first cue in the game that is a thing
+happening in the *panel* rather than in the world, and it needed to be
+identifiable as that before the first note.
+
 ### The scanner
 
 Heading-up, contacts glyphed by class, off-range contacts pinned to the rim.
@@ -466,6 +533,17 @@ takes longer than the run, the layer has failed and we cut it back.
 
 ## 7. Roadmap
 
+**Also wanting a human at the keyboard: the Warden's numbers.** How often a
+passer should turn up (55–95 seconds to the first, 115–195 to the next), how
+long it stays (32 seconds), how hard it shoots (0.3 every 2.4 seconds) and how
+close it keeps station (34 units) are all reasoned rather than played. The two
+that will show first are the visit rate — too often and it stops being an
+event, too rarely and most runs never see one — and whether an escort holding
+station 34 units off your quarter is company or clutter in a wave-eight fight.
+Its comms lines land on the same row as `WAVE 8` and `HULL BREACH` and will
+sometimes step on one; whether that reads as a busy channel or as a bug is not
+something reasoning can settle.
+
 **Now — tuning, and the mix is part of it.** The flight model and wave pacing
 are first-draft numbers and want a human on the keyboard: turn rate and drag,
 phaser falloff curve, how fast the multiplier climbs, whether the wave break is
@@ -524,9 +602,9 @@ Three open questions from this section and from `strategy-layer.md`'s own
 - **Do refits persist through death?** Yes. Every run ends in death by
   design, so losing refits on death would mean losing them always — a tax on
   a guaranteed event, not a choice. Built as designed.
-- **Do patrols need to be visible during a run?** Yes, designed as such — a
-  sector holding a patrol is meant to show it during a run you drop into.
-  Not yet built; belongs with the rest of the command view.
+- **Do patrols need to be visible during a run?** Yes, and now built — see
+  §3, "The Warden". A sector holding a patrol is met by one when you drop
+  into it or jump into it.
 
 ### Open questions
 

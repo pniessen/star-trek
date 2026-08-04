@@ -11,10 +11,12 @@ import {
   buildRaider,
   buildShroud,
   buildStarbase,
+  buildWarden,
 } from "./geometry/hulls.js";
 import { createGrid, createStarfield } from "./scene/environment.js";
 import { Ship } from "./game/Ship.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
+import { Wing } from "./game/allies.js";
 import { Session } from "./game/session.js";
 import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
@@ -67,6 +69,7 @@ const HULLS = {
   brawler: buildBastion(),
   miner: buildHarrow(),
   stalker: buildShroud(),
+  warden: buildWarden(),
 };
 
 const player = new Ship();
@@ -79,6 +82,16 @@ const fleet = new Fleet((kind: HostileKind) =>
   new VectorObject(HULLS[kind], {
     color: HOSTILE_COLORS[kind],
     linewidth: 1.4,
+  }).addTo(stage.scene),
+);
+
+// The ally. Drawn a little finer than the player's hull and a little heavier
+// than a hostile's: the stroke weight is the third thing, after outline and
+// colour, that says which of the two cyan ships on screen is the one you fly.
+const wing = new Wing(() =>
+  new VectorObject(HULLS.warden, {
+    color: PALETTE.trace,
+    linewidth: 1.6,
   }).addTo(stage.scene),
 );
 
@@ -105,7 +118,7 @@ const campaign = load(window.localStorage, Date.now());
  */
 const persist = (state: Campaign): void => save(state, window.localStorage);
 
-const session = new Session(fleet, STARBASE_POSITION, playerHull, campaign);
+const session = new Session(fleet, wing, STARBASE_POSITION, playerHull, campaign);
 const presentation = new Presentation(
   session,
   player,
@@ -202,6 +215,7 @@ function applyShapeMode(): void {
   playerHull.setMode(settings.shape);
   starbase.setMode(settings.shape);
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
+  wing.escort?.shape.setMode(settings.shape);
 }
 
 window.addEventListener("keydown", (event) => {
@@ -583,8 +597,10 @@ function frame(now: number): void {
     docked: session.docking.held,
   });
 
-  // Newly spawned hostiles have to inherit the current geometry mode.
+  // Newly spawned hostiles have to inherit the current geometry mode, and so
+  // does a Warden that arrived after the last time `G` was pressed.
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
+  wing.escort?.shape.setMode(settings.shape);
 
   playerHull.group.position.copy(player.position);
   playerHull.group.rotation.set(0, player.heading, player.bank * 0.6);
@@ -661,6 +677,11 @@ function frame(now: number): void {
       debris: session.debris.count,
       mines: session.mines.count,
       cloaked: fleet.hostiles.filter((h) => h.hidden).length,
+      // The ally, so a harness can prove one turns up at all and that a
+      // garrisoned sector is met by the patrol it paid for. Null when the
+      // sector is flying itself, which is most of the time.
+      ally: session.escort?.callsign ?? null,
+      allyDuty: session.escort?.duty ?? null,
       projectiles: session.ordnance.projectiles.length,
       fps: Math.round(smoothedFps),
       // The chart layer: which sector you're in, what's committed against the
@@ -713,6 +734,7 @@ if (DEBUG_PROBE) {
     __session: session,
     __player: player,
     __fleet: fleet,
+    __wing: wing,
     __presentation: presentation,
     __campaign: campaign,
     // Grid geometry, re-exported rather than reimplemented, so the harness can

@@ -7,7 +7,13 @@ import { Color } from "three";
  */
 export const PALETTE = {
   void: new Color(0x04070b),
-  trace: new Color(0x56e7e0), // friendly hull, player
+  // Cyan is *ours*, not merely the player's — the Warden flies in it too, and
+  // deliberately gets no hue of its own. A sixth colour would say "another
+  // class" when the only thing that needs saying about an ally is "not a
+  // target", and there is no gap on the wheel that is clear of five hostile
+  // hues and still reads as friendly. Silhouette tells the two apart; see
+  // `buildWarden` and `allies.ts`.
+  trace: new Color(0x56e7e0), // friendly hulls: the player, and the Warden
   traceDim: new Color(0x2c8f92), // structure, grid, distant detail
   amber: new Color(0xf2a63b), // alerts, and the raider class
 

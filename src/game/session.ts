@@ -15,14 +15,21 @@ import {
   sweepHits,
 } from "./weapons.js";
 import { MINE, Minefield } from "./mines.js";
+import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
 import { intercept } from "../chart/enemyTurn.js";
 import { creditSalvage, type Campaign } from "../chart/campaign.js";
 import { gainGround, loadoutOf } from "../chart/economy.js";
 import { sound } from "../audio/sound.js";
+import { PALETTE } from "../render/palette.js";
 import type { VectorObject } from "../render/VectorObject.js";
 import type { Ship } from "./Ship.js";
+
+/** Uniform in `[low, high]`. Used only for how long until the next Warden. */
+function between([low, high]: readonly [number, number]): number {
+  return low + Math.random() * (high - low);
+}
 
 /**
  * Combat phase only. Docking is tracked separately on `docking`, because the
@@ -57,6 +64,23 @@ const SCRAM = {
   energy: 0.22,
   /** Above this there is no emergency, and this stops it being a free top-up. */
   ceiling: 0.5,
+} as const;
+
+/**
+ * When a Warden turns up. See `allies.ts` for what one is and why it is here.
+ *
+ * A patrol you paid for shows up promptly, because that is what you bought. A
+ * passer is rare on purpose — the player asked for "once in a while another
+ * ship comes by", and a wingman on a sixty-second loop is a companion, which
+ * is a different game. First contact lands late enough in a run that the
+ * opening waves are still you alone.
+ */
+const ESCORT = {
+  /** Seconds before a stationed patrol joins you. Clear of the WAVE 1 message. */
+  stationDelay: 4.5,
+  /** Seconds until a passer might cross the sector, and until the next one after that. */
+  firstVisit: [55, 95],
+  repeatVisit: [115, 195],
 } as const;
 
 /**
@@ -128,6 +152,11 @@ export class Session {
   message = "STAND BY";
   messageTimer = 2;
 
+  /** Seconds until the next Warden. See `ESCORT`. */
+  private escortTimer = Infinity;
+  /** What the next one will be here for, decided by the sector, not by the clock. */
+  private escortDuty: Duty = "passing";
+
   private readonly scratch = new Vector3();
   private readonly nose = new Vector3();
 
@@ -137,11 +166,17 @@ export class Session {
    */
   constructor(
     private readonly fleet: Fleet,
+    private readonly wing: Wing,
     starbase: Vector3,
     private readonly playerShape: VectorObject,
     private campaign: Campaign,
   ) {
     this.docking = new Docking(starbase);
+  }
+
+  /** The Warden currently in the sector, if any. Read by the HUD and the scanner. */
+  get escort(): Escort | null {
+    return this.wing.escort;
   }
 
   /**
@@ -189,6 +224,9 @@ export class Session {
       // reads as a stopped program; a circling one reads as being finished off.
       // Nothing they fire can land — hit resolution is below this line.
       for (const hostile of this.fleet.hostiles) hostile.update(dt, player, this.ordnance, this.mines);
+      // The Warden keeps flying too — `kill()` has already told it to break
+      // off, so the last thing a run shows you is your escort turning away.
+      this.stepEscort(dt, player);
       this.ordnance.update(dt);
       // Keeps running so blasts already in flight finish expanding rather than
       // freezing half-drawn on the death screen.
@@ -203,6 +241,7 @@ export class Session {
       // drift and pure noise across four lines of numbers.
       if (before !== "tally" && this.death.phase === "tally") {
         this.fleet.clear();
+        this.wing.clear();
         this.ordnance.clear();
       }
       return;
@@ -221,6 +260,7 @@ export class Session {
       }
     }
 
+    this.stepEscort(dt, player);
     this.ordnance.update(dt);
     this.resolveProjectiles(player);
     this.mines.update(dt, player, () => this.breach());
@@ -301,6 +341,10 @@ export class Session {
     // see the field comment. updateWaves() reads and clears this on its very
     // next call, whichever branch it takes.
     this.arrivedByJump = true;
+    // Whoever was flying with you is in the sector you left. What greets you
+    // here is whatever this sector has — which, if you garrisoned it, is the
+    // patrol you paid for.
+    this.scheduleEscort();
     this.arrivalFlash = 1;
     sound.hyperwarpArrive();
     this.say("HYPERWARP");
@@ -434,6 +478,22 @@ export class Session {
         // reason four shields exist.
         if (player.takeHit(projectile.damage, projectile.position)) this.breach();
         else sound.shieldHit(projectile.position.x, projectile.position.z);
+      } else if (
+        this.wing.escort &&
+        sweepHits(projectile, this.wing.escort.position, WARDEN.radius)
+      ) {
+        // Stray fire, and only stray fire. Nothing in the game aims at the
+        // Warden — hostiles lead the player and always have — so what kills an
+        // escort is the volume of ordnance in the air around a fight it chose
+        // to fly into. Checked after the player because the bolt was never
+        // meant for it, and a projectile only ever hits one thing.
+        //
+        // The player cannot hurt it at all: friendly projectiles resolve
+        // against hostiles above, and the phaser's target search never sees it.
+        // Friendly fire would turn a gift into a trap, and every arcade minute
+        // spent learning not to shoot the cyan ship is a minute lost.
+        projectile.dead = true;
+        this.wing.escort.damage(projectile.damage);
       }
     }
   }
@@ -472,8 +532,148 @@ export class Session {
     void player;
   }
 
+  // ── the Warden ───────────────────────────────────────────────────────────
+
+  /**
+   * A hostile killed by the escort.
+   *
+   * **It pays the player nothing.** No salvage, no multiplier, no entry in the
+   * run's kill count, no hit-stop. That is the whole of the decision and it is
+   * not a balance number — the multiplier is the currency and the greed loop is
+   * locked, so salvage the player did not earn is a hole cut in the one rule
+   * everything else hangs off. An escort that banked for you would make the
+   * best play "stay behind the Warden and let it work", which is a strategy the
+   * game cannot answer, and the epitaph's HOSTILES DESTROYED would stop being
+   * a report on the player.
+   *
+   * What it *does* pay is the only thing worth paying: the hostile is gone, and
+   * the shot you would have spent on it is still in the reserve. Help, priced
+   * as breathing room rather than as income.
+   *
+   * The world does not care who fired, so everything world-facing is identical
+   * to `destroy` — the same debris out of the same edge list, the same
+   * explosion, placed where it happened. Only the ledger differs.
+   */
+  private destroyByAlly(hostile: Hostile, escort: Escort): void {
+    const impulse = hostile.velocity.clone().multiplyScalar(0.35);
+    const size = hostile.kind === "brawler" ? 1.4 : hostile.kind === "miner" ? 1.25 : 1;
+    hostile.shape.group.updateMatrixWorld(true);
+    this.debris.burst(
+      hostile.shape.edgePositions,
+      hostile.shape.group.matrixWorld,
+      HOSTILE_COLORS[hostile.kind],
+      impulse,
+      size,
+    );
+    sound.kill(hostile.position.x, hostile.position.z, size);
+    this.fleet.retire(hostile);
+    escort.scored();
+  }
+
+  /**
+   * One step of whatever ally is in the sector, and the clock that brings the
+   * next one. Called from both branches of `update` — a dead player's escort
+   * keeps flying, because a frozen one reads as a stopped program exactly the
+   * way a frozen fleet does.
+   */
+  private stepEscort(dt: number, player: Ship): void {
+    const escort = this.wing.escort;
+
+    if (!escort) {
+      // Nothing arrives over a wreck. The run is over; this sector is theirs.
+      if (this.state === "dead") return;
+      this.escortTimer -= dt;
+      if (this.escortTimer <= 0) this.callEscort(player);
+      return;
+    }
+
+    const shot = escort.update(dt, player, this.fleet.hostiles);
+    if (shot) {
+      // A beam, drawn from its nose in the same cyan the player's is, because
+      // cyan is what "ours" looks like. It leaves the muzzle somewhere that is
+      // obviously not your nose, which is what stops it reading as your shot.
+      this.scratch.set(Math.sin(escort.heading), 0, Math.cos(escort.heading));
+      this.nose.copy(escort.position).addScaledVector(this.scratch, 3.4);
+      this.ordnance.discharge(this.nose, shot.position, true);
+      sound.allyFire(escort.position.x, escort.position.z);
+      if (shot.damage(WARDEN.damage)) this.destroyByAlly(shot, escort);
+    }
+
+    if (escort.dead) {
+      escort.shape.group.updateMatrixWorld(true);
+      this.debris.burst(
+        escort.shape.edgePositions,
+        escort.shape.group.matrixWorld,
+        PALETTE.trace,
+        escort.velocity.clone().multiplyScalar(0.35),
+        1.2,
+      );
+      this.say(escort.epitaph);
+      sound.allyLost(escort.position.x, escort.position.z);
+      this.wing.retire();
+      // Nothing comes back this run. Losing the escort has to be a loss, and a
+      // replacement on a timer is what would stop it being one.
+      //
+      // Note what is deliberately *not* here: `campaign.sectors[i].patrol` is
+      // untouched. Patrol attrition is already modelled between runs, in
+      // `wearPatrols`, and charging the same loss twice would price a patrol
+      // once on the chart and again in the cockpit.
+      this.escortTimer = Infinity;
+      return;
+    }
+
+    this.hear(escort);
+
+    if (escort.departed) {
+      this.wing.retire();
+      this.escortDuty = "passing";
+      this.escortTimer = between(ESCORT.repeatVisit);
+    }
+  }
+
+  /** Puts whatever the escort has to say on the comms row, once. */
+  private hear(escort: Escort): void {
+    if (!escort.says) return;
+    this.say(escort.says);
+    if (escort.hailing) sound.allyHail(escort.position.x, escort.position.z);
+    else sound.allyComms(escort.position.x, escort.position.z);
+    escort.says = null;
+    escort.hailing = false;
+  }
+
+  /** Brings one in from the edge of the scanner, on a bearing you did not pick. */
+  private callEscort(player: Ship): void {
+    const angle = Math.random() * Math.PI * 2;
+    const position = new Vector3(
+      player.position.x + Math.sin(angle) * WARDEN.arriveRange,
+      0,
+      player.position.z + Math.cos(angle) * WARDEN.arriveRange,
+    );
+    const escort = this.wing.spawn(this.escortDuty, position, angle + Math.PI);
+    this.escortTimer = Infinity; // only one at a time; the next clock starts when it leaves
+    this.hear(escort);
+  }
+
+  /**
+   * Decides what the sector the player is standing in owes them, and when.
+   *
+   * Called wherever `campaign.current` changes — a run beginning and a jump
+   * arriving — because the patrol belongs to the sector, not to the run. Flying
+   * into a sector you garrisoned and being met by the ship you paid for is the
+   * whole reason the chart's `patrol` row exists.
+   */
+  private scheduleEscort(): void {
+    this.wing.clear();
+    const patrolled = Boolean(this.campaign.sectors[this.campaign.current]?.patrol);
+    this.escortDuty = patrolled ? "station" : "passing";
+    this.escortTimer = patrolled ? ESCORT.stationDelay : between(ESCORT.firstVisit);
+  }
+
   private kill(player: Ship): void {
     this.state = "dead";
+    // Told before the state is read anywhere else, so its farewell lands over
+    // the breakup rather than after it.
+    this.wing.escort?.breakOff();
     // Everything the epitaph reports, taken before the run is wiped.
     this.lastRun = { wave: this.wave, kills: this.kills, lost: this.bankable, score: this.score };
     this.pending = 0; // die undocked and the run's earnings go with you
@@ -633,6 +833,9 @@ export class Session {
     // before `reset()` so torpedo racks are already fitted when the tubes fill.
     player.loadout = loadoutOf(this.campaign.refits);
     player.reset();
+    // After `campaign.current` has been set back to the front, because which
+    // sector you are dropping into is what decides whether anyone meets you.
+    this.scheduleEscort();
     this.state = "clear";
     this.wave = 0;
     this.score = 0;

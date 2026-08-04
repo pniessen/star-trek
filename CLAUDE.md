@@ -86,8 +86,9 @@ alternatives deliberately.
 src/render/   Stage (post chain), VectorObject (the two draw modes),
               PhosphorPass, CrtPass, TraceBuffer, palette
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
-src/game/     Ship, session (rules), docking, death, hostiles, weapons,
-              debris, hitStop, presentation (title/attract/run shell)
+src/game/     Ship, session (rules), docking, death, hostiles, allies (the
+              Warden), weapons, debris, hitStop, presentation (the
+              title/attract/run shell)
 src/chart/    campaign state, the enemy turn, the economy and the four
               decisions, persistence, and the chart renderer (both modes)
 src/hud/      Hud (stroke buffer), draw.ts (layout), strokeFont.ts
@@ -104,10 +105,12 @@ to an sRGB display and every dim trace is crushed to black.
 - **+Z is forward, +Y is up, play happens on the XZ plane.**
 - **No DOM text over the scene.** Every glyph is stroke-drawn through the same
   bloom as the ships. The HUD draws in a fixed 800-unit-tall design space.
-- **Colour is information**: cyan is the player, magenta is unresolved or
-  tractor, and each hostile class owns a hue (Raider gold, Lance acid green,
-  Bastion red-orange, Harrow violet, Shroud magenta because it never resolves).
-  Never introduce a decorative colour.
+- **Colour is information**: cyan is *ours* — the player and the Warden both —
+  magenta is unresolved or tractor, and each hostile class owns a hue (Raider
+  gold, Lance acid green, Bastion red-orange, Harrow violet, Shroud magenta
+  because it never resolves). Never introduce a decorative colour, and note
+  that the ally deliberately did not get one: an ally needs to say "not a
+  target", which cyan already says, not "another class".
 - **Transient strokes go through `TraceBuffer`** — beams, debris, corridor
   guides — not new objects and materials.
 - **Every sound goes through the same two voices** — a pitched oscillator that
@@ -136,9 +139,15 @@ tactical overlay, hyperwarp, and the command view — build, refit, deploy,
 front, with the run-to-run loop closed through docking (which credits salvage)
 and the epitaph (which runs the enemy's turn and saves).
 
-Not built: mouse aim, leaderboards, per-sector docking (the starbase still sits
-at one fixed world position however the chart is drawn), and patrols visible
-during a run.
+Also built: **the Warden**, the one thing in the sector that is neither you nor
+trying to kill you. A patrol deployed in the sector you drop into flies in it
+for the whole run; anywhere else, one crosses the sector once in a long while,
+says something, and leaves. It shoots, weakly and slowly, and **its kills pay
+the player nothing** — no salvage, no multiplier, no entry on the tally, so
+hiding behind it can never be a strategy. See `game/allies.ts`.
+
+Not built: mouse aim, leaderboards, and per-sector docking (the starbase still
+sits at one fixed world position however the chart is drawn).
 
 ## Next, in order
 

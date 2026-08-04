@@ -591,6 +591,145 @@ export class Sound {
     });
   }
 
+  // ── the Warden ───────────────────────────────────────────────────────────
+
+  /**
+   * A transmission opening.
+   *
+   * Every cue in this bank so far is a thing happening in the world. This one
+   * is a thing happening *in the panel* — somebody keying a microphone — and it
+   * needs to be identifiable as that before the first note, or an ally hailing
+   * you from off screen is indistinguishable from an instrument chirping. So it
+   * opens on a squelch: a very short, very tight band of noise, the one gesture
+   * nothing else in the game makes.
+   *
+   * Placed like everything else, because where the voice is coming from is
+   * where the ship is. Floored, because a friend arriving is worth hearing at
+   * any range — the same argument as the decloak, for the opposite reason.
+   */
+  private squelch(place: { level: number; pan: number }, delay = 0): void {
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "bandpass",
+      q: 14,
+      freq: 1800,
+      to: 2100,
+      level: 0.05 * place.level,
+      attack: 0.002,
+      decay: 0.035,
+      delay,
+      pan: place.pan,
+    });
+  }
+
+  /**
+   * A Warden checking in. Clean and centred in timbre — triangle and sine, the
+   * timbres reserved for our own hardware — and rising, because it is the only
+   * good news the game has.
+   */
+  allyHail(x: number, z: number): void {
+    const at = this.place(x, z, 0.5);
+    this.squelch(at);
+    for (const [note, delay] of [
+      [523.25, 0.05],
+      [783.99, 0.15],
+    ] as const) {
+      this.synth.play({
+        bus: "panel",
+        wave: "triangle",
+        freq: note,
+        level: 0.1 * at.level,
+        attack: 0.006,
+        decay: delay > 0.1 ? 0.36 : 0.18,
+        delay,
+        pan: at.pan,
+      });
+    }
+  }
+
+  /** Anything else it says. One note, so a talkative escort is not a tune. */
+  allyComms(x: number, z: number): void {
+    const at = this.place(x, z, 0.4);
+    this.squelch(at);
+    this.synth.play({
+      bus: "panel",
+      wave: "triangle",
+      freq: 659.25,
+      level: 0.075 * at.level,
+      attack: 0.005,
+      decay: 0.16,
+      delay: 0.05,
+      pan: at.pan,
+    });
+  }
+
+  /**
+   * The Warden's own gun. Deliberately not the player's phaser: at a quarter
+   * of the pitch spread and half the level it reads as a shot from somewhere
+   * else, so nobody spends a wave wondering why their own weapon is firing on
+   * its own.
+   */
+  allyFire(x: number, z: number): void {
+    const at = this.place(x, z);
+    this.synth.play({
+      bus: "weapon",
+      wave: "triangle",
+      freq: 760,
+      to: 520,
+      level: 0.09 * at.level,
+      attack: 0.002,
+      decay: 0.11,
+      pan: at.pan,
+    });
+    this.synth.play({
+      kind: "noise",
+      bus: "weapon",
+      filter: "highpass",
+      freq: 2600,
+      level: 0.03 * at.level,
+      attack: 0.001,
+      decay: 0.05,
+      pan: at.pan,
+    });
+  }
+
+  /**
+   * Losing one. The death cue's shape at a third the size, and a falling pair
+   * where the hail had a rising one — the same two notes, the other way up.
+   */
+  allyLost(x: number, z: number): void {
+    const at = this.place(x, z, 0.4);
+    this.synth.play({
+      kind: "noise",
+      bus: "impact",
+      filter: "lowpass",
+      q: 0.7,
+      freq: 1800,
+      to: 60,
+      level: 0.24 * at.level,
+      attack: 0.004,
+      decay: 0.7,
+      pan: at.pan,
+    });
+    for (const [note, delay] of [
+      [783.99, 0],
+      [392, 0.13],
+    ] as const) {
+      this.synth.play({
+        bus: "panel",
+        wave: "triangle",
+        freq: note,
+        to: note * 0.94,
+        level: 0.09 * at.level,
+        attack: 0.008,
+        decay: delay > 0 ? 0.7 : 0.2,
+        delay,
+        pan: at.pan,
+      });
+    }
+  }
+
   sectorClear(): void {
     this.synth.play({ bus: "panel", wave: "triangle", freq: 659.25, level: 0.11, decay: 0.18 });
     this.synth.play({
