@@ -4,7 +4,7 @@ import { PALETTE } from "../render/palette.js";
 import type { Hud } from "./Hud.js";
 import { FACINGS, type Ship } from "../game/Ship.js";
 import type { Session } from "../game/session.js";
-import { HOSTILE_COLORS, type Fleet } from "../game/hostiles.js";
+import { HOSTILE_COLORS, HOSTILE_NAMES, type Fleet, type Hostile } from "../game/hostiles.js";
 import type { Presentation } from "../game/presentation.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { GLYPH_ADVANCE } from "./strokeFont.js";
@@ -632,7 +632,7 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
   if (player.torpedoes <= 0) return;
 
   const range = TORPEDO.speed * TORPEDO.life;
-  let best: { distance: number; time: number } | null = null;
+  let best: { distance: number; time: number; hostile: Hostile } | null = null;
 
   for (const hostile of fleet.hostiles) {
     if (hostile.hidden) continue; // nothing to solve for what will not resolve
@@ -665,7 +665,7 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
 
     if (time > TORPEDO.life) continue; // it would burn out on the way
     if (best && distance >= best.distance) continue;
-    best = { distance, time };
+    best = { distance, time, hostile };
     leadAim.copy(leadTarget).addScaledVector(leadRelative, time);
   }
 
@@ -693,8 +693,17 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
     flat.push(x + sx * r, y + sy * r, x + sx * r, y + sy * (r - arm));
   }
   // Amber, the alert colour, only while a torpedo is actually ready to use it.
-  scratch.copy(session.docked || player.torpedoCooldown > 0 ? PALETTE.traceDim : PALETTE.amber);
+  const ready = !session.docked && player.torpedoCooldown <= 0;
+  scratch.copy(ready ? PALETTE.amber : PALETTE.traceDim);
   hud.segments(flat, scratch);
+
+  // What it is and how far, beside the mark. The class colours already say
+  // this to anyone who has learned them; the words are for everyone who has
+  // not, and the range is the number that decides whether to fire at all.
+  if (!best.hostile) return;
+  const label = HOSTILE_NAMES[best.hostile.kind];
+  hud.text(label, x + r + 7, y + 3, 1.5, HOSTILE_COLORS[best.hostile.kind]);
+  hud.text(`${pad(best.distance, 3)}`, x + r + 7, y - 11, 1.4, PALETTE.traceDim);
 }
 
 function drawHyperwarp(hud: Hud, view: HudView, cx: number, cy: number): void {
