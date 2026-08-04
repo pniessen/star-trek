@@ -52,11 +52,13 @@
  *    reading that shows the difference.
  *
  *   npm run campaignlength -- [trials] [--take=N] [--reach=N] [--refits] [--vary]
- *                             [--feedback=SPEC] [--sweep] [--trace=SEED]
+ *                             [--feedback=SPEC] [--tune=K=V,…] [--sweep] [--trace=SEED]
  *
  * `--feedback` selects the candidate terms in `chart/feedback.ts`, plus-joined
  * — `--feedback=supply+entrench`. The default is `none`, which is the shipped
- * game exactly.
+ * game exactly. `--tune=reserve.regenPerSector=0.5` moves a candidate's own
+ * constants, because a candidate is only worth a verdict once it has been tried
+ * at more than the first numbers somebody wrote down.
  */
 const { newCampaign, creditSalvage, hasStructure, isWon, isLost, ENEMY_START_DEPTH } =
   await import("../.campaign-build/chart/campaign.js");
@@ -65,7 +67,8 @@ const {
   patrolCapacity, patrolCount, toggleRefit, PATROL, REFITS,
 } = await import("../.campaign-build/chart/economy.js");
 const { pressureBudget } = await import("../.campaign-build/chart/enemyTurn.js");
-const { setFeedback, describeFeedback } = await import("../.campaign-build/chart/feedback.js");
+const { setFeedback, describeFeedback, describeTuning, tune } =
+  await import("../.campaign-build/chart/feedback.js");
 const { makeRng } = await import("../.campaign-build/chart/rng.js");
 const { GRID, SECTOR_COUNT, neighbours } = await import("../.campaign-build/chart/sectors.js");
 
@@ -86,6 +89,8 @@ const TRIALS = Number(args.find((a) => !a.startsWith("--")) ?? 2000);
  * a middling multiplier brings home a little over a thousand of it.
  */
 const TAKE = flag("take", 1200);
+/** The live value, so `--economy` can sweep it without threading it through every call. */
+let take = TAKE;
 /**
  * Steps of ground a run moves. One step is one wave cleared in the sector you
  * are standing in — theirs to contested, or contested to yours — so three is a
@@ -102,12 +107,17 @@ const SWEEP = args.some((a) => a === "--sweep" || a.startsWith("--sweep="));
 const SWEEP_REACHES = (text("sweep", "") || "1,2,3,4,5,6,7,8,10")
   .split(",").map(Number).filter((n) => Number.isFinite(n));
 const TRACE = args.some((a) => a.startsWith("--trace=")) ? flag("trace", 1) : null;
+/** Sweeps salvage banked per run at a fixed reach — does the chart matter at all? */
+const ECONOMY = args.includes("--economy");
+const ECONOMY_TAKES = [0, 300, 600, 1200, 2400, 6000];
 const CEILING = 200;
 
 /** The board the enemy opens holding. Every "how far has the front moved" reads against this. */
 const START_THEIRS = ENEMY_START_DEPTH * GRID;
 
 setFeedback(FEEDBACK);
+tune(text("tune", ""));
+if (FEEDBACK !== "none") console.log(`terms       ${describeTuning()}`);
 
 // ── the model player ────────────────────────────────────────────────────────
 
@@ -213,7 +223,7 @@ function modelPlayerRun(campaign, reach) {
 
   // What the run banks, scaled by the drop sector's yield the way `Session`
   // scales it — `1 + yield`, per the deviation recorded in status.md §3.
-  creditSalvage(campaign, TAKE * (1 + campaign.sectors[campaign.front].yield));
+  creditSalvage(campaign, take * (1 + campaign.sectors[campaign.front].yield));
 
   // Ground taken by clearing waves where you are standing. Spread across the
   // richest reachable sectors, which is what hyperwarp makes possible.
@@ -388,6 +398,30 @@ if (TRACE !== null) {
     if (isWon(campaign)) { console.log("WON"); break; }
     if (isLost(campaign)) { console.log("LOST"); break; }
   }
+} else if (ECONOMY) {
+  // Does the chart participate in the war at all? Salvage buys patrols,
+  // outposts, starbases and yards; if a run banking nothing and a run banking
+  // five times the going rate resolve the same way, then the whole command
+  // view is decoration and no feedback term acting on the enemy will fix that.
+  console.log(`trials      ${TRIALS} per row, reach=${REACH}${VARY ? " mean (poisson)" : " flat"}`);
+  console.log(`model       feedback=${describeFeedback()}`);
+  console.log();
+  console.log(" take    won     lost   unres   median   structures");
+  for (const value of ECONOMY_TAKES) {
+    take = value;
+    const results = [];
+    for (let trial = 0; trial < TRIALS; trial++) results.push(runCampaign(trial + 1, REACH));
+    const s = summarise(results);
+    const p = (x, w) => String(x).padStart(w);
+    console.log(
+      `${p(value, 5)}  ${p(pct(s.won, s.trials), 6)}  ${p(pct(s.lost, s.trials), 6)}  ` +
+      `${p(pct(s.unresolved, s.trials), 6)}  ${p(s.median, 6)}   ${p(mean(results.map((r) => r.structures)).toFixed(1), 10)}`,
+    );
+  }
+  take = TAKE;
+  console.log();
+  console.log("A flat column is the finding, not a null result: it means the four decisions");
+  console.log("the command view offers cannot change the outcome of the war they are about.");
 } else if (SWEEP) {
   // The whole reach ladder in one command, because the finding that matters is
   // not any single row but whether two adjacent rows disagree.
