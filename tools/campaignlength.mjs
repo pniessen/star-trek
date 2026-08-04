@@ -22,6 +22,15 @@
  *  - **Skill.** `--take` is a flat figure per run; a real player's banked
  *    salvage varies enormously with how greedy they were.
  *
+ * The third of those is worth more attention than it used to get. `--reach` is
+ * a constant here and is nothing of the kind in play: a run that dies on wave
+ * two takes no ground and a run that goes deep takes several sectors, so a real
+ * player's reach is a distribution with a mean, not a number. `--vary` draws
+ * each run's reach from a Poisson with that mean, which is the natural shape
+ * for "how many waves did you clear before something got you". Ask for it
+ * before believing any threshold this file reports, because a constant-rate
+ * model makes every threshold sharper than the game's would be.
+ *
  * ## What this reports, and why it grew
  *
  * A length distribution was enough while the only question was "how long".
@@ -42,7 +51,7 @@
  *    term that only moves the threshold has failed, and the sweep is the one
  *    reading that shows the difference.
  *
- *   npm run campaignlength -- [trials] [--take=N] [--reach=N] [--refits]
+ *   npm run campaignlength -- [trials] [--take=N] [--reach=N] [--refits] [--vary]
  *                             [--feedback=SPEC] [--sweep] [--trace=SEED]
  *
  * `--feedback` selects the candidate terms in `chart/feedback.ts`, plus-joined
@@ -86,6 +95,8 @@ const TAKE = flag("take", 1200);
  */
 const REACH = flag("reach", 3);
 const BUY_REFITS = args.includes("--refits");
+/** Draw each run's reach from a Poisson about `--reach` rather than using it flat. */
+const VARY = args.includes("--vary");
 const FEEDBACK = text("feedback", "none");
 const SWEEP = args.some((a) => a === "--sweep" || a.startsWith("--sweep="));
 const SWEEP_REACHES = (text("sweep", "") || "1,2,3,4,5,6,7,8,10")
@@ -222,6 +233,23 @@ const count = (campaign, control) =>
   campaign.sectors.filter((s) => s.control === control).length;
 
 /**
+ * Knuth's method, on a generator of our own so that varying the player's runs
+ * cannot shift the enemy's draws — two campaigns run at the same seed with and
+ * without `--vary` must differ only in the player, or the comparison is
+ * measuring the shuffle instead.
+ */
+function poisson(rng, meanValue) {
+  const limit = Math.exp(-meanValue);
+  let k = 0;
+  let p = 1;
+  do {
+    k++;
+    p *= rng.next();
+  } while (p > limit);
+  return k - 1;
+}
+
+/**
  * Plays one campaign to a conclusion and records the shape of it, not only the
  * end of it. `theirs` per run is what every trajectory reading below is derived
  * from — it is the front, as one number.
@@ -231,9 +259,12 @@ function runCampaign(seed, reach) {
   const theirsPerRun = [];
   const budgetPerRun = [];
   let outcome = "unresolved";
+  // Offset so the player's draws never coincide with the enemy's, whose own
+  // generator is reseeded from `campaign.seed` every turn.
+  const skill = makeRng(seed ^ 0x5f3759df);
 
   for (let run = 0; run < CEILING; run++) {
-    modelPlayerRun(campaign, reach);
+    modelPlayerRun(campaign, VARY ? poisson(skill, reach) : reach);
     budgetPerRun.push(pressureBudget(campaign));
     advanceCampaign(campaign, makeRng(campaign.seed, campaign.rngCursor));
     theirsPerRun.push(count(campaign, "theirs"));
@@ -333,8 +364,8 @@ function report(stats, label) {
 // ── modes ───────────────────────────────────────────────────────────────────
 
 const label = (reach) =>
-  `take=${TAKE}/run  reach=${reach} steps/run  refits=${BUY_REFITS ? "bought" : "not modelled"}  ` +
-  `feedback=${describeFeedback()}`;
+  `take=${TAKE}/run  reach=${reach}${VARY ? " mean (poisson)" : ""} steps/run  ` +
+  `refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`;
 
 if (TRACE !== null) {
   // One campaign, run by run. The aggregate says which way a war went; this
@@ -361,7 +392,10 @@ if (TRACE !== null) {
   // The whole reach ladder in one command, because the finding that matters is
   // not any single row but whether two adjacent rows disagree.
   console.log(`trials      ${TRIALS} per row`);
-  console.log(`model       take=${TAKE}/run  refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`);
+  console.log(
+    `model       take=${TAKE}/run  reach=${VARY ? "poisson about the mean" : "flat"}  ` +
+    `refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`,
+  );
   console.log();
   console.log("reach    won     lost   unres   median   deepest   turns at");
   const band = [];
