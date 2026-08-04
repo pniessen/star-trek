@@ -48,7 +48,17 @@ try {
 
 const grid = createGrid();
 const trace = new TraceBuffer();
-stage.scene.add(grid.object, createStarfield(), trace.object);
+const starfield = createStarfield();
+stage.scene.add(grid.object, starfield.object, trace.object);
+
+/**
+ * How stretched the sky is, 0-1, eased rather than snapped.
+ *
+ * It leads the charge — the sky is already smearing before the jump fires —
+ * and decays after arrival, so a jump reads as being flung somewhere and
+ * coasting to a stop rather than as a cut between two frames.
+ */
+let warpStretch = 0;
 
 const HULLS = {
   cruiser: buildCruiser(),
@@ -553,6 +563,10 @@ function frame(now: number): void {
       firePhaser: alive && (demo ? demo.firePhaser : held.has(" ") || pressed.has(" ")),
       fireTorpedo: alive && (demo ? demo.fireTorpedo : held.has("x") || pressed.has("x")),
       thrust: alive && thrust > 0,
+      // Tapped, never held: `pressed` only latches the first keydown, so a
+      // panicking player leaning on C converts one warhead per press rather
+      // than emptying the magazine into the reactor by accident.
+      scram: alive && !demo && pressed.has("c"),
     });
   }
   pressed.clear();
@@ -674,6 +688,20 @@ function frame(now: number): void {
       commandSelection,
     };
   }
+
+  // The sky, stretched. Charging drives it most of the way and arrival kicks it
+  // the rest, so the streaks peak just after the jump lands rather than during
+  // the wind-up — the drama belongs to going somewhere, not to deciding to.
+  const wantStretch = session.hyperwarp.charging
+    ? 0.12 + session.hyperwarp.progress * 0.55
+    : 0;
+  if (session.arrivalFlash > 0) {
+    warpStretch = Math.max(warpStretch, session.arrivalFlash);
+  }
+  // Rises fast and falls slowly: a snap into warp and a coast out of it.
+  const rate = wantStretch > warpStretch ? 7 : 1.9;
+  warpStretch += (wantStretch - warpStretch) * (1 - Math.exp(-rate * dt));
+  starfield.stretch(warpStretch, player.heading);
 
   stage.render(dt);
   requestAnimationFrame(frame);

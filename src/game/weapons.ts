@@ -30,7 +30,30 @@ export const PHASER = {
 
 export const TORPEDO = {
   cooldown: 0.62,
-  damage: 1.35,
+  /**
+   * A warhead, not a slow phaser.
+   *
+   * At 1.35 over a 0.62s cooldown the tube did 2.18 damage a second and the
+   * phaser did 2.13 — identical, except the phaser is instant, never misses
+   * inside its assist cone, and never runs out. Inside 78 units the torpedo
+   * was strictly the worse weapon, which is exactly how it felt to fly.
+   *
+   * 2.6 one-shots every hostile in the game including a Bastion, which is what
+   * makes it worth carrying twelve of. The cost of that is unchanged: you have
+   * twelve, you must lead them, and past 78 units they are the only thing you
+   * have that still bites.
+   */
+  damage: 2.6,
+  /**
+   * Photon, not solid shot. Damage falls to zero at this radius, so a near
+   * miss on a hard-turning target still counts for something — the honest
+   * answer to "must be led" being a hard skill, and one that does not reach
+   * for homing, which is a locked decision.
+   *
+   * Deliberately half the Harrow's 13-unit mine blast: enough to reward a
+   * close pass, far short of making aim optional.
+   */
+  blast: 6.5,
   /**
    * At 74 this needed 36 degrees of lead on a Raider — which crosses at about
    * 180 degrees a second at its preferred range — and the shot was a guess
@@ -120,19 +143,37 @@ const sweepToTarget = new Vector3();
  * frame, and a genuinely continuous test would need both paths swept against
  * each other for no perceptible gain.
  */
-export function sweepHits(projectile: Projectile, target: Vector3, radius: number): boolean {
+export function sweepDistance(projectile: Projectile, target: Vector3): number {
   sweepStep.subVectors(projectile.position, projectile.previous);
   sweepToTarget.subVectors(target, projectile.previous);
 
   const lengthSq = sweepStep.lengthSq();
   // A projectile that has not moved yet — its first frame — is just a point.
-  if (lengthSq < 1e-9) return sweepToTarget.lengthSq() <= radius * radius;
+  if (lengthSq < 1e-9) return sweepToTarget.length();
 
   // Clamped so the segment stays a segment: a target behind the muzzle or
   // beyond this frame's travel is not hit by it.
   const t = Math.max(0, Math.min(1, sweepToTarget.dot(sweepStep) / lengthSq));
   sweepStep.multiplyScalar(t);
-  return sweepToTarget.distanceToSquared(sweepStep) <= radius * radius;
+  return sweepToTarget.distanceTo(sweepStep);
+}
+
+export function sweepHits(projectile: Projectile, target: Vector3, radius: number): boolean {
+  return sweepDistance(projectile, target) <= radius;
+}
+
+/**
+ * Warhead damage at a given closest approach.
+ *
+ * Full inside the hull, tapering to nothing at the edge of the blast. The
+ * taper is squared rather than linear so a clean hit still feels categorically
+ * better than a graze — the blast is there to stop near misses being worth
+ * literally zero, not to make aiming optional.
+ */
+export function blastDamageAt(distance: number, radius: number): number {
+  if (distance <= radius) return TORPEDO.damage;
+  const falloff = 1 - (distance - radius) / TORPEDO.blast;
+  return falloff <= 0 ? 0 : TORPEDO.damage * falloff * falloff;
 }
 
 export class Ordnance {

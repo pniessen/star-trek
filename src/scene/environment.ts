@@ -66,10 +66,25 @@ export function createGrid(cell = 12, extent = 26): Grid {
  * a streak has an orientation, which sells rotation at a glance when the ship
  * yaws hard.
  */
-export function createStarfield(count = 900, radius = 900): Object3D {
+export interface Starfield {
+  readonly object: Object3D;
+  /**
+   * Stretch every star along the bearing it is being left behind on.
+   *
+   * @param amount 0 leaves the sky alone; 1 is full warp.
+   * @param heading the direction of travel, radians. Stars ahead barely move
+   *   and stars abeam smear hardest, which is what selling speed looks like.
+   */
+  stretch(amount: number, heading: number): void;
+}
+
+export function createStarfield(count = 900, radius = 900): Starfield {
   const positions = new Float32Array(count * 6);
   const colors = new Float32Array(count * 6);
   const tint = new Color();
+  // Kept so a stretch is always computed from the sky's real geometry rather
+  // than from the last stretched state, which would compound frame to frame.
+  const base = new Float32Array(count * 6);
 
   for (let i = 0; i < count; i++) {
     // Spherical shell, biased toward the horizon so the plane stays legible.
@@ -113,5 +128,47 @@ export function createStarfield(count = 900, radius = 900): Object3D {
   );
   stars.frustumCulled = false;
   stars.renderOrder = -2;
-  return stars;
+  base.set(positions);
+
+  const attribute = geometry.getAttribute("position") as BufferAttribute;
+  let applied = 0;
+
+  return {
+    object: stars,
+    stretch(amount: number, heading: number): void {
+      // Nothing to do, and nothing to undo — skip the whole buffer walk on the
+      // overwhelmingly common frame where the ship is not warping.
+      if (amount <= 0.001 && applied <= 0.001) return;
+      applied = amount;
+
+      const ax = Math.sin(heading);
+      const az = Math.cos(heading);
+      // Length multiplier at full warp. Long enough to read as a tunnel, short
+      // of the radius so the sky never turns inside out.
+      const gain = 1 + amount * 260;
+
+      for (let i = 0; i < count; i++) {
+        const o = i * 6;
+        const sx = base[o], sy = base[o + 1], sz = base[o + 2];
+        const dx = base[o + 3] - sx;
+        const dy = base[o + 4] - sy;
+        const dz = base[o + 5] - sz;
+
+        // A star dead ahead is a point you are flying at and barely moves; one
+        // abeam sweeps past fastest. That is the sine of the angle off the bow.
+        const len = Math.hypot(sx, sy, sz) || 1;
+        const along = (sx / len) * ax + (sz / len) * az;
+        const abeam = Math.sqrt(Math.max(0, 1 - along * along));
+
+        const scale = 1 + (gain - 1) * abeam;
+        positions[o] = sx;
+        positions[o + 1] = sy;
+        positions[o + 2] = sz;
+        positions[o + 3] = sx + dx * scale;
+        positions[o + 4] = sy + dy * scale;
+        positions[o + 5] = sz + dz * scale;
+      }
+      attribute.needsUpdate = true;
+    },
+  };
 }

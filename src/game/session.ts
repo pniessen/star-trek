@@ -3,7 +3,17 @@ import { DebrisField } from "./debris.js";
 import { DeathSequence } from "./death.js";
 import { HIT_STOP, HitStop } from "./hitStop.js";
 import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
-import { Ordnance, PHASER, TORPEDO, phaserCostOf, phaserDamageAt, phaserRangeOf, sweepHits } from "./weapons.js";
+import {
+  Ordnance,
+  PHASER,
+  TORPEDO,
+  blastDamageAt,
+  phaserCostOf,
+  phaserDamageAt,
+  phaserRangeOf,
+  sweepDistance,
+  sweepHits,
+} from "./weapons.js";
 import { MINE, Minefield } from "./mines.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
@@ -26,10 +36,28 @@ export interface CombatInput {
   readonly fireTorpedo: boolean;
   /** Thrust doubles as the request to leave the mooring. */
   readonly thrust: boolean;
+  /** Feed a torpedo to the reactor. See `SCRAM` and `handlePlayerFire`. */
+  readonly scram: boolean;
 }
 
 const WAVE_BREAK = 2.6;
 const PLAYER_RADIUS = 2.6;
+
+/**
+ * Cracking a warhead for its charge.
+ *
+ * The one energy pool is a locked decision, and running it dry is supposed to
+ * be a real failure — so this is not a refill, it is a trade at a bad rate
+ * made under pressure. A torpedo is worth roughly nine phaser shots here and
+ * would have been worth a Bastion in the tube, and the whole magazine is worth
+ * about two and a half reserves. It shares the tube's cooldown, so a dry ship
+ * cannot dump twelve at once and pretend nothing happened.
+ */
+const SCRAM = {
+  energy: 0.22,
+  /** Above this there is no emergency, and this stops it being a free top-up. */
+  ceiling: 0.5,
+} as const;
 
 /**
  * The rules of a run.
@@ -65,6 +93,13 @@ export class Session {
    * committed attack, which is a free win the player never earned.
    */
   private arrivedByJump = false;
+
+  /**
+   * 1 at the instant of arrival, decaying to 0. Read by `main.ts` to kick the
+   * starfield past what the charge alone stretched it to, so the streaks peak
+   * on the far side of the jump.
+   */
+  arrivalFlash = 0;
 
   state: SessionState = "clear";
   wave = 0;
@@ -140,6 +175,9 @@ export class Session {
   update(realDt: number, player: Ship, input: CombatInput): void {
     const dt = realDt * this.timeScale;
     this.hitStop.advance(realDt);
+    // Real seconds: the arrival streaks should coast out at the same rate on
+    // any machine, and hit-stop must not stretch a visual flourish.
+    this.arrivalFlash = Math.max(0, this.arrivalFlash - realDt * 1.6);
 
     this.messageTimer = Math.max(0, this.messageTimer - dt);
     // Ease the odometer toward the real score, framerate-independently.
@@ -263,6 +301,7 @@ export class Session {
     // see the field comment. updateWaves() reads and clears this on its very
     // next call, whichever branch it takes.
     this.arrivedByJump = true;
+    this.arrivalFlash = 1;
     sound.hyperwarpArrive();
     this.say("HYPERWARP");
   }
@@ -334,6 +373,19 @@ export class Session {
       player.torpedoes--;
       this.ordnance.fire(this.nose, forward, "torpedo", true, player.velocity);
       sound.torpedo();
+    } else if (input.scram && player.torpedoCooldown <= 0 && player.torpedoes > 0) {
+      // Refused above the ceiling, so this cannot become a routine top-up
+      // between waves — it is the thing you do when the reserve is gone and
+      // something is still shooting.
+      if (player.energy < SCRAM.ceiling) {
+        player.torpedoCooldown = TORPEDO.cooldown;
+        player.torpedoes--;
+        player.energy = Math.min(1, player.energy + SCRAM.energy);
+        sound.scram();
+        this.say("WARHEAD SCRAMMED");
+      } else {
+        this.say("RESERVE TOO HIGH");
+      }
     }
   }
 
@@ -344,12 +396,20 @@ export class Session {
       if (projectile.friendly) {
         for (const hostile of this.fleet.hostiles) {
           if (hostile.hidden) continue; // torpedoes pass straight through a veil
-          if (!sweepHits(projectile, hostile.position, hostile.spec.radius)) continue;
+          // A torpedo detonates on proximity; a bolt has to actually connect.
+          const torpedo = projectile.kind === "torpedo";
+          const reach = hostile.spec.radius + (torpedo ? TORPEDO.blast : 0);
+          const approach = sweepDistance(projectile, hostile.position);
+          if (approach > reach) continue;
+          const damage = torpedo
+            ? blastDamageAt(approach, hostile.spec.radius)
+            : projectile.damage;
+          if (damage <= 0) continue;
           projectile.dead = true;
           // Only torpedoes reach here — phasers resolve instantly — which is
           // what keeps hit-stop an event. A phaser burst lands every 0.16s and
           // dilating on each of those would be a permanent limp.
-          if (hostile.damage(projectile.damage)) {
+          if (hostile.damage(damage)) {
             this.destroy(hostile, player);
           } else {
             this.hitStop.strike(HIT_STOP.impact);

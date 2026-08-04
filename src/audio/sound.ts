@@ -560,6 +560,37 @@ export class Sound {
     });
   }
 
+  /**
+   * A warhead cracked for its charge. Deliberately unglamorous — a casing
+   * being opened and something venting into the reserve, not a power-up. It
+   * should sound like a thing you had to do.
+   */
+  scram(): void {
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "bandpass",
+      q: 3,
+      freq: 2400,
+      to: 300,
+      level: 0.11,
+      attack: 0.005,
+      decay: 0.34,
+    });
+    // Rising, because the reserve is going up, but thin and short so it never
+    // reads as a reward.
+    this.synth.play({
+      bus: "panel",
+      wave: "triangle",
+      freq: 196,
+      to: 392,
+      level: 0.075,
+      attack: 0.01,
+      decay: 0.26,
+      delay: 0.05,
+    });
+  }
+
   sectorClear(): void {
     this.synth.play({ bus: "panel", wave: "triangle", freq: 659.25, level: 0.11, decay: 0.18 });
     this.synth.play({

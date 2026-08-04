@@ -25,7 +25,8 @@ npm run campaignlength # simulates thousands of campaigns, reports the length di
 A fresh load lands on the title; any key that is not a display toggle launches a
 run, and an idle cabinet falls through to an attract demo and back.
 
-Controls: arrows/WASD fly, Space phasers, X torpedoes, R restart. `G` toggles
+Controls: arrows/WASD fly, Space phasers, X torpedoes, `C` cracks a warhead for
+its charge when the reserve is under half, R restart. `G` toggles
 wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
 `1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics. Between runs the
 command view takes arrows for the sector cursor, `W`/`S` for the decision,
