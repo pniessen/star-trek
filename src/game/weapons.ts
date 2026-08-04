@@ -31,8 +31,15 @@ export const PHASER = {
 export const TORPEDO = {
   cooldown: 0.62,
   damage: 1.35,
-  speed: 74,
-  life: 2.6,
+  /**
+   * At 74 this needed 36 degrees of lead on a Raider — which crosses at about
+   * 180 degrees a second at its preferred range — and the shot was a guess
+   * rather than a skill. 130 brings that to roughly 20 degrees while keeping
+   * the weapon slow enough that leading is still the whole point of it. Range
+   * is held where it was by shortening `life` to match.
+   */
+  speed: 130,
+  life: 1.5,
   capacity: 12,
 } as const;
 

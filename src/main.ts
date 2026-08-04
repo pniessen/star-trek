@@ -610,6 +610,7 @@ function frame(now: number): void {
     time,
     dt,
     cameraMode: settings.camera,
+    camera: stage.camera,
     shapeMode: settings.shape,
     bloom: settings.bloom,
     phosphor: settings.phosphor,

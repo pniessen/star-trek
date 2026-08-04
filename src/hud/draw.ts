@@ -1,4 +1,5 @@
-import { Color, MathUtils, Vector3 } from "three";
+import { Color, MathUtils, Vector3, type PerspectiveCamera } from "three";
+import { TORPEDO } from "../game/weapons.js";
 import { PALETTE } from "../render/palette.js";
 import type { Hud } from "./Hud.js";
 import { FACINGS, type Ship } from "../game/Ship.js";
@@ -22,6 +23,8 @@ export interface HudView {
   /** Seconds since the last frame. The scanner accumulates, so it needs this. */
   readonly dt: number;
   readonly cameraMode: string;
+  /** Needed to put a mark in the forward view rather than on the scanner. */
+  readonly camera: PerspectiveCamera;
   readonly shapeMode: string;
   readonly bloom: boolean;
   readonly phosphor: boolean;
@@ -140,6 +143,13 @@ export function drawHud(hud: Hud, view: HudView): void {
 
   if (view.cameraMode === "cockpit" && session.state !== "dead") {
     drawReticle(hud, width / 2, height / 2, player.impact);
+  }
+
+  // In every view, not just the cockpit: the torpedo is aimed by the hull's
+  // nose whichever camera is watching it, so the mark belongs on screen
+  // wherever the shot is legal.
+  if (session.state !== "dead" && presentation.mode === "run") {
+    drawLeadPip(hud, view, width, height);
   }
 
   if (session.hyperwarp.charging) {
@@ -555,6 +565,95 @@ function drawReticle(hud: Hud, cx: number, cy: number, impact: number): void {
  * It sits in the same clear band the docking panel uses, and cannot collide
  * with it — `beginHyperwarp` refuses while docking.
  */
+const leadTarget = new Vector3();
+const leadRelative = new Vector3();
+const leadAim = new Vector3();
+
+/**
+ * Where to point so a torpedo and the nearest hostile arrive together.
+ *
+ * Torpedoes are deliberately slow and must be led — that is the whole of what
+ * distinguishes them from phasers. But leading them was a guess rather than a
+ * skill: a Raider crosses at roughly 180 degrees a second at its preferred
+ * range, and no instrument said anything about it. The ship knows the
+ * intercept exactly, so it draws it, the same way it draws every other thing
+ * it knows. The skill stays — you still have to turn, and the mark moves while
+ * you do — but it is now a thing you can aim at rather than a thing you guess.
+ *
+ * The torpedo inherits the ship's velocity, so the whole solve happens in the
+ * ship's frame: the target's velocity is relative, and the answer is a bearing
+ * rather than a world position.
+ */
+function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): void {
+  const { player, fleet, session, camera } = view;
+  if (player.torpedoes <= 0) return;
+
+  const range = TORPEDO.speed * TORPEDO.life;
+  let best: { distance: number; time: number } | null = null;
+
+  for (const hostile of fleet.hostiles) {
+    if (hostile.hidden) continue; // nothing to solve for what will not resolve
+    leadTarget.subVectors(hostile.position, player.position);
+    const distance = leadTarget.length();
+    if (distance > range) continue;
+    leadRelative.subVectors(hostile.velocity, player.velocity);
+
+    // |r + v t| = s t, as a quadratic in t.
+    const a = leadRelative.lengthSq() - TORPEDO.speed * TORPEDO.speed;
+    const b = 2 * leadTarget.dot(leadRelative);
+    const c = leadTarget.lengthSq();
+
+    let time: number;
+    if (Math.abs(a) < 1e-6) {
+      // Target closing at exactly torpedo speed — degenerate, solve linearly.
+      if (Math.abs(b) < 1e-6) continue;
+      time = -c / b;
+    } else {
+      const disc = b * b - 4 * a * c;
+      if (disc < 0) continue; // outruns the torpedo: no intercept exists
+      const root = Math.sqrt(disc);
+      const t1 = (-b - root) / (2 * a);
+      const t2 = (-b + root) / (2 * a);
+      // The soonest meeting that has not already happened.
+      const candidates = [t1, t2].filter((t) => t > 0).sort((x, y) => x - y);
+      if (!candidates.length) continue;
+      time = candidates[0];
+    }
+
+    if (time > TORPEDO.life) continue; // it would burn out on the way
+    if (best && distance >= best.distance) continue;
+    best = { distance, time };
+    leadAim.copy(leadTarget).addScaledVector(leadRelative, time);
+  }
+
+  if (!best) return;
+
+  // Placed at the target's own range along the firing line, so the mark sits
+  // in the world beside the ship it belongs to rather than floating at a
+  // distance of its own.
+  leadAim.setLength(best.distance).add(player.position);
+  leadAim.y = 0;
+  leadAim.project(camera);
+  if (leadAim.z > 1) return; // behind the camera
+
+  const x = (leadAim.x * 0.5 + 0.5) * width;
+  const y = (leadAim.y * 0.5 + 0.5) * height;
+  if (x < 20 || x > width - 20 || y < 20 || y > height - 20) return;
+
+  // Four corners rather than a box: it reads as a solution being offered
+  // rather than as a lock the ship has taken for you.
+  const r = 11;
+  const arm = 5;
+  const flat: number[] = [];
+  for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
+    flat.push(x + sx * r, y + sy * r, x + sx * (r - arm), y + sy * r);
+    flat.push(x + sx * r, y + sy * r, x + sx * r, y + sy * (r - arm));
+  }
+  // Amber, the alert colour, only while a torpedo is actually ready to use it.
+  scratch.copy(session.docked || player.torpedoCooldown > 0 ? PALETTE.traceDim : PALETTE.amber);
+  hud.segments(flat, scratch);
+}
+
 function drawHyperwarp(hud: Hud, view: HudView, cx: number, cy: number): void {
   const { hyperwarp } = view.session;
   const width = 150;
