@@ -462,6 +462,104 @@ export class Sound {
   }
 
   /** Two notes up: the only unambiguously good news the combat loop delivers. */
+  /**
+   * The two-second commitment, made audible.
+   *
+   * Deliberately not a rising sine — that is the most worn sound in the medium,
+   * and `docs/audio-prior-art.md` §6 argues the frame-shift charge in Elite
+   * Dangerous works because it builds in **spectral width and depth rather than
+   * level**. So the fundamental barely moves; what opens up is the detuning
+   * between three partials and the bandwidth of the noise above them. It gets
+   * *wider*, not louder, which is what "something enormous is spinning up"
+   * sounds like.
+   *
+   * @param duration seconds the charge will run if it is not released.
+   */
+  hyperwarpCharge(duration: number): void {
+    const attack = 0.12;
+    const decay = 0.22;
+    const hold = Math.max(0.1, duration - attack - decay);
+
+    // Three partials that start nearly in unison and spread apart. Beating
+    // between them is the whole effect — at the start they are one note, by
+    // the end they are a chord that has not decided what it is.
+    for (const [from, to, level] of [
+      [58, 55, 0.1],
+      [58.6, 82.5, 0.075],
+      [57.4, 110, 0.055],
+    ]) {
+      this.synth.play({
+        bus: "panel",
+        wave: "sawtooth",
+        freq: from,
+        to,
+        level,
+        attack,
+        hold,
+        decay,
+      });
+    }
+
+    // The band opening upward. Q stays tight so this reads as a resonance
+    // climbing rather than as a hiss being faded in.
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "bandpass",
+      q: 6,
+      freq: 220,
+      to: 3200,
+      level: 0.05,
+      attack: 0.2,
+      hold,
+      decay,
+    });
+  }
+
+  /** Cut short. The spin-down is the refund of nothing, said in one syllable. */
+  hyperwarpAbort(): void {
+    this.synth.play({ bus: "panel", wave: "sawtooth", freq: 82, to: 41, level: 0.08, decay: 0.22 });
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "bandpass",
+      q: 5,
+      freq: 1800,
+      to: 240,
+      level: 0.04,
+      decay: 0.26,
+    });
+  }
+
+  /**
+   * Arrival. The one moment in this cue that is allowed to be loud, because
+   * everything before it was width — a transient here is what makes the two
+   * seconds resolve rather than merely stop.
+   */
+  hyperwarpArrive(): void {
+    this.synth.play({
+      kind: "noise",
+      bus: "impact",
+      filter: "highpass",
+      freq: 900,
+      to: 120,
+      level: 0.2,
+      attack: 0.004,
+      decay: 0.5,
+    });
+    this.synth.play({ bus: "impact", wave: "sine", freq: 220, to: 41, level: 0.18, decay: 0.55 });
+    // The far side, a beat later: thin, high, and alone, because you arrived
+    // cold and the sector has not said anything back yet.
+    this.synth.play({
+      bus: "panel",
+      wave: "triangle",
+      freq: 1318.5,
+      level: 0.07,
+      decay: 0.3,
+      delay: 0.18,
+    });
+  }
+
   sectorClear(): void {
     this.synth.play({ bus: "panel", wave: "triangle", freq: 659.25, level: 0.11, decay: 0.18 });
     this.synth.play({

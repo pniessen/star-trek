@@ -227,10 +227,14 @@ export class Session {
     if (destination === this.campaign.current) return;
     this.hyperwarpDestination = destination;
     this.hyperwarp.begin();
+    sound.hyperwarpCharge(HYPERWARP.charge);
   }
 
   /** Releasing early spends the energy already drained for nothing — that is the price of the gamble. */
   cancelHyperwarp(): void {
+    // `main.ts` asks to cancel every frame the key is not held, so this must
+    // only speak when there was actually a charge to break off.
+    if (this.hyperwarp.charging) sound.hyperwarpAbort();
     this.hyperwarp.cancel();
     this.hyperwarpDestination = -1;
   }
@@ -259,6 +263,7 @@ export class Session {
     // see the field comment. updateWaves() reads and clears this on its very
     // next call, whichever branch it takes.
     this.arrivedByJump = true;
+    sound.hyperwarpArrive();
     this.say("HYPERWARP");
   }
 

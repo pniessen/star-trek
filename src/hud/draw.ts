@@ -8,6 +8,7 @@ import type { Presentation } from "../game/presentation.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { GLYPH_ADVANCE } from "./strokeFont.js";
 import { drawChart, drawCommand } from "../chart/ChartView.js";
+import { colOf, rowOf } from "../chart/sectors.js";
 import type { Campaign } from "../chart/campaign.js";
 
 export interface HudView {
@@ -139,6 +140,10 @@ export function drawHud(hud: Hud, view: HudView): void {
 
   if (view.cameraMode === "cockpit" && session.state !== "dead") {
     drawReticle(hud, width / 2, height / 2, player.impact);
+  }
+
+  if (session.hyperwarp.charging) {
+    drawHyperwarp(hud, view, width / 2, 420);
   }
 
   if (session.docking.phase !== "none") {
@@ -538,6 +543,41 @@ function drawReticle(hud: Hud, cx: number, cy: number, impact: number): void {
  * you and turns green when each is satisfied, so lining up is a thing you do
  * rather than a thing that happens.
  */
+/**
+ * The charge, while it is charging.
+ *
+ * This instrument did not exist until a player reported the jump was broken.
+ * It was not: holding the key drained energy and locked the guns for two full
+ * seconds and said nothing, so the only reasonable reading was that nothing
+ * had happened. A commitment the player cannot see is indistinguishable from
+ * a dead key.
+ *
+ * It sits in the same clear band the docking panel uses, and cannot collide
+ * with it — `beginHyperwarp` refuses while docking.
+ */
+function drawHyperwarp(hud: Hud, view: HudView, cx: number, cy: number): void {
+  const { hyperwarp } = view.session;
+  const width = 150;
+  const progress = Math.min(1, hyperwarp.progress);
+
+  const centred = (text: string, y: number, scale: number, color: Color) =>
+    hud.text(text, cx - (text.length * GLYPH_ADVANCE * scale) / 2, y, scale, color);
+
+  // Magenta, because the destination is a place the ship has not resolved yet
+  // — the same reason the scanner paints an unresolved contact that colour.
+  hud.gauge(cx - width, cy, width * 2, 14, progress, PALETTE.magenta, 4);
+  hud.textRight("CHARGE", cx - width - 12, cy + 3, 1.4, PALETTE.traceDim);
+
+  // Where you are going, in the chart's own coordinates, so the number on the
+  // panel and the cell under the cursor are obviously the same thing.
+  const col = colOf(view.chartCursor);
+  const row = rowOf(view.chartCursor);
+  centred(`SECTOR ${String.fromCharCode(65 + col)}${row + 1}`, cy + 30, 1.8, PALETTE.magenta);
+
+  // The two things it costs, said plainly while there is still time to let go.
+  centred("GUNS COLD   MULTIPLIER HALVED", cy - 26, 1.4, PALETTE.traceDim);
+}
+
 function drawDockingPanel(hud: Hud, view: HudView, cx: number, cy: number): void {
   const { docking } = view.session;
   const g = docking.info;
