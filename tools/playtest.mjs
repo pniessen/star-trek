@@ -62,7 +62,10 @@ const waitFor = async (predicate, timeout = 25000) => {
   return state;
 };
 
-await page.goto("http://127.0.0.1:5173/", { waitUntil: "networkidle" });
+// 5173 is only the default. Several checkouts of this repo can be running dev
+// servers at once, and a harness that silently drives whichever one happens to
+// hold the default port is a harness that reports on somebody else's build.
+await page.goto(process.env.PLAYTEST_URL ?? "http://127.0.0.1:5173/", { waitUntil: "networkidle" });
 await page.evaluate(() => {
   window.__stage.bloom.enabled = false;
   window.__stage.phosphor.enabled = false;
@@ -75,8 +78,22 @@ await page.evaluate(() => {
 await page.keyboard.press("Enter");
 await waitFor((s) => s.mode === "run", 10000);
 
+// ── the opening log ─────────────────────────────────────────────────────────
+// A fresh browser context has an empty localStorage, so the campaign the page
+// boots with is a new war — the one time the log plays. It is a hold inside
+// mode "run", not a mode of its own, so it is read off its own probe field.
+let state = await waitFor((s) => s.briefing, 5000);
+check("a new campaign opens with the log", state.briefing === true, `briefing=${state.briefing}`);
+await page.screenshot({ path: `${OUT}/briefing.png` });
+
+// And any key ends it on the frame it arrives. Everything below this line
+// depends on that: the log holds the session, so a wave would never spawn.
+await page.keyboard.press("Enter");
+state = await waitFor((s) => !s.briefing, 3000);
+check("any key skips the log", state.briefing === false, `briefing=${state.briefing}`);
+
 // ── wave one arrives ────────────────────────────────────────────────────────
-let state = await waitFor((s) => s.wave >= 1 && s.hostiles > 0);
+state = await waitFor((s) => s.wave >= 1 && s.hostiles > 0);
 check("wave spawns", state.wave >= 1 && state.hostiles > 0, JSON.stringify(state));
 
 // ── shoot something ─────────────────────────────────────────────────────────

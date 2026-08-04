@@ -7,6 +7,7 @@ import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, HOSTILE_NAMES, type Fleet, type Hostile } from "../game/hostiles.js";
 import type { Presentation } from "../game/presentation.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
+import { drawBriefing } from "./briefing.js";
 import { GLYPH_ADVANCE } from "./strokeFont.js";
 import { CONTROL_COLOR, drawChart, drawCommand, sectorFacts, sectorFlags } from "../chart/ChartView.js";
 import { HYPERWARP } from "../game/hyperwarp.js";
@@ -123,6 +124,16 @@ export function drawHud(hud: Hud, view: HudView): void {
       report: presentation.report,
       time: view.time,
     });
+    hud.end();
+    return;
+  }
+
+  // The opening log takes the whole frame, the same way the title and the
+  // command view do, and for the same reason: there is nothing live to report
+  // under it. It runs inside mode "run" rather than as a mode of its own — see
+  // `game/briefing.ts` — so it is checked here rather than in the switch above.
+  if (presentation.briefing.active) {
+    drawBriefing(hud, presentation.briefing, view.time, width, height);
     hud.end();
     return;
   }

@@ -271,7 +271,10 @@ window.addEventListener("keydown", (event) => {
       sound.muted = !sound.muted;
       break;
     case "r":
-      if (presentation.mode === "run") {
+      // Not while the log is up. `R` means "run again, now", and during the
+      // opening log there is no run yet to repeat — so it falls through to the
+      // skip below and means the same thing every other key does there.
+      if (presentation.mode === "run" && !presentation.briefing.active) {
         // Through the shell, not straight into the session: `startRun()` is
         // what clears the resolved-run report. Calling `session.restart()`
         // directly left it set, so the *next* death would come up on the
@@ -306,6 +309,17 @@ window.addEventListener("keydown", (event) => {
   }
 
   if (DISPLAY_KEYS.has(key)) return;
+
+  // The opening log ends on the frame the key arrives, whatever the key and
+  // wherever the crawl has got to. This is a cabinet: the fastest way to make
+  // the loop feel like homework is a crawl a player cannot get out of. Handled
+  // before the mode dispatch because the log runs *inside* mode "run", and the
+  // dispatch below would otherwise read a key aimed at the log as a key aimed
+  // at a run that has not started.
+  if (presentation.briefing.active) {
+    presentation.briefing.skip();
+    return;
+  }
 
   if (presentation.mode === "command") {
     handleCommandKey(key);
@@ -520,7 +534,14 @@ function frame(now: number): void {
   // its own clock using real `dt` so the ease reads the same on any machine.
   // Only over a run: the command view is already a chart, and raising a second
   // one over it would put two cursors on one screen.
-  const wantsChart = held.has("tab") && presentation.mode === "run";
+  // The opening log, held in a local: it gates the session step, the camera,
+  // the hull and the alert bed, and reading it four times from a value that
+  // `presentation.update` may have just cleared is how those four disagree.
+  const briefing = presentation.briefing.active;
+
+  // Not over the log. The chart is an instrument of a run in progress, and
+  // during the log there is no run in progress to overlay it on.
+  const wantsChart = held.has("tab") && presentation.mode === "run" && !briefing;
   chartOpacity = approach(chartOpacity, wantsChart ? 1 : 0, dt, CHART_FADE_RATE);
   // Past the midpoint of the fade WASD is reading the map, not flying the
   // ship. Below it, control hands straight back — there is no separate mode
@@ -547,7 +568,13 @@ function frame(now: number): void {
   // itself, which is the whole of what these screens ask of the sim.
   const betweenRuns = presentation.mode === "title" || presentation.mode === "command";
 
-  if (betweenRuns) {
+  if (briefing) {
+    // Nothing at all. The run has begun and the board is empty — `restart()`
+    // cleared it — so holding the session here is what makes the log a moment
+    // before the drop rather than something to read while a wave closes. The
+    // hull is not even turned on the spot: it is not the subject of this
+    // screen, and it is hidden below.
+  } else if (betweenRuns) {
     player.heading += dt * 0.2;
   } else {
     const alive = session.state !== "dead";
@@ -611,7 +638,9 @@ function frame(now: number): void {
     hull: player.hull,
     thrust: burn,
     speed: player.speed,
-    alive: presentation.mode !== "title" && session.state !== "dead",
+    // The log is not a run yet, so the alert bed stays off under it — the
+    // panel blips the crawl fires are the only thing that should be audible.
+    alive: !briefing && presentation.mode !== "title" && session.state !== "dead",
     docked: session.docking.held,
   });
 
@@ -626,11 +655,15 @@ function frame(now: number): void {
   // once it has become debris there is nothing left to draw.
   // The title screen is the hull's showcase; the command view is the chart's,
   // and a ship drifting across twelve rows of type is only in the way.
+  // The opening log is the command view's problem all over again: a document
+  // filling the frame, and a wireframe hull drifting across it is clutter over
+  // the only thing on screen worth reading.
   playerHull.group.visible =
-    presentation.mode === "title" ||
-    (presentation.mode !== "command" &&
-      settings.camera !== "cockpit" &&
-      !session.death.hidesHull);
+    !briefing &&
+    (presentation.mode === "title" ||
+      (presentation.mode !== "command" &&
+        settings.camera !== "cockpit" &&
+        !session.death.hidesHull));
   starbase.group.rotation.y = time * 0.06;
 
   trace.begin();
@@ -643,7 +676,11 @@ function frame(now: number): void {
 
   grid.follow(player.position.x, player.position.z);
 
-  if (presentation.mode === "command") placeCommandCamera(time);
+  // The log borrows the command view's camera, and for the same reason it was
+  // written: pitched off the plane at open sky, where a starfield has no edges
+  // to compete with type. Reused rather than reinvented — a fifth camera that
+  // did the same job would be a fifth camera to keep in agreement.
+  if (briefing || presentation.mode === "command") placeCommandCamera(time);
   else if (presentation.mode === "title") placeTitleCamera(time);
   else if (session.death.phase !== "none") placeWreckCamera(session.death, time);
   else placeCamera(settings.camera, time);
@@ -678,6 +715,9 @@ function frame(now: number): void {
       // The shell around the run — "title" / "attract" / "run". `state` still
       // means what it always did; a title screen is not a phase of combat.
       mode: presentation.mode,
+      // The opening log, which is a hold inside mode "run" rather than a mode
+      // of its own — so a harness cannot see it from `mode` and has to be told.
+      briefing: presentation.briefing.active,
       death: session.death.phase,
       dock: session.docking.phase,
       // Hit-stop, so the harness can prove it dilates and then lets go. A
