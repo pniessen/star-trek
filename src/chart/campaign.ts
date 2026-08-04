@@ -1,4 +1,5 @@
 import { GRID, SECTOR_COUNT, indexOf, rowOf } from "./sectors.js";
+import { feedbackOn, RESERVE } from "./feedback.js";
 
 export type Control = "ours" | "contested" | "theirs";
 export type StructureKind = "listening-post" | "outpost" | "starbase" | "yard";
@@ -27,6 +28,13 @@ export interface Sector {
   yield: number;
   structures: Structure[];
   patrol?: Patrol;
+  /**
+   * Candidate feedback term only — see `feedback.ts`'s `entrench`. Clears the
+   * enemy has dug in here that must be broken before the sector will move.
+   * Optional, and absent everywhere unless the term is on, so a save written
+   * without it loads unchanged.
+   */
+  entrenched?: number;
 }
 
 /**
@@ -61,6 +69,15 @@ export interface Campaign {
   /** Index of the sector the player is in right now. Hyperwarp moves it. */
   current: number;
   incoming: IncomingMove[];
+  /**
+   * Candidate feedback term only — see `feedback.ts`'s `reserve`. What the
+   * invasion has left to spend. Optional and absent unless the term is on, so
+   * a save written without it loads unchanged; `runEnemyTurn` seeds it on
+   * first use rather than `newCampaign` writing it into every save.
+   */
+  reserve?: number;
+  /** Candidate feedback term only. Consecutive turns the reserve has been empty. */
+  exhausted?: number;
 }
 
 export const CAMPAIGN_VERSION = 1;
@@ -132,9 +149,17 @@ export function canDock(sector: Sector): boolean {
   return hasStructure(sector, "starbase") || hasStructure(sector, "outpost");
 }
 
-/** The war is winnable even though the run is not: push the front off. */
+/**
+ * The war is winnable even though the run is not: push the front off.
+ *
+ * Under the `reserve` candidate there is a second way to win, which is the
+ * whole reason that candidate exists — an invasion with nothing left to spend
+ * is broken whether or not the last square has changed colour. Off in the
+ * shipped game; see `feedback.ts`.
+ */
 export function isWon(campaign: Campaign): boolean {
-  return countControl(campaign, "theirs") === 0;
+  if (countControl(campaign, "theirs") === 0) return true;
+  return feedbackOn("reserve") && (campaign.exhausted ?? 0) >= RESERVE.brokenFor;
 }
 
 /** Lose the last starbase and everything built is gone. */

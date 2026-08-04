@@ -1,5 +1,6 @@
 import { countControl, hasStructure, ENEMY_START_DEPTH, type Campaign, type Sector } from "./campaign.js";
 import { GRID, neighbours } from "./sectors.js";
+import { ENTRENCH, feedbackOn, RESERVE, SUPPLY } from "./feedback.js";
 import type { Rng } from "./rng.js";
 
 /**
@@ -51,11 +52,33 @@ function sectorsHeldBeyondStart(campaign: Campaign): number {
 }
 
 export function pressureBudget(campaign: Campaign): number {
-  return (
-    PRESSURE.base +
-    Math.floor(campaign.runsElapsed / PRESSURE.runsPerStep) +
-    sectorsHeldBeyondStart(campaign)
-  );
+  const clock = Math.floor(campaign.runsElapsed / PRESSURE.runsPerStep);
+
+  // Candidate: supply lines. Everything the invasion spends, escalation
+  // included, is drawn from the ground it holds — so losing ground weakens it
+  // in proportion rather than only above the depth it opened with. Off unless
+  // `tools/campaignlength.mjs` turns it on; see `feedback.ts`.
+  if (feedbackOn("supply")) {
+    const share = countControl(campaign, "theirs") / (ENEMY_START_DEPTH * GRID);
+    return Math.max(SUPPLY.floor, Math.round((PRESSURE.base + clock) * share));
+  }
+
+  const ambition = PRESSURE.base + clock + sectorsHeldBeyondStart(campaign);
+
+  // Candidate: the invasion is finite. The formula above becomes what the
+  // enemy would like to spend; what it can spend is whatever is left in the
+  // reserve. Replenishment and the player's drain are applied in
+  // `runEnemyTurn`, which is the only thing that takes a turn.
+  if (feedbackOn("reserve")) {
+    return Math.min(ambition, Math.floor(reserveOf(campaign) * RESERVE.commit));
+  }
+
+  return ambition;
+}
+
+/** Seeded on first read rather than in `newCampaign`, so saves stay unchanged. */
+export function reserveOf(campaign: Campaign): number {
+  return campaign.reserve ?? RESERVE.initial;
 }
 
 function defenceOf(sector: Sector): number {
@@ -81,7 +104,20 @@ function defenceOf(sector: Sector): number {
 export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
   resolveIncoming(campaign);
 
+  // Candidate: the invasion is finite. Replenishment happens before the spend
+  // and from the board as it stands after last turn's pushes landed, so ground
+  // taken during the run is ground that does not pay for this turn's attack.
+  if (feedbackOn("reserve")) {
+    campaign.reserve = Math.min(
+      RESERVE.max,
+      reserveOf(campaign) +
+        RESERVE.regenFlat +
+        RESERVE.regenPerSector * countControl(campaign, "theirs"),
+    );
+  }
+
   let budget = pressureBudget(campaign);
+  const spendable = budget;
   const actions: EnemyAction[] = [];
 
   // Frozen up front as defence-in-depth: nothing in this turn's spending
@@ -119,6 +155,16 @@ export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
     apply(campaign, option.index, option.kind!);
     actions.push({ kind: option.kind!, sector: option.index, cost: option.cost });
   }
+
+  // Only what was actually spent comes out — budget the enemy could not place
+  // for want of a target stays in the reserve, which is what lets a compressed
+  // invasion bank for one hard counter-attack instead of evaporating.
+  if (feedbackOn("reserve")) {
+    campaign.reserve = reserveOf(campaign) - (spendable - budget);
+    // Empty, and staying empty, is what being broken looks like from here.
+    campaign.exhausted = campaign.reserve < 1 ? (campaign.exhausted ?? 0) + 1 : 0;
+  }
+
   return actions;
 }
 
@@ -130,6 +176,12 @@ function priceOf(
     // Assault only lands on ground already theirs, per the design table.
     if (sector.structures.length > 0) {
       return { kind: "assault", cost: ACTION_COST.assault };
+    }
+    // Candidate: entrenchment. Consolidate stays available until the ground is
+    // dug in as far as it goes, rather than stopping at threat 5 — which is
+    // where the enemy's own two back rows start, so today it stops at once.
+    if (feedbackOn("entrench") && (sector.entrenched ?? 0) < ENTRENCH.max) {
+      return { kind: "consolidate", cost: ACTION_COST.consolidate };
     }
     if (sector.threat < 5) return { kind: "consolidate", cost: ACTION_COST.consolidate };
     return { kind: null, cost: 0 };
@@ -145,6 +197,11 @@ function apply(campaign: Campaign, index: number, kind: EnemyAction["kind"]): vo
   switch (kind) {
     case "consolidate":
       sector.threat = Math.min(5, sector.threat + 1);
+      // Candidate: entrenchment. The same action, given something to buy once
+      // threat has topped out — which on the enemy's own ground it already has.
+      if (feedbackOn("entrench")) {
+        sector.entrenched = Math.min(ENTRENCH.max, (sector.entrenched ?? 0) + 1);
+      }
       break;
     case "assault":
       // Retaking ground costs more than holding it: what they break is gone.
