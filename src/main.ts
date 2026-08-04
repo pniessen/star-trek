@@ -25,6 +25,7 @@ import { drawHud } from "./hud/draw.js";
 import { load, save } from "./chart/persistence.js";
 import { colOf, indexOf, inBounds, neighbours, rowOf } from "./chart/sectors.js";
 import { DECISIONS, decide } from "./chart/command.js";
+import { jumpCharge, jumpSteps } from "./chart/jump.js";
 import type { Campaign } from "./chart/campaign.js";
 
 /** Publishes state on `window.__probe` for headless checks. */
@@ -172,10 +173,24 @@ const pressed = new Set<string>();
 const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "m", "1", "2", "3", "[", "]", "-", "=", "tab"]);
 
 /**
- * The command view's keyboard, in two idioms and no more: the arrows move the
- * cursor over the map, W/S move down the list of decisions. Two is what keeps
- * the "no submenus" rule honest — there is no third mode to be in and nothing
- * to descend into, so every decision is one keypress from every other.
+ * The command view's keyboard, in two idioms and no more.
+ *
+ * **WASD moves the sector cursor on the grid, on every screen that has a
+ * grid.** It used to move the decision list here while the arrows moved the
+ * map — the exact opposite of the in-run overlay, which is the same 8x8 map
+ * with WASD on its cursor. So the one key group that meant "move around the
+ * map" in flight meant "move around a list" thirty seconds later, on a screen
+ * showing that same map, and a player arrived at this screen with a habit it
+ * immediately contradicted. That is now the rule and it has no exceptions.
+ *
+ * The decision list therefore takes the up and down arrows: they are the other
+ * pair, they are unused for the list, and in flight they fly the ship, so
+ * nothing collides. Left and right are deliberately inert here — a second job
+ * for them is how the ambiguity would come back.
+ *
+ * Two idioms is what keeps the "no submenus" rule honest: there is no third
+ * mode to be in and nothing to descend into, so every decision is one keypress
+ * from every other.
  */
 function handleCommandKey(key: string): void {
   if (key === "enter" || key === "r") {
@@ -184,20 +199,20 @@ function handleCommandKey(key: string): void {
     return;
   }
 
-  if (key.startsWith("arrow")) {
-    const nextCol = colOf(chartCursor) + (key === "arrowright" ? 1 : key === "arrowleft" ? -1 : 0);
+  if (key === "w" || key === "a" || key === "s" || key === "d") {
+    const nextCol = colOf(chartCursor) + (key === "d" ? 1 : key === "a" ? -1 : 0);
     // Row 0 is the enemy's home edge and is drawn at the top — see `drawGrid` —
     // so up the screen is a decreasing row, the same way the in-run cursor
     // reads it.
-    const nextRow = rowOf(chartCursor) + (key === "arrowdown" ? 1 : key === "arrowup" ? -1 : 0);
+    const nextRow = rowOf(chartCursor) + (key === "s" ? 1 : key === "w" ? -1 : 0);
     if (inBounds(nextCol, nextRow)) chartCursor = indexOf(nextCol, nextRow);
     // The old answer was about the old sector, so it stops being true here.
     commandMessage = "";
     return;
   }
 
-  if (key === "w" || key === "s") {
-    const step = key === "w" ? -1 : 1;
+  if (key === "arrowup" || key === "arrowdown") {
+    const step = key === "arrowup" ? -1 : 1;
     commandSelection = (commandSelection + step + DECISIONS.length) % DECISIONS.length;
     return;
   }
@@ -693,6 +708,13 @@ function frame(now: number): void {
       hyperwarpProgress: +session.hyperwarp.progress.toFixed(3),
       sector: campaign.current,
       inbound: campaign.incoming.length,
+      // Distance now prices a jump, so a harness has to be able to see the
+      // price it was quoted as well as the phase it reached.
+      jumpSteps: jumpSteps(campaign.current, chartCursor),
+      jumpCharge: +jumpCharge(campaign.current, chartCursor).toFixed(2),
+      hyperwarpDuration: +session.hyperwarp.duration.toFixed(2),
+      arrivalCard: +session.arrivalCard.toFixed(2),
+      station: session.docking.stationName,
       // The overlay itself, so a headless harness can prove Tab actually
       // raises it and WASD actually steps the cursor, rather than only
       // re-reading a predicate the game already had to satisfy for some

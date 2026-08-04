@@ -4,12 +4,21 @@ import type { Hud } from "../hud/Hud.js";
 import { GLYPH_ADVANCE } from "../hud/strokeFont.js";
 import { colOf, rowOf, GRID } from "./sectors.js";
 import { canDock, countControl, isLost, isWon, type Campaign, type Control } from "./campaign.js";
-import { DECISIONS, HEADINGS, loadoutSummary, refusal, sectorName } from "./command.js";
+import { DECISIONS, HEADINGS, intent, loadoutSummary, refusal, sectorCode } from "./command.js";
 import { isFitted, patrolCapacity, patrolCount, structureSpec, type RefitId, type RunReport } from "./economy.js";
+import { regionName, stationName } from "./naming.js";
+import { jumpCharge, jumpEnergy, jumpReach, jumpSteps } from "./jump.js";
 
 /** Laid out in the HUD's fixed 800-unit design space, like everything else. */
 export const CHART = {
-  size: 460,
+  /**
+   * Smaller than it was. The overlay now carries a readout, a jump price, a
+   * key and a control line beneath the grid, and all of that has to clear the
+   * shield cluster at the bottom of the panel — an overlay that lands on the
+   * instrument telling you which quarter is about to fail is worse than one
+   * that is slightly harder to count squares on.
+   */
+  size: 340,
   /** The command view's copy, shrunk to leave the decisions room beside it. */
   commandSize: 380,
 } as const;
@@ -24,7 +33,7 @@ export const CHART = {
  * `PALETTE.amber` ("alerts, and the raider class") is the same reuse for
  * "theirs" — not a lookalike literal, the actual catalogued colour.
  */
-const CONTROL_COLOR: Record<Control, Color> = {
+export const CONTROL_COLOR: Record<Control, Color> = {
   ours: PALETTE.trace,
   contested: PALETTE.magenta,
   theirs: PALETTE.amber,
@@ -48,14 +57,36 @@ export interface CommandFrame {
 }
 
 /**
- * The tactical overlay: the same map, faded over a run that is still moving.
+ * What the in-run overlay needs from the run behind it. Only the reserve and
+ * the drain rate come from the ship: `src/chart/` must not depend on
+ * `src/game/`, so the one combat constant a jump is priced in is passed rather
+ * than imported.
  */
-export function drawChart(
-  hud: Hud,
-  campaign: Campaign,
-  opacity: number,
-  cursor: number,
-): void {
+export interface ChartFrame {
+  /** 0-1, eased in `main.ts` while Tab is held. */
+  readonly opacity: number;
+  readonly cursor: number;
+  /** Real seconds, for the cursor's pulse. Time-based, not frame-based. */
+  readonly time: number;
+  /** The energy reserve, 0-1. What a jump has to be paid out of. */
+  readonly reserve: number;
+  /** `HYPERWARP.drainPerSecond`. */
+  readonly drainPerSecond: number;
+}
+
+/**
+ * The tactical overlay: the same map, faded over a run that is still moving.
+ *
+ * Everything below the grid is here because the overlay does not pause the
+ * game, which makes every second spent deciphering it a second of being shot
+ * at. A player who could not tell what the ring in a square meant was reading
+ * a map with no key, no readout and no statement of what a jump would cost —
+ * so the map now carries all three, and the cursor is drawn with rules running
+ * out to the edges of the grid because "the cursor gets lost" is not a
+ * brightness problem.
+ */
+export function drawChart(hud: Hud, campaign: Campaign, frame: ChartFrame): void {
+  const { opacity, cursor } = frame;
   // `chartOpacity` is an exponential ease in main.ts: it approaches zero after
   // the player releases Tab but never mathematically reaches it, so `<= 0`
   // would only ever be true before the first press. Without a real cutoff
@@ -68,15 +99,140 @@ export function drawChart(
   // left, not centred on zero — so the chart centres itself here, on the
   // panel's own footprint, rather than assuming a coordinate space it is not
   // drawn into.
-  const { width, height } = hud.size;
+  const { width } = hud.size;
+  const originX = width / 2 - CHART.size / 2;
+  // Sat well above centre so the readout, the price of a jump, the key and the
+  // control line all fit between the grid and the shield cluster, which owns
+  // everything below y=130 at every window size.
+  const originY = 300;
   drawGrid(hud, campaign, {
-    originX: width / 2 - CHART.size / 2,
-    originY: height / 2 - CHART.size / 2,
+    originX,
+    originY,
     cell: CHART.size / GRID,
     opacity,
     cursor,
-    holdings: false,
+    time: frame.time,
+    // Structures and patrols are shown in flight now. They were the reason to
+    // prefer one square over another and they were only ever drawn between
+    // runs, which is most of why the sectors read as interchangeable.
+    holdings: true,
   });
+
+  let y = originY - 26;
+  hud.text(
+    sectorHeadline(campaign, cursor),
+    originX,
+    y,
+    2.2,
+    fade(CONTROL_COLOR[campaign.sectors[cursor].control], opacity),
+  );
+  y -= 21;
+  hud.text(sectorFacts(campaign, cursor), originX, y, 1.5, fade(PALETTE.traceDim, opacity));
+
+  const flags = sectorFlags(campaign, cursor);
+  if (flags) {
+    y -= 18;
+    hud.text(flags, originX, y, 1.5, fade(PALETTE.amber, opacity));
+  }
+
+  y -= 18;
+  drawJumpLine(hud, campaign, frame, originX, y);
+
+  // The key is allowed to run wider than the grid — it wraps to two rows at
+  // this width rather than three, and a third row is what pushes the control
+  // line into the shield cluster on a short window.
+  y -= 22;
+  y = drawLegend(hud, originX, y, CHART.size + 150, opacity);
+
+  // The controls, beside the thing they drive rather than in a corner.
+  //
+  // `WASD PICK SECTOR` is worded identically to the command view's caption on
+  // purpose: it is the same map and the same key group doing the same job, and
+  // saying it two different ways is how a player ends up believing they are two
+  // different things. The arrows keep flying, which is what makes reading the
+  // chart mid-fight possible at all.
+  let keyX = originX;
+  for (const [key, meaning] of [
+    ["WASD", "PICK SECTOR"],
+    ["SHIFT", "JUMP THERE"],
+    ["ARROWS", "STILL FLY"],
+  ] as const) {
+    keyX += hud.text(key, keyX, y - 26, 1.6, fade(PALETTE.amber, opacity)) + 6;
+    keyX += hud.text(meaning, keyX, y - 26, 1.6, fade(PALETTE.traceDim, opacity)) + 18;
+  }
+}
+
+/**
+ * The answer to "how hard is a long warp", which until now was "it isn't".
+ *
+ * Distance sets the charge — see `chart/jump.ts` — so this states the two
+ * things that follow from it: how long the guns are cold, and whether the
+ * reserve covers the jump at all. Out of reach is drawn as a refusal rather
+ * than left to be discovered when the charge dies halfway.
+ */
+function drawJumpLine(
+  hud: Hud,
+  campaign: Campaign,
+  frame: ChartFrame,
+  x: number,
+  y: number,
+): void {
+  const { cursor, opacity, reserve, drainPerSecond } = frame;
+  const steps = jumpSteps(campaign.current, cursor);
+  if (steps === 0) {
+    hud.text("YOU ARE HERE", x, y, 1.6, fade(PALETTE.trace, opacity));
+    return;
+  }
+
+  const seconds = jumpCharge(campaign.current, cursor);
+  const cost = jumpEnergy(campaign.current, cursor, drainPerSecond);
+  const short = cost > reserve;
+  const line =
+    `JUMP ${steps}   GUNS COLD ${seconds.toFixed(1)}S   COSTS ${Math.round(cost * 100)}% RESERVE`;
+  const tail = short ? `   OUT OF REACH  ${jumpReach(reserve, drainPerSecond)} MAX` : "";
+  hud.text(line + tail, x, y, 1.6, fade(short ? PALETTE.amber : PALETTE.traceDim, opacity));
+}
+
+// ── what is in a sector, in words ───────────────────────────────────────────
+//
+// Shared by the in-run overlay, the command view and the arrival card, for the
+// same reason `drawGrid` is shared: three descriptions of one sector is three
+// chances for them to disagree about what a ring means.
+
+/** e.g. "C4  PELLAS REACH". The place, not the coordinate. */
+export function sectorHeadline(campaign: Campaign, index: number): string {
+  return `${sectorCode(index)}  ${regionName(campaign.seed, index)}`;
+}
+
+/** The three facts that change what happens when you go there. */
+export function sectorFacts(campaign: Campaign, index: number): string {
+  const sector = campaign.sectors[index];
+  return [
+    `THREAT ${sector.threat}`,
+    `PAYS X${1 + sector.yield}`,
+    // The ring in the square, said in words. This is the mark a player could
+    // not read and the single most decision-relevant one on the map: it is
+    // where a multiplier can be turned into salvage.
+    canDock(sector) ? `BANK AT ${stationName(campaign.seed, index)}` : "NO DOCK HERE",
+  ].join("   ");
+}
+
+/** Whatever is true of a sector and worth acting on. Empty when nothing is. */
+export function sectorFlags(campaign: Campaign, index: number): string {
+  const sector = campaign.sectors[index];
+  const flags: string[] = [];
+  if (campaign.incoming.some((move) => move.sector === index)) {
+    flags.push("ATTACK INBOUND  CLEAR IT TO BREAK IT");
+  }
+  // The only thing in the game that moves a sector back toward you, and it
+  // happens by flying there — so the sector that can be taken should say so.
+  if (sector.control !== "ours") {
+    flags.push(`${sector.control === "theirs" ? "THEIRS" : "CONTESTED"}  CLEAR IT TO TAKE IT`);
+  }
+  if (sector.patrol) flags.push(`PATROL ${sector.patrol.strength}`);
+  const building = sector.structures.filter((structure) => structure.runsRemaining > 0).length;
+  if (building) flags.push(`${building} BUILDING`);
+  return flags.join("   ");
 }
 
 interface GridPlacement {
@@ -85,7 +241,9 @@ interface GridPlacement {
   readonly cell: number;
   readonly opacity: number;
   readonly cursor: number;
-  /** Structures, patrols and the chosen front. Only the command view shows them. */
+  /** Real seconds. The cursor pulses, so it needs a clock rather than a frame count. */
+  readonly time: number;
+  /** Structures, patrols and the chosen front. */
   readonly holdings: boolean;
 }
 
@@ -97,6 +255,25 @@ interface GridPlacement {
  */
 function drawGrid(hud: Hud, campaign: Campaign, place: GridPlacement): void {
   const { originX, originY, cell, opacity, cursor, holdings } = place;
+  const span = cell * GRID;
+
+  // Rules running the full width and height of the grid through the cursor's
+  // cell, drawn under everything else.
+  //
+  // This is the fix for "the cursor gets lost", and it is a fix in *kind*
+  // rather than in degree: a brighter box is still a box you have to find by
+  // scanning sixty-four of them, whereas two lines crossing the whole map are
+  // found by peripheral vision alone. The same reason a spreadsheet highlights
+  // the row and the column and not only the cell.
+  const cursorX = originX + colOf(cursor) * cell;
+  const cursorY = originY + (GRID - 1 - rowOf(cursor)) * cell;
+  hud.segments(
+    [
+      originX, cursorY + cell / 2, originX + span, cursorY + cell / 2,
+      cursorX + cell / 2, originY, cursorX + cell / 2, originY + span,
+    ],
+    fade(PALETTE.amber, opacity * 0.3),
+  );
 
   for (let i = 0; i < campaign.sectors.length; i++) {
     const sector = campaign.sectors[i];
@@ -156,7 +333,11 @@ function drawGrid(hud: Hud, campaign: Campaign, place: GridPlacement): void {
       hud.rect(x + 2, y + 2, cell - 4, cell - 4, fade(PALETTE.trace, opacity));
     }
     if (i === cursor) {
-      hud.rect(x, y, cell, cell, fade(PALETTE.amber, opacity));
+      // Pulsed, on real seconds. A mark that moves is found before a mark that
+      // is merely bright, and the whole complaint about this cursor was that it
+      // could not be found.
+      const pulse = opacity * (0.78 + 0.22 * Math.sin(place.time * 4.2));
+      hud.rect(x, y, cell, cell, fade(PALETTE.amber, pulse));
       // Corners outside the box, so the cursor still reads on a cell that is
       // already filled because you are standing in it.
       const a = 5;
@@ -230,8 +411,19 @@ function drawHoldings(
 
 // ── the command view ────────────────────────────────────────────────────────
 
-const ROW_HEIGHT = 26;
+const ROW_HEIGHT = 24;
+/** Space above a section label, so the label belongs to what follows it. */
+const HEADING_LEAD = 8;
+/** The selected row's own sub-lines: what Space does, and why it would not. */
+const SUB_LINE = 17;
 const COLUMN = { chart: 0, options: 430, width: 940 } as const;
+
+/**
+ * Baselines below both columns. Low enough that the map's key can wrap to a
+ * third row without the enemy's report landing on top of it — which it did,
+ * because the key grew and the footer did not move.
+ */
+const FOOTER = { report: 118, message: 92 } as const;
 
 /**
  * The command view: the same map, zoomed to fill, with the four decisions
@@ -242,6 +434,22 @@ const COLUMN = { chart: 0, options: 430, width: 940 } as const;
  * if a chart visit takes longer than a run the layer has failed. The list
  * reads top to bottom as the sentence the design states: spend, equip,
  * position, go.
+ *
+ * The list stays flat, and that survived a second look. A player who could not
+ * work out how to pick an action was, on the face of it, arguing for a
+ * two-step selection — choose BUILD, then choose which structure — but that is
+ * a submenu, which the design forbids by name. What had actually failed was
+ * labelling: two cursors that never said they were two cursors, four section
+ * headings drawn like a menu bar you could select, and the keys explained in a
+ * footer forty units from anything they operate. So the fix is entirely in
+ * where things are said and where they are said *from*:
+ *
+ * - Each cursor carries its own key caption directly above the thing it moves
+ *   over: `ARROWS PICK SECTOR` above the map, `W/S PICK ACTION` above the list.
+ * - The selected row states, on its own next line, exactly what `Space` will
+ *   do and to which sector — resolved before the key is pressed, not after.
+ * - The headings hang out in the left margin under a rule, small and dim, so
+ *   nothing about them offers itself to a keypress.
  */
 export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): void {
   const { width, height } = hud.size;
@@ -285,31 +493,47 @@ export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): 
     PALETTE.traceDim,
   );
 
+  const optionsX = left + COLUMN.options;
+  const costX = right;
+
+  // ── the two cursors, each captioned where it lives ──
+  // Side by side on one baseline, so the very first thing the screen says is
+  // that there are two of these and which keys drive which.
+  const captionY = height - 152;
+  // WASD on the grid, on both screens — see `handleCommandKey` in `main.ts` for
+  // why that rule has no exceptions. The list takes the other pair.
+  roleCaption(hud, left + COLUMN.chart, captionY, "WASD", "PICK SECTOR", "sector");
+  roleCaption(hud, optionsX, captionY, "UP/DOWN", "PICK ACTION", "list");
+
   // ── the map ──
-  const chartY = height - 170 - CHART.commandSize;
+  const chartY = captionY - 6 - CHART.commandSize;
   drawGrid(hud, campaign, {
     originX: left + COLUMN.chart,
     originY: chartY,
     cell,
     opacity: 1,
     cursor: frame.cursor,
+    time: frame.time,
     holdings: true,
   });
 
-  drawSectorReadout(hud, campaign, frame.cursor, left, chartY - 30);
-  drawLegend(hud, left + COLUMN.chart, chartY - 62, CHART.commandSize);
+  const legendY = drawSectorReadout(hud, campaign, frame.cursor, left, chartY - 26);
+  drawLegend(hud, left + COLUMN.chart, legendY, CHART.commandSize, 1);
 
   // ── the four decisions ──
-  const optionsX = left + COLUMN.options;
-  const costX = right;
-  let y = height - 176;
+  let y = captionY - 28;
   let previous: string | null = null;
 
   DECISIONS.forEach((decision, index) => {
     if (decision.kind !== previous) {
       previous = decision.kind;
-      y -= 6;
-      hud.text(HEADINGS[decision.kind], optionsX, y, 1.8, PALETTE.traceDim);
+      y -= HEADING_LEAD;
+      // Hung out into the left margin, small, dim, and underlined across the
+      // whole column. Drawn as a row it read as a menu bar — the four words a
+      // player named as the thing they could not work out how to select — and
+      // it is not one: it is a label for the rows beneath it.
+      hud.textRight(HEADINGS[decision.kind], optionsX - 12, y + 2, 1.4, PALETTE.traceDim);
+      hud.segments([optionsX, y + 4, costX + 20, y + 4], scaled(PALETTE.traceDim, 0.45));
       y -= ROW_HEIGHT;
     }
 
@@ -353,14 +577,68 @@ export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): 
     // Only the highlighted row explains itself. Twelve permanently-expanded
     // rows is a spreadsheet, which is the thing this layer is defined against.
     if (chosen) {
-      y -= 18;
-      hud.text(decision.detail, optionsX + 8, y, 1.5, PALETTE.traceDim);
+      const said = intent(campaign, decision, frame.cursor);
+      y -= SUB_LINE;
+      // `SPACE` is a key, so it is amber like every other key on this screen,
+      // and the sentence after it names the sector under the *other* cursor.
+      // That is the sentence the whole screen was missing.
+      const keyEnd = hud.text("SPACE", optionsX + 8, y, 1.5, PALETTE.amber);
+      hud.text(
+        said.line,
+        optionsX + 8 + keyEnd + 10,
+        y,
+        1.5,
+        said.refused ? PALETTE.traceDim : PALETTE.trace,
+      );
+      y -= SUB_LINE;
+      // Refused rows say why *before* the key is pressed. `refusal()` has
+      // always returned a line rather than a boolean; it was only ever wired
+      // to the after-the-fact message, so the screen taught by failure alone.
+      hud.text(
+        said.refused ?? decision.detail,
+        optionsX + 8,
+        y,
+        1.5,
+        said.refused ? PALETTE.amber : PALETTE.traceDim,
+      );
     }
     y -= ROW_HEIGHT;
   });
 
-  // ── the footer: what just happened, and what to press ──
+  // ── the footer: what just happened, and the one key not tied to a cursor ──
   drawReport(hud, campaign, frame, cx, left, right, over);
+}
+
+/**
+ * A key and what it moves, drawn immediately above the thing it moves over,
+ * with a glyph of the key's own shape.
+ *
+ * A hint that is not beside the thing it explains is a hint nobody reads —
+ * which is what happened to the footer row this replaces. "CHOOSE" also did
+ * not say choose *what*: naming the two targets is what distinguishes the two
+ * cursors from each other, and that was the thing that was unclear.
+ */
+function roleCaption(
+  hud: Hud,
+  x: number,
+  y: number,
+  key: string,
+  meaning: string,
+  glyph: "sector" | "list",
+): void {
+  const marks: number[] =
+    glyph === "sector"
+      ? // A four-way: this cursor moves over a plane.
+        [x, y + 4, x + 12, y + 4, x + 6, y - 2, x + 6, y + 10,
+         x, y + 4, x + 3, y + 7, x, y + 4, x + 3, y + 1,
+         x + 12, y + 4, x + 9, y + 7, x + 12, y + 4, x + 9, y + 1]
+      : // A double-ended vertical: this one moves up and down a list.
+        [x + 6, y - 2, x + 6, y + 10,
+         x + 6, y + 10, x + 3, y + 7, x + 6, y + 10, x + 9, y + 7,
+         x + 6, y - 2, x + 3, y + 1, x + 6, y - 2, x + 9, y + 1];
+  hud.segments(marks, PALETTE.amber);
+  const keyEnd = hud.text(key, x + 20, y, 1.8, PALETTE.amber);
+  hud.text(meaning, x + 20 + keyEnd + 10, y, 1.8, PALETTE.traceDim);
 }
 
 /**
@@ -371,9 +649,12 @@ export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): 
  * at a glance and one you have to be told about — and being told about it is
  * exactly what happened.
  */
-function drawLegend(hud: Hud, x: number, y: number, width: number): void {
+function drawLegend(hud: Hud, x: number, y: number, width: number, opacity: number): number {
   const swatch = 13;
   let cursorX = x;
+  // Its own object rather than the shared scratch: this one is held across
+  // every entry below, and `fade` is called in between by the swatches.
+  const dim = PALETTE.traceDim.clone().multiplyScalar(opacity);
 
   const entry = (label: string, draw: (sx: number, sy: number) => void): void => {
     // Wrap to a second row rather than running off the map's right edge.
@@ -383,30 +664,54 @@ function drawLegend(hud: Hud, x: number, y: number, width: number): void {
     }
     draw(cursorX, y);
     cursorX += swatch + 5;
-    cursorX += hud.text(label, cursorX, y + 3, 1.4, PALETTE.traceDim) + 16;
+    cursorX += hud.text(label, cursorX, y + 3, 1.4, dim) + 16;
   };
 
   entry("YOU", (sx, sy) => {
-    fillCell(hud, sx, sy, swatch, swatch, scaled(PALETTE.trace, 0.55));
-    hud.rect(sx, sy, swatch, swatch, PALETTE.trace);
+    fillCell(hud, sx, sy, swatch, swatch, fade(PALETTE.trace, opacity * 0.55));
+    hud.rect(sx, sy, swatch, swatch, fade(PALETTE.trace, opacity));
   });
-  entry("CURSOR", (sx, sy) => hud.rect(sx, sy, swatch, swatch, PALETTE.amber));
-  entry("OURS", (sx, sy) => hud.rect(sx, sy, swatch, swatch, CONTROL_COLOR.ours));
-  entry("CONTESTED", (sx, sy) => hud.rect(sx, sy, swatch, swatch, CONTROL_COLOR.contested));
-  entry("THEIRS", (sx, sy) => hud.rect(sx, sy, swatch, swatch, CONTROL_COLOR.theirs));
-  entry("DOCK", (sx, sy) =>
-    ring(hud, sx + swatch / 2, sy + swatch / 2, swatch * 0.3, PALETTE.trace),
+  entry("CURSOR", (sx, sy) => hud.rect(sx, sy, swatch, swatch, fade(PALETTE.amber, opacity)));
+  entry("OURS", (sx, sy) =>
+    hud.rect(sx, sy, swatch, swatch, fade(CONTROL_COLOR.ours, opacity)),
+  );
+  entry("CONTESTED", (sx, sy) =>
+    hud.rect(sx, sy, swatch, swatch, fade(CONTROL_COLOR.contested, opacity)),
+  );
+  entry("THEIRS", (sx, sy) =>
+    hud.rect(sx, sy, swatch, swatch, fade(CONTROL_COLOR.theirs, opacity)),
+  );
+  // Named for what it is *for*, not for what it is. "DOCK" was already on the
+  // key and a player still could not say what the ring in a square meant; the
+  // multiplier is the currency, so the ring is where the currency is realised.
+  entry("BANK HERE", (sx, sy) =>
+    ring(hud, sx + swatch / 2, sy + swatch / 2, swatch * 0.3, fade(PALETTE.trace, opacity)),
   );
   entry("ATTACK INBOUND", (sx, sy) =>
-    ring(hud, sx + swatch / 2, sy + swatch / 2, swatch * 0.46, CONTROL_COLOR.theirs),
+    ring(
+      hud,
+      sx + swatch / 2,
+      sy + swatch / 2,
+      swatch * 0.46,
+      fade(CONTROL_COLOR.theirs, opacity),
+    ),
   );
   entry("THREAT / YIELD", (sx, sy) => {
-    hud.segments([sx + 2, sy, sx + 2, sy + 5, sx + 6, sy, sx + 6, sy + 5], PALETTE.trace);
+    hud.segments(
+      [sx + 2, sy, sx + 2, sy + 5, sx + 6, sy, sx + 6, sy + 5],
+      fade(PALETTE.trace, opacity),
+    );
     hud.segments(
       [sx + 2, sy + swatch, sx + 2, sy + swatch - 5, sx + 6, sy + swatch, sx + 6, sy + swatch - 5],
-      PALETTE.traceDim,
+      dim,
     );
   });
+  entry("STRUCTURE / PATROL", (sx, sy) => {
+    hud.segments([sx + 8, sy + 4, sx + 13, sy + 4], fade(PALETTE.trace, opacity));
+    hud.segments([sx, sy + 9, sx + 5, sy + 9], fade(PALETTE.magenta, opacity));
+  });
+  // However many rows it wrapped to, so whatever follows never has to guess.
+  return y;
 }
 
 /** A palette entry at a given brightness, without disturbing the shared scratch. */
@@ -415,24 +720,23 @@ function scaled(color: Color, amount: number): Color {
 }
 const LEGEND_SCRATCH = new Color();
 
+/**
+ * Everything under the map's cursor, in words. Returns the baseline it
+ * finished on, so the legend below never has to guess how many lines a
+ * particular sector happened to need.
+ */
 function drawSectorReadout(
   hud: Hud,
   campaign: Campaign,
   cursor: number,
   x: number,
   y: number,
-): void {
+): number {
   const sector = campaign.sectors[cursor];
-  const color = CONTROL_COLOR[sector.control];
 
-  hud.text(`SECTOR ${sectorName(cursor)}`, x, y, 2.2, color);
-  hud.text(
-    `THREAT ${sector.threat}   YIELD ${sector.yield}   SALVAGE X${1 + sector.yield}`,
-    x + 120,
-    y,
-    1.7,
-    PALETTE.traceDim,
-  );
+  hud.text(sectorHeadline(campaign, cursor), x, y, 2.2, CONTROL_COLOR[sector.control]);
+  y -= 21;
+  hud.text(sectorFacts(campaign, cursor), x, y, 1.6, PALETTE.traceDim);
 
   const held: string[] = sector.structures.map((structure) =>
     structure.runsRemaining === 0
@@ -441,7 +745,15 @@ function drawSectorReadout(
   );
   if (sector.patrol) held.push(`PATROL ${sector.patrol.strength}`);
   if (cursor === campaign.front) held.push("DROP POINT");
-  hud.text(held.length ? held.join("   ") : "EMPTY SPACE", x, y - 22, 1.6, PALETTE.traceDim);
+  y -= 19;
+  hud.text(held.length ? held.join("   ") : "EMPTY SPACE", x, y, 1.6, PALETTE.traceDim);
+
+  const flags = sectorFlags(campaign, cursor);
+  if (flags) {
+    y -= 19;
+    hud.text(flags, x, y, 1.6, PALETTE.amber);
+  }
+  return y - 26;
 }
 
 function drawReport(
@@ -461,35 +773,26 @@ function drawReport(
     if (report.completed.length) parts.push(`${report.completed.length} BUILT`);
     if (report.patrolsLost) parts.push(`${report.patrolsLost} PATROL LOST`);
     if (report.patrolsRebuilt) parts.push(`${report.patrolsRebuilt} PATROL REBUILT`);
-    hud.text(parts.join("   "), left, 152, 1.6, PALETTE.amber);
+    hud.text(parts.join("   "), left, FOOTER.report, 1.6, PALETTE.amber);
   }
 
   hud.textRight(
     `PATROLS ${patrolCount(campaign)} OF ${patrolCapacity(campaign)}   ${loadoutSummary(campaign)}`,
     right,
-    152,
+    FOOTER.report,
     1.6,
     PALETTE.traceDim,
   );
 
-  if (frame.message) centred(hud, frame.message, cx, 116, 2, PALETTE.trace);
+  if (frame.message) centred(hud, frame.message, cx, FOOTER.message, 2, PALETTE.trace);
 
-  // The controls were here all along, dim and small, and the first player to
-  // reach this screen still could not tell how to choose anything. Keys are
-  // bright and their meanings stay quiet, so the row reads as a keyboard
-  // rather than as a sentence.
-  const keys: [string, string][] = [
-    ["W/S", "CHOOSE"],
-    ["SPACE", "BUY"],
-    ["ARROWS", "SECTOR"],
-  ];
-  let keyX = cx - 210;
-  for (const [key, meaning] of keys) {
-    keyX += hud.text(key, keyX, 74, 2, PALETTE.amber) + 8;
-    keyX += hud.text(meaning, keyX, 74, 2, PALETTE.traceDim) + 26;
-  }
+  // The only key left down here, and the only one that belongs down here:
+  // ARROWS, W/S and SPACE are all captioned beside the cursor or the row they
+  // drive, because a hint that is not beside the thing it explains is a hint
+  // nobody reads. ENTER is not tied to either cursor — it leaves the screen —
+  // so the bottom of the screen is exactly where it belongs.
   if (blink(frame.time)) {
-    centred(hud, over ? "ENTER FOR A NEW WAR" : "ENTER TO LAUNCH", cx, 44, 2.6, PALETTE.amber);
+    centred(hud, over ? "ENTER FOR A NEW WAR" : "ENTER TO LAUNCH", cx, 52, 2.6, PALETTE.amber);
   }
 }
 

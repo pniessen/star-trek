@@ -21,6 +21,8 @@ import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
 import { intercept } from "../chart/enemyTurn.js";
 import { creditSalvage, type Campaign } from "../chart/campaign.js";
 import { gainGround, loadoutOf } from "../chart/economy.js";
+import { jumpCharge } from "../chart/jump.js";
+import { stationName } from "../chart/naming.js";
 import { sound } from "../audio/sound.js";
 import { PALETTE } from "../render/palette.js";
 import type { VectorObject } from "../render/VectorObject.js";
@@ -52,6 +54,14 @@ export interface CombatInput {
 
 const WAVE_BREAK = 2.6;
 const PLAYER_RADIUS = 2.6;
+
+/**
+ * Seconds the arrival card holds. Short on purpose: it has to say "you are now
+ * here" and then stop being in the way, because the fight it arrived into is
+ * already running. Slightly under `WAVE_BREAK`, so the card is gone by the
+ * time the destination's first wave announces itself.
+ */
+const ARRIVAL_CARD = 2.4;
 
 /**
  * Cracking a warhead for its charge.
@@ -162,6 +172,14 @@ export class Session {
    */
   reinforcing: ShieldFacing | null = null;
 
+  /**
+   * Seconds left on the arrival card — where you are, what is here, and whether
+   * you can bank. Counts down on real seconds and never stops the game, for the
+   * same reason the chart does not: a screen the game switches to is not an
+   * instrument the ship draws.
+   */
+  arrivalCard = 0;
+
   state: SessionState = "clear";
   wave = 0;
   score = 0;
@@ -209,6 +227,7 @@ export class Session {
     private campaign: Campaign,
   ) {
     this.docking = new Docking(starbase);
+    this.nameStation();
   }
 
   /** The Warden currently in the sector, if any. Read by the HUD and the scanner. */
@@ -250,6 +269,9 @@ export class Session {
     // Real seconds: the arrival streaks should coast out at the same rate on
     // any machine, and hit-stop must not stretch a visual flourish.
     this.arrivalFlash = Math.max(0, this.arrivalFlash - realDt * 1.6);
+    // Real seconds, and short: the card announces the place and then gets out
+    // of the way of the fight that is already happening in it.
+    this.arrivalCard = Math.max(0, this.arrivalCard - realDt);
 
     this.messageTimer = Math.max(0, this.messageTimer - dt);
     // Ease the odometer toward the real score, framerate-independently.
@@ -321,7 +343,9 @@ export class Session {
       dt,
       player,
       input.thrust,
-      () => this.say("HARD DOCK"),
+      // The station has a name, so the clamps engaging says it. "HARD DOCK"
+      // described the manoeuvre; this describes arriving somewhere.
+      () => this.say(`WELCOME TO ${this.docking.stationName}`),
       () => this.bank(),
     );
     this.updateWaves(dt, player);
@@ -339,6 +363,17 @@ export class Session {
     // countdown; arrival is a separate step because it touches the fleet,
     // the field and the campaign, none of which `Hyperwarp` itself knows about.
     if (this.hyperwarp.update(dt, player)) this.arrive(player);
+    else if (this.hyperwarp.collapsed) {
+      // The reserve ran out mid-charge. Now that distance sets the duration
+      // this is a state a player will reach honestly — the chart says which
+      // jumps are out of reach, but a fight can drain the reserve under one
+      // that was affordable when it started, and a charge that simply stops
+      // reads as a bug unless the ship says otherwise.
+      this.hyperwarp.collapsed = false;
+      this.hyperwarpDestination = -1;
+      sound.hyperwarpAbort();
+      this.say("CHARGE COLLAPSED");
+    }
 
     if (player.hull <= 0) this.kill(player);
   }
@@ -356,8 +391,12 @@ export class Session {
     if (this.hyperwarp.charging) return;
     if (destination === this.campaign.current) return;
     this.hyperwarpDestination = destination;
-    this.hyperwarp.begin();
-    sound.hyperwarpCharge(HYPERWARP.charge);
+    // Distance sets the charge. Not refused when the reserve cannot cover it:
+    // the chart says so before the key is held, and a charge that dies partway
+    // is the same gamble as releasing early — see `chart/jump.ts`.
+    const seconds = jumpCharge(this.campaign.current, destination);
+    this.hyperwarp.begin(seconds);
+    sound.hyperwarpCharge(seconds);
   }
 
   /** Releasing early spends the energy already drained for nothing — that is the price of the gamble. */
@@ -398,8 +437,21 @@ export class Session {
     // patrol you paid for.
     this.scheduleEscort();
     this.arrivalFlash = 1;
+    // The card says where you are, so the message line does not need to — and
+    // leaving it clear means the wave that greets you gets to announce itself
+    // over the top of the card rather than being shouted down by it.
+    this.arrivalCard = ARRIVAL_CARD;
+    this.nameStation();
     sound.hyperwarpArrive();
-    this.say("HYPERWARP");
+  }
+
+  /**
+   * The dock in the sector you are standing in has a name, and it is derived
+   * rather than stored — see `chart/naming.ts`. Refreshed on arrival and at the
+   * start of a run, which are the only two moments `campaign.current` moves.
+   */
+  private nameStation(): void {
+    this.docking.stationName = stationName(this.campaign.seed, this.campaign.current);
   }
 
   // ── shooting ─────────────────────────────────────────────────────────────
@@ -909,12 +961,14 @@ export class Session {
     this.hyperwarp.cancel();
     this.hyperwarpDestination = -1;
     this.arrivedByJump = false;
+    this.arrivalCard = 0;
     // A jump moves `campaign.current`, and without this a "fresh" run drops
     // you wherever the last one's hyperwarp last left you — including a
     // front-row sector with a much higher threat and yield than a fresh run
     // is supposed to pay. `campaign.front` is "the sector the next run drops
     // into"; a run beginning is exactly when that promise has to be kept.
     this.campaign.current = this.campaign.front;
+    this.nameStation();
     // Refits persist through death, so they are read here rather than banked
     // anywhere: the loadout is whatever the chart last agreed to, applied
     // before `reset()` so torpedo racks are already fitted when the tubes fill.

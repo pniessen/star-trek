@@ -28,12 +28,14 @@ run, and an idle cabinet falls through to an attract demo and back.
 Controls: arrows/WASD fly, Space phasers, X torpedoes, `C` cracks a warhead for
 its charge when the reserve is under half, R restart. `G` toggles
 wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
-`1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics. Between runs the
-command view takes arrows for the sector cursor, `W`/`S` for the decision,
-`Space` to commit and `Enter` to launch. `Tab` raises the chart without pausing
-the game; WASD moves the chart cursor while it is up (arrows still fly);
-`Shift` charges a two-second hyperwarp jump that halves the multiplier on
-arrival.
+`1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics.
+
+**WASD moves the sector cursor on every screen that has a grid**, and nothing
+else ever does. `Tab` raises the chart without pausing the game; WASD moves its
+cursor while it is up and the arrows keep flying; `Shift` charges a hyperwarp
+jump whose length is the distance it covers, halving the multiplier on arrival.
+Between runs the command view uses the same WASD on the same map, up/down
+arrows for the decision list, `Space` to commit and `Enter` to launch.
 
 ## Decisions that are locked
 

@@ -656,5 +656,174 @@ check("...and a half-built one still blocks a duplicate",
 check("every structure kind is priced",
   STRUCTURES.every((s) => structureSpec(s.kind) === s), "table is complete");
 
+// ════════════════════════════════════════════════════════════════════════════
+// Names. Derived from the seed, never stored — so the only thing worth
+// asserting is that the derivation is stable, shared where it should be shared
+// and distinct where it should be distinct.
+// ════════════════════════════════════════════════════════════════════════════
+
+const { REGION_BLOCK, sectorCode, regionOf, regionName, regionStem, stationName } =
+  await import("../.campaign-build/chart/naming.js");
+
+check("a sector code is a column letter and a row number",
+  sectorCode(indexOf(0, 0)) === "A1" && sectorCode(indexOf(3, 3)) === "D4" &&
+    sectorCode(indexOf(7, 7)) === "H8",
+  `${sectorCode(indexOf(3, 3))}`);
+
+// The same seed must produce the same map of names on every load, or a
+// campaign's places rename themselves between sessions.
+check("names are stable for a seed",
+  regionName(7777, 19) === regionName(7777, 19) &&
+    stationName(7777, 19) === stationName(7777, 19),
+  `${regionName(7777, 19)} / ${stationName(7777, 19)}`);
+
+// Different wars, different places. Asserted across the whole board rather
+// than at one index, so a hash that happened to collide once cannot pass it.
+const differing = Array.from({ length: SECTOR_COUNT }, (_, i) => i)
+  .filter((i) => regionName(11, i) !== regionName(12, i)).length;
+check("a different seed is a different map of names", differing > SECTOR_COUNT / 2,
+  `${differing} of ${SECTOR_COUNT} sectors renamed`);
+
+// A region is shared by a block, which is the entire reason regions exist:
+// "the PELLAS REACH" has to mean a corner of the war rather than one square.
+const block = [indexOf(0, 0), indexOf(1, 0), indexOf(2, 0), indexOf(0, 2), indexOf(2, 2)];
+check("a region is shared across its block",
+  block.every((i) => regionOf(i) === 0) &&
+    block.every((i) => regionName(4242, i) === regionName(4242, block[0])),
+  `${regionName(4242, block[0])}`);
+check("the next block over is a different region",
+  regionOf(indexOf(REGION_BLOCK, 0)) !== regionOf(indexOf(0, 0)),
+  `region ${regionOf(indexOf(REGION_BLOCK, 0))}`);
+
+// Regions and their stations share a stem, so a name says where it is.
+check("a station borrows its region's stem",
+  stationName(4242, block[0]).startsWith(regionStem(4242, block[0])) &&
+    regionName(4242, block[0]).startsWith(regionStem(4242, block[0])),
+  `${stationName(4242, block[0])} in the ${regionName(4242, block[0])}`);
+
+// Two docks in one region have to be tellable apart, or naming has bought
+// nothing over "STARBASE".
+const designations = new Set(block.map((i) => stationName(4242, i)));
+check("stations in one region are still distinct", designations.size === block.length,
+  [...designations].join(" "));
+
+// Every designation is two digits: a leading zero reads as a number, and this
+// is meant to read as a name.
+const codes = Array.from({ length: SECTOR_COUNT }, (_, i) => stationName(999, i).split(" ")[1]);
+check("every station designation is two digits",
+  codes.every((c) => /^[1-9][0-9]$/.test(c)), `${codes[0]} ... ${codes[63]}`);
+
+// ════════════════════════════════════════════════════════════════════════════
+// What a jump costs. A combat-balance change: distance now sets the charge.
+// ════════════════════════════════════════════════════════════════════════════
+
+const { JUMP, jumpSteps, jumpCharge, jumpEnergy, jumpReach } =
+  await import("../.campaign-build/chart/jump.js");
+
+check("a jump to where you are is no distance at all",
+  jumpSteps(27, 27) === 0 && jumpCharge(27, 27) === 0, "0 steps");
+check("adjacent sectors are one step",
+  neighbours(27).every((n) => jumpSteps(27, n) === 1), "all four");
+check("distance is orthogonal, not diagonal",
+  jumpSteps(indexOf(0, 0), indexOf(1, 1)) === 2, `${jumpSteps(indexOf(0, 0), indexOf(1, 1))}`);
+check("distance is symmetric",
+  jumpSteps(indexOf(1, 6), indexOf(5, 2)) === jumpSteps(indexOf(5, 2), indexOf(1, 6)), "both ways");
+check("opposite corners are the width and height of the board",
+  jumpSteps(indexOf(0, 0), indexOf(GRID - 1, GRID - 1)) === (GRID - 1) * 2,
+  `${jumpSteps(indexOf(0, 0), indexOf(GRID - 1, GRID - 1))} steps`);
+
+// The escape valve stays reachable: one step is cheaper than the flat two
+// seconds it replaces, or fleeing next door got worse rather than better.
+check("a one-step hop charges the base and no more",
+  jumpCharge(27, neighbours(27)[0]) === JUMP.baseCharge, `${JUMP.baseCharge}s`);
+
+// The whole point of the change. A curve that is not monotonic in distance
+// answers "is a long warp harder" with "sometimes", which is worse than the
+// flat rate it replaced.
+const home = indexOf(0, 0);
+const charges = Array.from({ length: (GRID - 1) * 2 }, (_, i) =>
+  jumpCharge(home, indexOf(Math.min(i + 1, GRID - 1), Math.max(0, i + 1 - (GRID - 1)))));
+check("charge climbs with every extra sector crossed",
+  charges.every((c, i) => i === 0 || c > charges[i - 1]),
+  charges.map((c) => c.toFixed(2)).join(" "));
+
+check("energy is the charge at the drain rate",
+  Math.abs(jumpEnergy(home, indexOf(3, 0), 0.25) - jumpCharge(home, indexOf(3, 0)) * 0.25) < 1e-9,
+  `${jumpEnergy(home, indexOf(3, 0), 0.25).toFixed(3)}`);
+
+// Reach and charge have to be the same function read two ways, or the chart
+// promises a jump the ship cannot finish.
+const reach = jumpReach(1, 0.25);
+check("a full reserve reaches what it can afford and no further",
+  jumpEnergy(home, indexOf(reach, 0), 0.25) <= 1 &&
+    jumpEnergy(home, indexOf(0, reach + 1), 0.25) > 1,
+  `${reach} sectors on a full reserve`);
+check("an empty reserve reaches nowhere", jumpReach(0, 0.25) === 0, "0 sectors");
+check("crossing the whole board is out of reach on any reserve",
+  jumpEnergy(indexOf(0, 0), indexOf(GRID - 1, GRID - 1), 0.25) > 1,
+  `${jumpEnergy(indexOf(0, 0), indexOf(GRID - 1, GRID - 1), 0.25).toFixed(2)} of 1.00`);
+
+// ════════════════════════════════════════════════════════════════════════════
+// What Space would do, resolved before it is pressed. The command view taught
+// exclusively by failure until this existed.
+// ════════════════════════════════════════════════════════════════════════════
+
+const { intent } = await import("../.campaign-build/chart/command.js");
+const speaking = newCampaign(500);
+const spokenHome = homeOf(speaking);
+const outpost = DECISIONS.find((d) => d.id === "outpost");
+
+// Every decision must state itself at every sector. A row that says nothing is
+// a row that can only be understood by pressing it, which is the bug.
+const silent = [];
+for (const decision of DECISIONS) {
+  for (const sector of [spokenHome, 0, 63]) {
+    const said = intent(speaking, decision, sector);
+    if (!said.line || said.line.length < 6) silent.push(`${decision.id}@${sector}`);
+  }
+}
+check("every decision says what it would do, at every sector", silent.length === 0,
+  silent.join(" ") || "12 decisions, 3 sectors");
+
+// Naming the target is the entire mental model of the screen: Space applies
+// the decision cursor to the sector cursor.
+check("...and names the sector it would do it to",
+  intent(speaking, outpost, spokenHome).line.includes(sectorCode(spokenHome)),
+  intent(speaking, outpost, spokenHome).line);
+
+// The reason has to be available before the key is pressed, not after.
+check("an unaffordable decision is refused up front, with a reason",
+  speaking.salvage === 0 && intent(speaking, outpost, spokenHome).refused !== null &&
+    intent(speaking, outpost, spokenHome).refused.includes("600"),
+  intent(speaking, outpost, spokenHome).refused);
+
+creditSalvage(speaking, 5000);
+check("...and stops being refused once it can be paid for",
+  intent(speaking, outpost, spokenHome).refused === null,
+  `salvage=${speaking.salvage}`);
+
+// The intent and the act must agree, or the screen promises one thing and does
+// another. Checked by taking the decision the intent said was available.
+const before = speaking.salvage;
+decide(speaking, outpost, spokenHome);
+check("what it said it would do is what taking it does",
+  hasAnyStructure(speaking.sectors[spokenHome], "outpost") && speaking.salvage === before - 600,
+  `salvage=${speaking.salvage}`);
+
+// Stripping a fitted refit refunds nothing, so quoting its price beside STRIP
+// would read as a refund.
+const stripping = DECISIONS.find((d) => d.id === "impulse-tuning");
+toggleRefit(speaking, "impulse-tuning");
+const strip = intent(speaking, stripping, spokenHome);
+check("stripping a fitted refit is quoted free and refused by nothing",
+  strip.cost === 0 && strip.refused === null && strip.line.startsWith("STRIP"), strip.line);
+
+// The front is never refused anywhere. It is the guarantee that no chart
+// decision can leave a player with nowhere to fly.
+const dropping = DECISIONS.find((d) => d.kind === "front");
+check("the drop point is offered at every sector, held or not",
+  speaking.sectors.every((_, i) => intent(speaking, dropping, i).refused === null),
+  "64 sectors");
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 process.exit(problems.length ? 1 : 0);
