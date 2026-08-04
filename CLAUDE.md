@@ -19,6 +19,7 @@ npm run dev            # http://127.0.0.1:5173
 npm run typecheck      # tsc --noEmit — run before every commit
 npm run standalone     # dist/kobayashi.html, one self-contained file
 npm run playtest       # headless run + assertions (needs a Playwright browser)
+npm run audiotest      # audio contracts against a mock context, bare node
 npm run campaigntest   # chart logic assertions, bare node, no browser
 npm run campaignlength # simulates thousands of campaigns, reports the length distribution
 ```
