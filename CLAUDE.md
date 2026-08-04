@@ -5,7 +5,8 @@ built on docking, and a strategy layer — both halves built, the in-run
 tactical chart and the between-runs command view. Working title; the eventual
 larger game is *Deep Black*.
 
-Full background in `docs/` — [status.md](docs/status.md) first, then
+Full background in `docs/` — [todo.md](docs/todo.md) is what to pick up next,
+[status.md](docs/status.md) is how it got here, then
 [prior-art.md](docs/prior-art.md), [concept-options.md](docs/concept-options.md),
 [strategy-layer.md](docs/strategy-layer.md), and
 [audio-prior-art.md](docs/audio-prior-art.md), which the audio layer was built
