@@ -239,9 +239,13 @@ Between runs, `src/chart/economy.ts` and `src/chart/command.ts` hold the
 command view's rules, and `ChartView.ts` draws the same grid a second time,
 zoomed to fill. Twelve rows, four headings, no submenus: four structures
 priced from `strategy-layer.md`, the six refits, one patrol row, and the
-front. Arrows move the sector cursor, `W`/`S` move down the list, `Space`
-commits, `Enter` launches. Every row explains its own refusal rather than
-greying out silently.
+front. **WASD moves the sector cursor, here exactly as it does in flight** —
+the two screens draw the same 8×8 map and used to bind the same keys to
+opposite jobs, which is most of why this screen failed its first player three
+times. Up/down arrows move the decision list, `Space` commits, `Enter`
+launches. The selected row states what `Space` would do and to which sector
+*before* it is pressed, and carries its own refusal rather than only producing
+one after the fact.
 
 **The loop is closed.** Docking credits `campaign.salvage` — the one place
 the arcade layer pays the strategy layer. Reaching the epitaph resolves the
@@ -250,11 +254,41 @@ pressure, patrols take attrition, and the campaign is saved with its RNG
 cursor so a reload resumes the same war rather than re-rolling it. Launching
 drops you at `campaign.front` with whatever refits are fitted.
 
-**The dock ring is still aspirational.** `ChartView` draws a ring on any
-sector `canDock` returns true for, but the starbase sits at one fixed world
-position regardless of `campaign.current`, so the running game still lets you
-dock from anywhere. Per-sector docking remains out of scope; this is a note,
-not a fix.
+**The sectors now say what they are.** The first player to fly the chart
+reported that every square read as "not here", that the cursor got lost, that
+the ring in a square meant nothing, and that a long warp appeared to cost the
+same as a short one. All four were true, and none of them were rendering bugs
+in isolation — the map had the information and never said any of it out loud.
+
+- **Places have names**, derived from the seed and never stored
+  (`chart/naming.ts`). Every sector belongs to a region shared by a 3×3 block —
+  "the PELLAS REACH" — and every dock carries a designation built from its
+  region's stem, so `PELLAS 47` is audibly somewhere in the PELLAS REACH. A new
+  war reseeds the whole map of names. The docking sequence welcomes you to the
+  station by name, and the panel carries it through every phase.
+- **The in-run overlay is an instrument rather than a picture.** The cursor is
+  drawn with rules running the full width and height of the grid — a fix in
+  kind, not in degree, because a brighter box is still a box you have to find
+  among sixty-four — plus a pulse on real seconds. Under the grid: the sector's
+  name and region, `THREAT / PAYS / BANK AT <station>`, whatever is worth
+  acting on (an attack inbound, ground that can be taken, a patrol, something
+  building), the price of the jump, the key, and the controls. Structures and
+  patrols are drawn in flight now; they were the reason to prefer one square
+  over another and were only ever shown between runs.
+- **Arriving is an event.** `Session.arrivalCard` puts the sector, its region,
+  its threat and yield, its dock or lack of one, and any committed attack on
+  screen for 2.4 seconds after a jump. It does not pause the game — the same
+  reasoning as the chart — and it clears before the destination's first wave
+  announces itself.
+
+**The dock ring is still aspirational, and now says so louder.** `ChartView`
+draws a ring on any sector `canDock` returns true for, and the readout and the
+arrival card now spell that out as `NO DOCK HERE` — but the starbase still sits
+at one fixed world position regardless of `campaign.current`, so the running
+game lets you dock from anywhere. The chart and the card agree with each other
+and both disagree with the world. Per-sector docking remains out of scope;
+this is a louder note, not a fix, and it is the strongest argument yet for
+building it.
 
 **One mechanic was added that neither design document specifies.** Nothing in
 the game could move a sector back toward the player, so `isWon` — zero enemy
@@ -274,6 +308,27 @@ patrol's own cost, strength and capacity (200 salvage, strength 3, one in the
 field plus one per yard) are invented — `strategy-layer.md` prices everything
 else and leaves those open.
 
+**Distance now prices a jump, and that is a combat-balance change a human
+should confirm.** Hyperwarp charged for a flat two seconds however far it went,
+so the honest answer to "how hard is a long warp" was "no harder", and the map
+lost the one axis that would have made a far corner feel far. `chart/jump.ts`
+sets the charge from the Manhattan distance: `1.4s + 0.35s` per extra sector.
+Everything else follows from that one number — the guns are cold for longer,
+and the reserve drains at `HYPERWARP.drainPerSecond` for longer, so a charge
+that outlasts the reserve dies unarrived and the reserve becomes a range limit
+that tightens as a fight goes badly. The multiplier is still halved flat,
+because "a jump costs the same as taking a hit" is locked.
+
+The curve is deliberately not a uniform increase. A one-step hop is now
+**cheaper** than the old flat rate (1.4s against 2.0s) because that hop is the
+escape valve and the escape valve should be reachable. A full reserve reaches
+eight steps against a board whose far corners are fourteen apart, so crossing
+the whole map in one jump is impossible by construction and the rich far edge
+is somewhere you close on over a run. Both constants are first-draft guesses in
+the same category as the flight model, and the whole shape wants a human at the
+keyboard: the numbers that matter are whether 1.4s is short enough to flee
+with and whether an eight-step ceiling reads as a rule or as a wall.
+
 **One deviation from the design doc, found while implementing salvage.**
 Salvage earned in a sector is scaled by `1 + yield`, not by `yield` as
 written: yield runs 0–3 and the home sector — where every fresh campaign
@@ -283,7 +338,7 @@ documented 3×. Flag this for the tuning pass; it is a balance decision, not
 a bug, but it was made mid-implementation rather than in the design doc and
 deserves a second look with a human at the keyboard.
 
-**`tools/campaigntest.mjs`** is 109 assertions in bare node, no browser. The
+**`tools/campaigntest.mjs`** is 135 assertions in bare node, no browser. The
 first 54 cover the tactical half — pressure spend, adjacency, a neglected
 sector falling within four runs, interception, round-trip serialisation, a
 truncated save falling back to a fresh campaign, and that retaking ground
@@ -294,7 +349,14 @@ enemy assault), every refit costing the ship something, refits surviving the
 runs in between, patrols wearing out on the front in three runs and not at
 all behind the line, a yard rebuilding them, salvage holding its floor across
 400 starved decisions, a reloaded campaign resuming the same war, and the
-attract demo's firewall.
+attract demo's firewall. The 26 added with the naming and jump pass cover the
+derivation of names — stable for a seed, shared across a region's block,
+distinct between seeds across the whole board, a station borrowing its
+region's stem while staying distinct from its neighbours — the jump curve
+(orthogonal, symmetric, monotonic in distance, and a reach that agrees with
+the energy it is derived from), and that every decision states what `Space`
+would do and why it would be refused *before* the key is pressed, with the
+statement and the act agreeing.
 
 ### Campaign length, re-measured with an economy
 
@@ -531,6 +593,16 @@ Three open questions from this section and from `strategy-layer.md`'s own
 ### Open questions
 
 - Is mouse aim an improvement or does it remove the reason to turn the ship?
+- **Is the jump's distance curve right?** `JUMP.baseCharge = 1.4` and
+  `JUMP.perStep = 0.35` are first-draft guesses and they change combat: a hop
+  next door is cheaper than it used to be and a long jump is dearer, with an
+  eight-step ceiling on a full reserve. Nobody has flown it. See §3.
+- **Should a bare sector actually have nowhere to bank?** The chart and the
+  arrival card both now say `NO DOCK HERE` and the world does not agree — the
+  starbase is at one fixed position however the chart is drawn. Making it true
+  is the design doc's own "the greed loop, one level up", and it is also the
+  one change that could leave a player carrying a fat multiplier with nowhere
+  to realise it, which is either the whole point or a trap.
 - **Does the pressure formula need a cap? Measured: no — a cap is the wrong
   fix.** With the command view's economy on the board, capping the budget
   turns 83% losses into 83% deadlocks rather than into wins (§3). The

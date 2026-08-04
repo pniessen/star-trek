@@ -66,6 +66,15 @@ export class Docking {
   service = 0;
   /** Line currently being reported on the docking panel. */
   status = "";
+  /**
+   * What this station is called. Written by `Session` from the sector the ship
+   * is in — see `chart/naming.ts` — because a place with a name is somewhere
+   * you docked and "STARBASE" is a category of object.
+   *
+   * Held here rather than looked up when drawn: docking knows nothing about
+   * campaigns and should keep knowing nothing about them.
+   */
+  stationName = "STARBASE";
 
   private time = 0;
   private readonly gate = new Vector3();

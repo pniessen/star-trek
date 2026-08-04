@@ -8,9 +8,11 @@ import { HOSTILE_COLORS, type Fleet } from "../game/hostiles.js";
 import type { Presentation } from "../game/presentation.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { GLYPH_ADVANCE } from "./strokeFont.js";
-import { drawChart, drawCommand } from "../chart/ChartView.js";
-import { colOf, rowOf } from "../chart/sectors.js";
-import type { Campaign } from "../chart/campaign.js";
+import { CONTROL_COLOR, drawChart, drawCommand, sectorFacts, sectorFlags } from "../chart/ChartView.js";
+import { HYPERWARP } from "../game/hyperwarp.js";
+import { jumpCharge, jumpEnergy, jumpSteps } from "../chart/jump.js";
+import { regionName, sectorCode } from "../chart/naming.js";
+import { canDock, type Campaign } from "../chart/campaign.js";
 
 export interface HudView {
   readonly player: Ship;
@@ -156,6 +158,12 @@ export function drawHud(hud: Hud, view: HudView): void {
     drawHyperwarp(hud, view, width / 2, 420);
   }
 
+  // Where you have just arrived, before the wave that greets you announces
+  // itself. Sits below the message line rather than on it, so both can be up.
+  if (session.arrivalCard > 0) {
+    drawArrivalCard(hud, view, width / 2, height / 2 - 30);
+  }
+
   if (session.docking.phase !== "none") {
     // The band between the ship and the scanner is the only reliably clear
     // strip: the shield cluster owns the bottom, the ship sits in the lower
@@ -179,9 +187,58 @@ export function drawHud(hud: Hud, view: HudView): void {
   // Drawn last so it sits on top of every other instrument. Never reached from
   // the title or tally early-returns above, which is what keeps it off the
   // title screen without a special case here.
-  drawChart(hud, view.campaign, view.chartOpacity, view.chartCursor);
+  drawChart(hud, view.campaign, {
+    opacity: view.chartOpacity,
+    cursor: view.chartCursor,
+    time: view.time,
+    // What a jump has to be paid out of, and the rate it is paid at. Passed
+    // rather than imported by the chart: `src/chart/` may not depend on
+    // `src/game/`, and this is the only combat constant it needs.
+    reserve: player.energy,
+    drainPerSecond: HYPERWARP.drainPerSecond,
+  });
 
   hud.end();
+}
+
+/**
+ * Arriving somewhere, announced as arriving somewhere.
+ *
+ * A jump used to say "HYPERWARP" and drop you into an identical-looking patch
+ * of the same plane, which is most of why every square on the chart read as
+ * "not here". The sector has a name, a region, a threat that sets the waves
+ * about to spawn, a yield that scales what they pay, and either somewhere to
+ * bank or nowhere — and all five of those were already true and none of them
+ * were ever said out loud.
+ *
+ * It does not pause the game, for the same reason the chart does not: the
+ * price of reading an instrument is the time it takes while something is
+ * shooting at you. So it is short, it fades rather than cutting, and it is
+ * composed in the clear band the docking panel uses — neither of which can be
+ * up at the same time, since a jump is refused while docking.
+ */
+function drawArrivalCard(hud: Hud, view: HudView, cx: number, cy: number): void {
+  const { campaign, session } = view;
+  const here = campaign.current;
+  const sector = campaign.sectors[here];
+  // The last three-quarters of a second is a fade rather than a cut. A card
+  // that vanishes between two frames reads as a glitch.
+  const level = Math.min(1, session.arrivalCard / 0.75);
+
+  const line = (text: string, y: number, scale: number, color: Color): void => {
+    scratch.copy(color).multiplyScalar(level);
+    centred(hud, text, cx, y, scale, scratch);
+  };
+
+  line(`SECTOR ${sectorCode(here)}`, cy + 66, 4.2, CONTROL_COLOR[sector.control]);
+  scratch.copy(PALETTE.traceDim).multiplyScalar(level);
+  rule(hud, cx, cy + 46, 150, scratch);
+
+  line(regionName(campaign.seed, here), cy + 20, 2.4, PALETTE.trace);
+  line(sectorFacts(campaign, here), cy - 8, 1.8, canDock(sector) ? PALETTE.trace : PALETTE.amber);
+
+  const flags = sectorFlags(campaign, here);
+  if (flags) line(flags, cy - 32, 1.8, PALETTE.amber);
 }
 
 /**
@@ -655,7 +712,8 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
 }
 
 function drawHyperwarp(hud: Hud, view: HudView, cx: number, cy: number): void {
-  const { hyperwarp } = view.session;
+  const { campaign, player, session } = view;
+  const { hyperwarp } = session;
   const width = 150;
   const progress = Math.min(1, hyperwarp.progress);
 
@@ -667,14 +725,29 @@ function drawHyperwarp(hud: Hud, view: HudView, cx: number, cy: number): void {
   hud.gauge(cx - width, cy, width * 2, 14, progress, PALETTE.magenta, 4);
   hud.textRight("CHARGE", cx - width - 12, cy + 3, 1.4, PALETTE.traceDim);
 
-  // Where you are going, in the chart's own coordinates, so the number on the
-  // panel and the cell under the cursor are obviously the same thing.
-  const col = colOf(view.chartCursor);
-  const row = rowOf(view.chartCursor);
-  centred(`SECTOR ${String.fromCharCode(65 + col)}${row + 1}`, cy + 30, 1.8, PALETTE.magenta);
+  // Where you are going, named as well as numbered, so the panel and the cell
+  // under the cursor are obviously the same place.
+  const to = view.chartCursor;
+  centred(
+    `${sectorCode(to)}  ${regionName(campaign.seed, to)}`,
+    cy + 30,
+    1.8,
+    PALETTE.magenta,
+  );
 
-  // The two things it costs, said plainly while there is still time to let go.
-  centred("GUNS COLD   MULTIPLIER HALVED", cy - 26, 1.4, PALETTE.traceDim);
+  // What it costs, said plainly while there is still time to let go — and now
+  // that distance sets the charge, how long is part of what it costs. The
+  // reserve is called out because a charge that outlasts it dies unarrived.
+  const seconds = jumpCharge(campaign.current, to);
+  const cost = jumpEnergy(campaign.current, to, HYPERWARP.drainPerSecond);
+  const short = cost > player.energy;
+  centred(
+    `${jumpSteps(campaign.current, to)} SECTORS   ${seconds.toFixed(1)}S COLD   MULTIPLIER HALVED`,
+    cy - 26,
+    1.4,
+    PALETTE.traceDim,
+  );
+  if (short) centred("RESERVE WILL NOT LAST", cy - 44, 1.6, PALETTE.amber);
 }
 
 function drawDockingPanel(hud: Hud, view: HudView, cx: number, cy: number): void {
@@ -682,6 +755,15 @@ function drawDockingPanel(hud: Hud, view: HudView, cx: number, cy: number): void
   const g = docking.info;
   const centred = (text: string, y: number, scale: number, color: Color) =>
     hud.text(text, cx - (text.length * 4.2 * scale) / 2, y, scale, color);
+
+  // The station's own name, under every phase of the sequence. You are docking
+  // somewhere, not at "the starbase" — see `chart/naming.ts`.
+  //
+  // Below the panel rather than above it: the message line owns `height/2 + 96`
+  // and the clamps engaging puts "WELCOME TO ..." there at scale 3.6, so a
+  // header up there is a header nobody can read for the two seconds it matters
+  // most.
+  centred(docking.stationName, cy - 76, 2.2, PALETTE.traceDim);
 
   if (docking.phase === "aligning") {
     const width = 150;
