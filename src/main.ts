@@ -133,6 +133,29 @@ const presentation = new Presentation(
 let chartOpacity = 0;
 /** The sector the chart cursor is pointing at, independent of `campaign.current`. */
 let chartCursor = campaign.current;
+/** Detects the mode changes that run `session.restart()` inside `Presentation.enter()` — see `adoptMode`. */
+let previousPresentationMode = presentation.mode;
+/**
+ * Takes the cursor to the sector the new mode actually starts in.
+ *
+ * Every mode change — title → attract, attract → title, an abandoned tally
+ * back to title, `startRun()` — calls `session.restart()` inside
+ * `Presentation.enter()`, which resets `campaign.current` to `campaign.front`.
+ * `chartCursor` is a module-level `let` with no equivalent reset, so without
+ * this it would still point at wherever a previous run's or the demo's own
+ * jump last aimed it, carrying that stale front into whatever comes next.
+ *
+ * The frame loop calls this when it notices the mode changed underneath it,
+ * which is a frame late. That is fine for a mode change nothing is waiting on
+ * and wrong for one the player is mid-keypress of, so the two places that
+ * change mode *and then act on the same press* — `R`, and the tally handoff
+ * into the command view — call it themselves, in order, before they act.
+ */
+function adoptMode(): void {
+  chartCursor = campaign.current;
+  previousPresentationMode = presentation.mode;
+}
+
 /** Which of the four decisions is highlighted in the command view. */
 let commandSelection = 0;
 /** The command view's answer to the last decision, refusal included. */
@@ -171,6 +194,14 @@ const pressed = new Set<string>();
  * while admiring the title screen.
  */
 const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "m", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+
+/**
+ * The command view's keys that only move a highlight — the two idioms of
+ * `handleCommandKey` with nothing that commits. Everything here is free and
+ * reversible, which is what makes it safe to honour on the very press that
+ * opens the view.
+ */
+const NAVIGATION_KEYS = new Set(["w", "a", "s", "d", "arrowup", "arrowdown"]);
 
 /**
  * The command view's keyboard, in two idioms and no more.
@@ -278,12 +309,11 @@ window.addEventListener("keydown", (event) => {
         // command view showing the previous run's enemy report and without
         // ever having advanced the campaign for its own.
         presentation.startRun();
-        // restart() resets campaign.current to campaign.front; chartCursor is
-        // a module-level `let` with no equivalent reset of its own, so
-        // without this a jump made last run leaves the cursor pointing at
+        // Without this a jump made last run leaves the cursor pointing at
         // wherever it was last aimed, not at the sector the new run actually
-        // starts in.
-        chartCursor = campaign.current;
+        // starts in. `run` → `run` is not a mode change, so the frame loop
+        // would never notice on its own.
+        adoptMode();
       }
       break;
     case "1":
@@ -315,7 +345,23 @@ window.addEventListener("keydown", (event) => {
     // run again, now — so a player who only wants to fly never sees the chart
     // they did not ask for. Both paths go through the same campaign advance;
     // see `Presentation.resolveRun`.
-    if (session.death.phase === "tally" && key !== "r") presentation.enterCommand();
+    if (session.death.phase === "tally" && key !== "r") {
+      presentation.enterCommand();
+      // The advance has happened, so the board and `campaign.current` below
+      // are this run's aftermath and not last run's. Adopting the mode here
+      // rather than leaving it to the frame loop is what lets the key act on
+      // the same press: a frame later the reset would land on top of whatever
+      // the key just did and put the cursor back.
+      adoptMode();
+      // Opening the chart and reading the key are not alternatives. The press
+      // that raises the view is a real press with a real meaning, and eating
+      // it meant a player who died, saw the epitaph and reached for `D` got
+      // "a screen appeared" instead of "the cursor moved" — then had to press
+      // it again. Only the keys that just move a cursor come through: `Space`
+      // spends salvage and `Enter` ends the visit, and neither should fire off
+      // a press aimed at a screen the player had not seen yet.
+      if (NAVIGATION_KEYS.has(key)) handleCommandKey(key);
+    }
   } else {
     // Any key takes the controls off the title screen or out of the demo.
     presentation.startRun();
@@ -480,8 +526,6 @@ function approach(current: number, target: number, dt: number, rate: number): nu
 let last = performance.now();
 let time = 0;
 let smoothedFps = 60;
-/** Detects the mode changes that run `session.restart()` inside `Presentation.enter()` — see below. */
-let previousPresentationMode = presentation.mode;
 
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -502,19 +546,9 @@ function frame(now: number): void {
   sound.listen(player.position.x, player.position.z, player.heading);
   let burn = 0;
 
-  if (presentation.mode !== previousPresentationMode) {
-    // Every mode change — title → attract, attract → title, an abandoned
-    // tally back to title, `startRun()` — calls `session.restart()` inside
-    // `Presentation.enter()`, which resets `campaign.current` to
-    // `campaign.front`. `chartCursor` is a module-level `let` with no
-    // equivalent reset, so without this it would still point at wherever a
-    // previous run's or the demo's own jump last aimed it, carrying that
-    // stale front into whatever comes next. The `R` key takes the same
-    // restart path without a mode change, so it resets `chartCursor` itself
-    // where it is handled, above.
-    chartCursor = campaign.current;
-    previousPresentationMode = presentation.mode;
-  }
+  // A mode change nobody was mid-keypress of: notice it and take the cursor
+  // with it. The keypress-driven ones have already called this themselves.
+  if (presentation.mode !== previousPresentationMode) adoptMode();
 
   // The chart is an overlay on top of the run, not a pause of it — it fades on
   // its own clock using real `dt` so the ease reads the same on any machine.
