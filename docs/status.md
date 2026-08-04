@@ -689,6 +689,14 @@ Three open questions from this section and from `strategy-layer.md`'s own
   between them. What is missing is a feedback term — something that slows the
   enemy as it loses ground or speeds the player up as they gain it — not a
   smaller number. Open, and a design question rather than a tuning one.
+  **Investigated in [campaign-balance.md](./campaign-balance.md)**: three
+  candidate terms built behind a switch and measured, the mechanism behind the
+  cliff identified as a destabilising term already present rather than a
+  missing one, and two findings that change the question — some of the cliff
+  was the instrument modelling the player's reach as a constant, and salvage
+  above three hundred a run buys nothing, so the command view cannot decide a
+  war whatever the enemy's formula says. A recommendation is on the table and
+  nothing has been adopted.
 - **How much ground should a run actually take?** `gainGround` gives one step
   per wave cleared in the sector you are standing in, so a run's reach is
   however many sectors a player can clear and hyperwarp between before dying.
