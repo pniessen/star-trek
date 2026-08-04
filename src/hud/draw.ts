@@ -3,6 +3,7 @@ import { TORPEDO } from "../game/weapons.js";
 import { PALETTE } from "../render/palette.js";
 import type { Hud } from "./Hud.js";
 import { FACINGS, type Ship } from "../game/Ship.js";
+import { ALTITUDE, flight } from "../game/altitude.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, HOSTILE_NAMES, type Fleet, type Hostile } from "../game/hostiles.js";
 import type { Presentation } from "../game/presentation.js";
@@ -151,6 +152,9 @@ export function drawHud(hud: Hud, view: HudView): void {
 
   drawScanner(hud, view, width / 2, height - 148);
   drawShields(hud, player, width / 2, 96, view);
+  // Only when there is a slab to be in. With the switch off the panel is the
+  // panel this game has always had, down to the last stroke.
+  if (flight.threeD) drawAltitude(hud, player, width / 2 + 58, 96);
   drawCondition(hud, view, width);
   drawStatus(hud, view);
   drawTally(hud, view, width);
@@ -287,6 +291,7 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
   const rows: [string, string][] = [
     ["LAUNCH", "ANY KEY"],
     ["FLY", "ARROWS / WASD"],
+    ["CLIMB", "HOLD Q"],
     ["PHASERS", "SPACE"],
     ["TORPEDOES", "X"],
     ["BANK SALVAGE", "FLY THE CORRIDOR"],
@@ -353,19 +358,25 @@ function drawEpitaph(hud: Hud, view: HudView, width: number, height: number): vo
 /**
  * The overhead scanner.
  *
- * This is not decoration — it is the reason the play space is a plane. A flat
- * world means every contact is exactly where the scanner says it is, so the
- * skill of the game is reading this and turning the right shield toward the
- * right threat, while the forward view handles the shooting. That split is the
- * 1982 arcade cabinet's answer and it has not been improved on.
+ * This is half the interface, and it used to be the reason the play space was a
+ * plane. It is not any more, and it did not have to be: **height is a stalk.**
+ * Every mark that can leave the floor is lifted off it and a line is drawn back
+ * down to where the contact really is, which is Elite's answer from 1984 and is
+ * in this project's own `prior-art.md`. Read the base for position and the
+ * length for height. The tube is exactly as trustworthy as it was — nothing is
+ * misplaced, one thing is now also *measured* — and the skill is unchanged:
+ * read this, turn the right shield toward the right threat, and let the forward
+ * view do the shooting. That split is the 1982 cabinet's answer and it has not
+ * been improved on.
  *
  * Heading-up rather than north-up: in first person you steer relative to your
  * own nose, and a rotating map is one less translation to do under pressure.
  *
- * The tube shows four things now, in descending order of certainty: resolved
+ * The tube shows four things, in descending order of certainty: resolved
  * hostiles, which are exactly where they are drawn and only dim between sweeps;
- * mines, which never move and so are never in doubt; unresolved returns, which
- * are drawn as the circle of error they actually carry; and the starbase.
+ * mines, which never move, never leave the deck, and so are never in doubt;
+ * unresolved returns, which are drawn as the circle of error they actually
+ * carry and deliberately carry no height at all; and the starbase.
  */
 function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   const { player, fleet, starbase, session } = view;
@@ -416,7 +427,7 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   const cos = Math.cos(player.heading);
   const sin = Math.sin(player.heading);
 
-  const project = (world: Vector3): { x: number; y: number; clamped: boolean } => {
+  const project = (world: Vector3): { x: number; y: number; lift: number; clamped: boolean } => {
     const dx = world.x - player.position.x;
     const dz = world.z - player.position.z;
     const forward = dx * sin + dz * cos;
@@ -431,7 +442,37 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       px = (px / length) * radius;
       py = (py / length) * radius;
     }
-    return { x: cx + px, y: cy + py, clamped };
+    // Height above the *floor*, not above the player. Nothing in the game ever
+    // goes below `y = 0`, so every stalk on the tube points the same way and a
+    // glance reads as a bar chart rather than as a set of signed offsets — which
+    // is worth more than the symmetry a player-relative measure would buy.
+    // Own ship gets one too, at the centre, so "am I above that Raider" is a
+    // comparison of two lengths sitting next to each other.
+    //
+    // Off-tube contacts get none: a rim mark is already an approximation and
+    // hanging a measurement off it claims a precision the mark does not have.
+    const lift = clamped ? 0 : world.y * SCANNER.altitudeScale;
+    return { x: cx + px, y: cy + py, lift, clamped };
+  };
+
+  /**
+   * Elite's stalk: the mark is drawn `lift` pixels off its true position and a
+   * line joins the two. Below half a pixel nothing is drawn at all, so a fleet
+   * on the deck — or the whole game with the slab switched off — leaves the tube
+   * looking precisely the way it always did.
+   */
+  const stalk = (mark: { x: number; y: number; lift: number }, color: Color): void => {
+    if (mark.lift < 0.5) return;
+    scratch.copy(color).multiplyScalar(0.55);
+    hud.segments(
+      [
+        mark.x, mark.y, mark.x, mark.y + mark.lift,
+        // A foot on the deck. Two pixels of cross-tick is what stops the base
+        // reading as the end of a line rather than as the contact's position.
+        mark.x - 2, mark.y, mark.x + 2, mark.y,
+      ],
+      scratch,
+    );
   };
 
   // Starbase: the thing you are gambling against reaching.
@@ -462,6 +503,11 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     const level =
       (mark.clamped ? 0.45 : 1) *
       (SCANNER.faintest + (1 - SCANNER.faintest) * contacts.freshness(hostile));
+    // Under the glyph first, so a class colour never draws over its own stalk.
+    stalk(mark, HOSTILE_COLORS[hostile.kind]);
+    // Every glyph below is composed about the mark's own origin, so lifting it
+    // is one addition here rather than a change to five shapes.
+    mark.y += mark.lift;
     scratch.copy(HOSTILE_COLORS[hostile.kind]).multiplyScalar(level);
     const marks: number[] = [];
 
@@ -524,9 +570,17 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   //
   // Drawn after the hostiles and before own ship, so a Warden closing on a
   // contact is on top of it rather than under it.
+  //
+  // It gets a stalk like everything else and will essentially never show one:
+  // the Warden flies the deck. That is not an oversight — a picket holding
+  // station is the one hull in the sector with no reason to be anywhere but on
+  // the plane, and a cyan chevron reliably at zero is a useful datum to read
+  // every other stalk against.
   const escort = session.escort;
   if (escort) {
     const mark = project(escort.position);
+    stalk(mark, PALETTE.trace);
+    mark.y += mark.lift;
     // Heading-up, so what is drawn is its bearing relative to your nose.
     const relative = escort.heading - player.heading;
     const fx = Math.sin(relative);
@@ -547,9 +601,19 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     hud.segments(marks, scratch);
   }
 
-  // Own ship, fixed at the centre pointing up.
+  // Own ship, fixed at the centre pointing up — and lifted off the centre by
+  // its own stalk, in exactly the vocabulary every contact uses.
+  //
+  // This is half the answer to "how does the player read their own altitude".
+  // It is the half that works in a fight, because it is in the instrument the
+  // eyes are already on and because it is *comparative*: your stalk against the
+  // Raider's stalk is the question you actually have. The tape by the shield
+  // cluster is the other half, and it is the one that gives you a number.
+  const own = { x: cx, y: cy, lift: player.position.y * SCANNER.altitudeScale };
+  stalk(own, PALETTE.trace);
+  const oy = cy + own.lift;
   hud.segments(
-    [cx, cy + 8, cx - 5, cy - 6, cx - 5, cy - 6, cx, cy - 2.5, cx, cy - 2.5, cx + 5, cy - 6, cx + 5, cy - 6, cx, cy + 8],
+    [cx, oy + 8, cx - 5, oy - 6, cx - 5, oy - 6, cx, oy - 2.5, cx, oy - 2.5, cx + 5, oy - 6, cx + 5, oy - 6, cx, oy + 8],
     PALETTE.trace,
   );
 
@@ -603,6 +667,54 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number, view?: HudV
     PALETTE.traceDim,
   );
   hud.textRight("SHIELDS", cx - 48, cy - 4, 1.5, PALETTE.traceDim);
+}
+
+/**
+ * The altitude tape — a ladder with the whole slab on it and a bar where you
+ * are.
+ *
+ * Vertical, and that is the entire argument for its shape: this is the one
+ * quantity in the game whose direction on screen can be the direction it means,
+ * and a horizontal gauge for height would be a small act of vandalism next to
+ * three of them that are honestly horizontal.
+ *
+ * It sits beside the shield cluster, mirroring the `SHIELDS` label across the
+ * ship glyph, because that is the one place at the bottom of the frame that is
+ * clear at every window size and because altitude belongs next to the shields —
+ * both are things the reserve is being spent on and both are read in the same
+ * glance. The scanner's own stalk is the version that works without looking; a
+ * number is what this adds.
+ *
+ * No new colour. The rail is dim trace, the bar is trace, and it goes amber on
+ * exactly one condition — a reserve too thin to hold you up — which is the
+ * same rule and the same hue the energy gauge already uses, and which means the
+ * ship is about to sink whether or not the key is still held.
+ */
+function drawAltitude(hud: Hud, player: Ship, x: number, cy: number): void {
+  const half = 34;
+  const fraction = Math.max(0, Math.min(1, player.position.y / ALTITUDE.ceiling));
+  const falling = player.starved;
+  const rail: number[] = [x, cy - half, x, cy + half];
+  // Floor, midpoint and ceiling. Three ticks, because the two that matter are
+  // "on the deck" and "at the lid" and a third stops the middle being a guess.
+  for (const [t, len] of [[0, 7], [0.5, 4], [1, 7]] as const) {
+    const y = cy - half + t * half * 2;
+    rail.push(x, y, x + len, y);
+  }
+  hud.segments(rail, PALETTE.traceDim);
+
+  const y = cy - half + fraction * half * 2;
+  scratch.copy(falling ? PALETTE.amber : PALETTE.trace);
+  // A bar with a tail back down to the deck: the same stalk the scanner draws,
+  // in the same grammar, so the two instruments are obviously one idea.
+  hud.segments([x - 9, y, x + 9, y, x - 4, cy - half, x - 4, y], scratch);
+
+  hud.text("ALT", x - 12, cy - half - 16, 1.5, PALETTE.traceDim);
+  // The number only once there is one worth reading. On the deck the tape is
+  // already saying zero by sitting on its own floor tick.
+  if (player.position.y > 0.05) {
+    hud.text(pad(player.position.y, 2), x + 13, y - 4, 1.6, scratch);
+  }
 }
 
 function drawStatus(hud: Hud, view: HudView): void {
@@ -790,8 +902,16 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
   // Placed at the target's own range along the firing line, so the mark sits
   // in the world beside the ship it belongs to rather than floating at a
   // distance of its own.
+  //
+  // **The solve above needed nothing when the world gained height.** `|r + vt|
+  // = st` is a quadratic in `t` and it is written in `Vector3` arithmetic —
+  // `lengthSq`, `dot`, `subVectors` — so it has been solving the three
+  // dimensional intercept all along and simply never saw a non-zero `y`. The
+  // one line that was planar was the one directly below this, which flattened
+  // the finished answer onto the deck before projecting it; a pip that sat
+  // under the ship it belonged to would have been the visible half of a
+  // solution that was already right.
   leadAim.setLength(best.distance).add(player.position);
-  leadAim.y = 0;
   leadAim.project(camera);
   if (leadAim.z > 1) return; // behind the camera
 
@@ -984,6 +1104,10 @@ function drawDiagnostics(hud: Hud, view: HudView, width: number, height: number)
     ["F  PHOSPHOR", view.phosphor ? "ON" : "OFF"],
     ["V  CRT GLASS", view.crt ? "ON" : "OFF"],
     ["M  AUDIO", view.muted ? "MUTED" : "ON"],
+    // The one switch here that changes the game rather than the picture, and it
+    // sits with the display toggles because that is where its key lives — see
+    // `DISPLAY_KEYS`. It says which of two games is currently running.
+    ["Y  ALTITUDE", flight.threeD ? "ON" : "FLAT"],
     ["1/2/3  VIEW", view.cameraMode.toUpperCase()],
   ];
   rows.forEach(([label, value], index) => {
@@ -994,5 +1118,11 @@ function drawDiagnostics(hud: Hud, view: HudView, width: number, height: number)
 
   hud.textRight(`${pad(view.fps, 3)} FPS`, width - 34, height - 48, 1.5, PALETTE.traceDim);
   hud.textRight("SPACE FIRE   X TORPEDO", width - 34, height - 68, 1.5, PALETTE.traceDim);
-  hud.textRight("ARROWS / WASD  FLY", width - 34, height - 86, 1.5, PALETTE.traceDim);
+  hud.textRight(
+    flight.threeD ? "ARROWS / WASD  FLY   Q  CLIMB" : "ARROWS / WASD  FLY",
+    width - 34,
+    height - 86,
+    1.5,
+    PALETTE.traceDim,
+  );
 }

@@ -130,9 +130,9 @@ export class DeathSequence {
   }
 
   /**
-   * The blast: one broken ring running out across the plane. Drawn in the
-   * player's own cyan, because colour is information and the thing that just
-   * came apart was yours.
+   * The blast: one broken ring running out across the plane, at whatever height
+   * the ship was lost at. Drawn in the player's own cyan, because colour is
+   * information and the thing that just came apart was yours.
    */
   draw(trace: TraceBuffer): void {
     if (this.phase === "none" || this.time > TIMING.shock) return;
@@ -148,10 +148,10 @@ export class DeathSequence {
       const a1 = ((i + 1) / segments) * Math.PI * 2;
       trace.push(
         this.wreck.x + Math.cos(a0) * radius,
-        0,
+        this.wreck.y,
         this.wreck.z + Math.sin(a0) * radius,
         this.wreck.x + Math.cos(a1) * radius,
-        0,
+        this.wreck.y,
         this.wreck.z + Math.sin(a1) * radius,
         PALETTE.trace,
         intensity,

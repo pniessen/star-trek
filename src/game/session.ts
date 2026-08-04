@@ -7,6 +7,7 @@ import {
   Ordnance,
   PHASER,
   TORPEDO,
+  bearingOffset,
   blastDamageAt,
   phaserCostOf,
   phaserDamageAt,
@@ -14,6 +15,7 @@ import {
   sweepDistance,
   sweepHits,
 } from "./weapons.js";
+import { flight } from "./altitude.js";
 import { MINE, Minefield } from "./mines.js";
 import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
@@ -102,6 +104,17 @@ const REINFORCE = {
   /** Below this there is nothing left to give and the pumps just stop. */
   floor: 0.02,
 } as const;
+
+/**
+ * How far off the nose, in bearing, the torpedo tube will look for something to
+ * take an elevation from. See `tubeAim`.
+ *
+ * Wide — forty degrees — and that is the point. A player leading a Raider
+ * crossing at its preferred range is pointed twenty degrees *off* the target, so
+ * a window as tight as the phaser's assist cone would find nothing at exactly
+ * the moment the shot is being aimed properly. Another first-draft guess.
+ */
+const TUBE_WINDOW = 0.7;
 
 /**
  * When a Warden turns up. See `allies.ts` for what one is and why it is here.
@@ -214,6 +227,8 @@ export class Session {
 
   private readonly scratch = new Vector3();
   private readonly nose = new Vector3();
+  /** The launcher's bearing-plus-elevation, rebuilt per shot. See `tubeAim`. */
+  private readonly tube = new Vector3();
 
   /**
    * @param playerShape  the player's hull, held only so that dying can fling
@@ -509,13 +524,19 @@ export class Session {
       // Aim is the nose. The cone is an assist, not a lock — it forgives a
       // couple of degrees so that pointing at something counts as pointing
       // at it, and nothing more.
+      // The cone is measured in *bearing*, not as a solid angle. The beam
+      // itself is drawn to the hull's true position and the falloff is charged
+      // on the true range, so height still costs a distant target damage — what
+      // it does not cost is the ability to point at it at all, which no amount
+      // of turning could have bought back on a ship that cannot pitch. See
+      // `bearingOffset`.
       let best: { hostile: Hostile; distance: number } | null = null;
       for (const hostile of this.fleet.hostiles) {
         if (hostile.hidden) continue; // a cloaked hull is not there to lock onto
         const toTarget = hostile.position.clone().sub(player.position);
         const distance = toTarget.length();
         if (distance > shotRange) continue;
-        const angle = forward.angleTo(toTarget.normalize());
+        const angle = bearingOffset(forward, toTarget.x, toTarget.z);
         if (angle > PHASER.aimCone + hostile.spec.radius / Math.max(distance, 1)) continue;
         if (!best || distance < best.distance) best = { hostile, distance };
       }
@@ -557,7 +578,7 @@ export class Session {
     if (input.fireTorpedo && player.torpedoCooldown <= 0 && player.torpedoes > 0) {
       player.torpedoCooldown = TORPEDO.cooldown;
       player.torpedoes--;
-      this.ordnance.fire(this.nose, forward, "torpedo", true, player.velocity);
+      this.ordnance.fire(this.nose, this.tubeAim(player, forward), "torpedo", true, player.velocity);
       sound.torpedo(player.torpedoes === 0);
     } else if (input.scram && player.torpedoCooldown <= 0 && player.torpedoes > 0) {
       // Refused above the ceiling, so this cannot become a routine top-up
@@ -573,6 +594,50 @@ export class Session {
         this.say("RESERVE TOO HIGH");
       }
     }
+  }
+
+  /**
+   * The tube elevates. The hull does not.
+   *
+   * The player has yaw and a throttle and one key that changes their height.
+   * They have no way to point the nose up or down, and they are never getting
+   * one — that is the constraint the whole altitude design was built around. So
+   * a torpedo fired dead level could never reach anything that was not at
+   * exactly the player's own height, and the answer to "there is a Raider
+   * twelve units above me" would be "there is nothing you can do about it".
+   *
+   * So the launcher trains in elevation onto the nearest hull within a generous
+   * bearing window, and takes **only** its elevation: the player's own bearing
+   * is passed through untouched. Leading the shot is still entirely theirs, and
+   * leading is the whole of what distinguishes a torpedo from a phaser. What the
+   * ship does for them is the one axis they cannot fly.
+   *
+   * Note what this deliberately is not: it is not aiming at the target, and it
+   * is not the lead solution the pip draws. Point at where a crossing Raider
+   * *is* and the torpedo still sails behind it, exactly as it always did.
+   */
+  private tubeAim(player: Ship, forward: Vector3): Vector3 {
+    this.tube.copy(forward);
+    if (!flight.threeD) return this.tube;
+
+    let best: Hostile | null = null;
+    let bestFlat = TORPEDO.speed * TORPEDO.life;
+    for (const hostile of this.fleet.hostiles) {
+      if (hostile.hidden) continue; // nothing to elevate onto that will not resolve
+      const dx = hostile.position.x - player.position.x;
+      const dz = hostile.position.z - player.position.z;
+      const flat = Math.hypot(dx, dz);
+      if (flat < 1e-3 || flat >= bestFlat) continue;
+      if (bearingOffset(forward, dx, dz) > TUBE_WINDOW) continue;
+      best = hostile;
+      bestFlat = flat;
+    }
+    if (!best) return this.tube;
+
+    const elevation = Math.atan2(best.position.y - player.position.y, bestFlat);
+    const level = Math.cos(elevation);
+    this.tube.set(forward.x * level, Math.sin(elevation), forward.z * level);
+    return this.tube;
   }
 
   private resolveProjectiles(player: Ship): void {

@@ -15,6 +15,7 @@ import {
 } from "./geometry/hulls.js";
 import { createGrid, createStarfield } from "./scene/environment.js";
 import { Ship } from "./game/Ship.js";
+import { ALTITUDE, flight } from "./game/altitude.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
 import { Session } from "./game/session.js";
@@ -78,6 +79,13 @@ const playerHull = new VectorObject(HULLS.cruiser, {
   color: PALETTE.trace,
   linewidth: 1.8,
 }).addTo(stage.scene);
+// Aircraft order: yaw about the world's up, then pitch about the ship's own
+// right, then roll about its own nose. The default XYZ was harmless while the
+// only non-zero angles were yaw and a transient bank, but it applies pitch
+// about the *world* X axis, so a climbing ship heading east would have rolled
+// instead of pitched. Bank is unchanged by this — it was already rolling about
+// the hull's own forward and still is.
+playerHull.group.rotation.order = "YXZ";
 
 const fleet = new Fleet((kind: HostileKind) =>
   new VectorObject(HULLS[kind], {
@@ -193,7 +201,7 @@ const pressed = new Set<string>();
  * cabinet convention — but you should still be able to turn the CRT glass off
  * while admiring the title screen.
  */
-const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "m", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "m", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
 
 /**
  * The command view's keys that only move a highlight — the two idioms of
@@ -301,6 +309,14 @@ window.addEventListener("keydown", (event) => {
     case "m":
       sound.muted = !sound.muted;
       break;
+    case "y":
+      // The slab, on and off. In `DISPLAY_KEYS` above so that pressing it on
+      // the title screen changes the game rather than launching a run — the
+      // same courtesy the CRT glass gets, and a good deal more necessary, since
+      // this is the one setting that decides which of two games you are about
+      // to play. Nobody has flown either, which is why it is a switch.
+      flight.threeD = !flight.threeD;
+      break;
     case "r":
       // Not while the log is up. `R` means "run again, now", and during the
       // opening log there is no run yet to repeat — so it falls through to the
@@ -402,20 +418,26 @@ function placeCamera(mode: CameraMode, time: number): void {
   player.forward(forward);
   const camera = stage.camera;
 
+  // Every offset below is now measured from the ship rather than from the
+  // floor, so the camera rides the slab with it. Tracked exactly rather than
+  // lagged: a lag would be a second easing constant nobody has tuned, and the
+  // grid receding underneath is already the whole read on "I am climbing".
+  const deck = player.position.y;
+
   if (mode === "cockpit") {
-    // Sat exactly on the plane everything collapses onto a razor horizon; a
+    // Sat exactly on the deck everything collapses onto a razor horizon; a
     // little height and a fractional look-down spreads the field enough to
-    // read without pretending the play space has a third dimension.
-    eye.copy(player.position).addScaledVector(forward, 1.1).setY(1.7);
-    focus.copy(eye).addScaledVector(forward, 24).setY(0.2);
+    // read.
+    eye.copy(player.position).addScaledVector(forward, 1.1).setY(deck + 1.7);
+    focus.copy(eye).addScaledVector(forward, 24).setY(deck + 0.2);
   } else if (mode === "chase") {
-    eye.copy(player.position).addScaledVector(forward, -12).setY(4.6);
-    focus.copy(player.position).addScaledVector(forward, 8).setY(0.4);
+    eye.copy(player.position).addScaledVector(forward, -12).setY(deck + 4.6);
+    focus.copy(player.position).addScaledVector(forward, 8).setY(deck + 0.4);
   } else {
     const angle = time * 0.28;
     eye.set(
       player.position.x + Math.sin(angle) * 15,
-      4.2 + Math.sin(time * 0.4) * 1.2,
+      deck + 4.2 + Math.sin(time * 0.4) * 1.2,
       player.position.z + Math.cos(angle) * 15,
     );
     focus.copy(player.position);
@@ -494,12 +516,15 @@ function placeWreckCamera(death: DeathSequence, time: number): void {
   const t = death.withdraw;
   const angle = death.viewAngle + t * 1.1 + time * 0.03;
 
+  // Off the wreck's own height, not off the floor: a ship lost at the ceiling
+  // has to be looked at where it was lost, or the camera opens fourteen units
+  // underneath the debris it is supposed to be watching.
   eye.set(
     death.wreck.x + Math.sin(angle) * MathUtils.lerp(12, 52, t),
-    MathUtils.lerp(1.8, 24, t),
+    death.wreck.y + MathUtils.lerp(1.8, 24, t),
     death.wreck.z + Math.cos(angle) * MathUtils.lerp(12, 52, t),
   );
-  focus.copy(death.wreck).setY(MathUtils.lerp(0.6, 0, t));
+  focus.copy(death.wreck).setY(death.wreck.y + MathUtils.lerp(0.6, 0, t));
 
   if (death.shock > 0.01) {
     const shake = death.shock * death.shock * 3.2;
@@ -631,6 +656,15 @@ function frame(now: number): void {
     // the map does not make the ship sound like it is still burning.
     burn = Math.max(0, thrust);
 
+    // Altitude, on one key. `Q` because it is free, because it sits directly
+    // above `A` for a WASD flyer's little finger, and because an arrows flyer's
+    // left hand is already parked one row down on Z/X/C. Deliberately *not*
+    // remapped while the chart is up, exactly as the arrows are not: it is a
+    // flight control, and pulling the chart up over a minefield is precisely
+    // when you want to still be able to climb. The demo pilot never asks for
+    // it — see `Presentation.fly`.
+    const climb = demo ? false : held.has("q");
+
     // Hyperwarp: holding Shift commits to a jump at the chart cursor, wherever
     // it was last pointed. Releasing early is a refund of nothing — Session
     // owns every guard (dead, docked, already charging, already there), so
@@ -646,7 +680,10 @@ function frame(now: number): void {
     const dock = session.docking;
     if (alive && !dock.controlsLocked) {
       const departing = dock.clearing ? Math.min(thrust, 0) : thrust;
-      player.update({ turn, thrust: dock.held ? 0 : departing, held: dock.held }, gameDt);
+      player.update(
+        { turn, thrust: dock.held ? 0 : departing, climb, held: dock.held },
+        gameDt,
+      );
     }
 
     session.update(dt, player, {
@@ -684,7 +721,11 @@ function frame(now: number): void {
   wing.escort?.shape.setMode(settings.shape);
 
   playerHull.group.position.copy(player.position);
-  playerHull.group.rotation.set(0, player.heading, player.bank * 0.6);
+  // Pitch first about the ship's own right, then roll about its own nose —
+  // which is what the "YXZ" order set on the group at boot buys. Negative,
+  // because a positive rotation about X carries +Z (forward) toward -Y, and a
+  // climbing ship should have its nose up.
+  playerHull.group.rotation.set(-player.pitch, player.heading, player.bank * 0.6);
   // On the title screen the hull is the subject whatever the camera mode says;
   // once it has become debris there is nothing left to draw.
   // The title screen is the hull's showcase; the command view is the chart's,
@@ -765,6 +806,18 @@ function frame(now: number): void {
       multiplier: +session.multiplier.toFixed(2),
       hull: +player.hull.toFixed(2),
       energy: +player.energy.toFixed(2),
+      // The slab. `altitude` is the player's own height off the floor,
+      // `hostileAltitude` the highest thing in the sector — enough for a
+      // harness to prove that the ceiling is reachable, that letting go returns
+      // you to the floor, that hostiles use it too, and that with `flight3d`
+      // off nothing leaves the plane at all.
+      altitude: +player.position.y.toFixed(2),
+      climbing: player.climbing,
+      hostileAltitude: +fleet.hostiles
+        .reduce((highest, h) => Math.max(highest, h.position.y), 0)
+        .toFixed(2),
+      flight3d: flight.threeD,
+      ceiling: ALTITUDE.ceiling,
       torpedoes: player.torpedoes,
       debris: session.debris.count,
       mines: session.mines.count,

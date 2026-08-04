@@ -1,4 +1,5 @@
 import { Color, MathUtils, Vector3 } from "three";
+import { ALTITUDE, flight } from "./altitude.js";
 import { sound } from "../audio/sound.js";
 import { VectorObject } from "../render/VectorObject.js";
 import { PALETTE } from "../render/palette.js";
@@ -78,6 +79,19 @@ export interface HostileSpec {
   readonly value: number;
   /** How hard it strafes rather than closing head-on. */
   readonly orbit: number;
+  /**
+   * How much of the slab this class uses, 0-1 of `ALTITUDE.ceiling`.
+   *
+   * A slab the player alone could reach would make altitude a pure escape and
+   * almost certainly strictly dominant, so everything gets it — but not equally,
+   * because how a class uses height is part of what the class *is*. It is
+   * deliberately a preferred altitude that drifts slowly rather than a 3D
+   * pursuit brain: the horizontal steering below is untouched, every hostile
+   * still holds its range and strafes exactly as it did, and the vertical is a
+   * slow wander it does not think about. A hostile that chased you upward would
+   * make altitude worthless *and* make the tube unreadable.
+   */
+  readonly slab: number;
   /** Present only on the mine-layer. */
   readonly lays?: LayingSpec;
   /** Present only on the cloaker. */
@@ -99,6 +113,9 @@ export const HOSTILE_SPECS: Record<HostileKind, HostileSpec> = {
     scale: 1.2,
     value: 100,
     orbit: 0.85,
+    // "Comes from anywhere" is the entire brief of the class, and anywhere now
+    // includes above. It gets nearly the whole slab.
+    slab: 0.9,
   },
   // Punishes standing still: sits far out and hits hard if you hold a heading.
   sniper: {
@@ -114,6 +131,11 @@ export const HOSTILE_SPECS: Record<HostileKind, HostileSpec> = {
     scale: 1.5,
     value: 175,
     orbit: 0.25,
+    // It takes a perch. At its 62-unit station the elevation angle to a Lance
+    // fourteen units up is thirteen degrees, so height barely changes the duel —
+    // what it changes is that the long-range threat is not reliably on the
+    // horizon any more, which is worth having and costs the player nothing.
+    slab: 0.65,
   },
   // Punishes a weak facing: closes, stays, and grinds one shield down.
   brawler: {
@@ -129,6 +151,12 @@ export const HOSTILE_SPECS: Record<HostileKind, HostileSpec> = {
     scale: 1.4,
     value: 300,
     orbit: 0.45,
+    // The anvil stays on the anvil. A Bastion is the thing you have to turn a
+    // fresh quarter toward and keep turning toward, and a Bastion that floated
+    // would stop being that — it would be another thing to look for. It gets
+    // barely any of the slab, which is also what makes it the class you *can*
+    // reliably out-climb.
+    slab: 0.15,
   },
   // Punishes a habit rather than a mistake: it never shoots, it only makes the
   // course you were flying anyway the wrong one. `fireRange: 0` is what stops
@@ -146,6 +174,11 @@ export const HOSTILE_SPECS: Record<HostileKind, HostileSpec> = {
     scale: 1.35,
     value: 250,
     orbit: 1.0, // runs across your front rather than at you
+    // Its ordnance goes on the floor and stays there, so it stays near the
+    // floor with it. A Harrow seeding a field from fourteen units up would look
+    // like mines materialising out of nowhere, and the whole class is built on
+    // the drop being something you can see coming.
+    slab: 0.1,
     lays: { interval: 2.4, lead: 1.5, standoff: 26, scatter: 9, range: 105 },
   },
   // Punishes a player who only reads the reticle: it is not on the forward view
@@ -163,6 +196,12 @@ export const HOSTILE_SPECS: Record<HostileKind, HostileSpec> = {
     scale: 1.25,
     value: 400,
     orbit: 0.35,
+    // It commits from nowhere, and the full slab is more nowhere. It is also
+    // the one class whose altitude the player genuinely cannot read in advance:
+    // an unresolved return is a broken ring on the deck and carries no height,
+    // because a scanner that could not resolve the contact could not have
+    // resolved its altitude either. The stalk is honest by being absent.
+    slab: 1,
     cloak: { strikeRange: 30, wind: 0.45, exposure: 1.7, veil: 0.9, cycle: 3.4 },
   },
 };
@@ -190,6 +229,16 @@ export class Hostile {
   private layTimer = 0;
   /** Decaying flare on materialising, so the moment has a flash to it. */
   private reveal = 0;
+
+  /**
+   * The vertical wander. One sine per ship, with its own phase and its own
+   * period, so a wave arrives at assorted heights instead of rising and falling
+   * as a formation — which is what a shared clock would produce and would read
+   * as a breathing animation rather than as pilots.
+   */
+  private slabPhase = Math.random() * Math.PI * 2;
+  private slabRate = (Math.PI * 2) / (7 + Math.random() * 6); // one cycle every 7-13s
+  private slabTime = 0;
 
   constructor(
     readonly kind: HostileKind,
@@ -247,8 +296,11 @@ export class Hostile {
     if (this.velocity.lengthSq() > this.spec.maxSpeed ** 2) {
       this.velocity.setLength(this.spec.maxSpeed);
     }
+    // Horizontal steering is untouched by any of this: `facing` has no `y`, so
+    // `velocity` never gains one and the range-holding and strafing above are
+    // exactly the same numbers they were. Altitude is set, not accumulated.
     this.position.addScaledVector(this.velocity, dt);
-    this.position.y = 0;
+    this.updateAltitude(dt);
 
     this.cooldown -= dt;
     this.flash = Math.max(0, this.flash - dt * 5);
@@ -264,9 +316,18 @@ export class Hostile {
     // Fire only when actually pointing at the player, so a hostile that has
     // been out-turned genuinely cannot shoot — and a cloaked one never can,
     // because pulling the trigger is what gives it away.
+    //
+    // `aimError` is a *bearing* — `atan2(x, z)` — and always was, so a hostile
+    // has trained its guns in elevation since before there was any elevation to
+    // train them in. That is not an accident this feature exploited, it is the
+    // precedent it copied: the player's tubes now do the same thing, in
+    // `Session.tubeAim`, for exactly the same reason. Nobody in this game has a
+    // pitch axis, and nothing needs one.
     if (this.cooldown <= 0 && !this.hidden && distance < this.spec.fireRange && aimError < 0.4) {
       this.cooldown = this.spec.fireInterval;
-      // Lead the target — a bolt aimed where you are is a bolt you outrun.
+      // Lead the target — a bolt aimed where you are is a bolt you outrun. The
+      // solve is a plain vector subtraction and has been three-dimensional all
+      // along, so a climbing player is led upward without a line changing here.
       const flightTime = distance / BOLT.speed;
       const lead = player.position
         .clone()
@@ -286,6 +347,27 @@ export class Hostile {
     // the hull stops occluding as well as stops glowing.
     this.shape.group.visible = this.cloak < 0.98;
     this.shape.setIntensity((1 + this.flash * 1.6 + this.reveal * 2.4) * (1 - this.cloak));
+  }
+
+  /**
+   * A preferred altitude that varies slowly, and nothing cleverer.
+   *
+   * `0.5 + 0.5 * sin` keeps the target inside `[0, slab * ceiling]` by
+   * construction, so nothing ever goes under the floor and no class ever leaves
+   * the shallow slab the player is flying in. The approach is exponential and
+   * `dt`-driven so the wander is the same speed on any machine.
+   */
+  private updateAltitude(dt: number): void {
+    if (!flight.threeD) {
+      this.position.y = 0;
+      return;
+    }
+    this.slabTime += dt;
+    const target =
+      this.spec.slab *
+      ALTITUDE.ceiling *
+      (0.5 + 0.5 * Math.sin(this.slabPhase + this.slabTime * this.slabRate));
+    this.position.y += (target - this.position.y) * (1 - Math.exp(-1.6 * dt));
   }
 
   damage(amount: number): boolean {

@@ -1,6 +1,7 @@
 import { Color, Vector3 } from "three";
 import { PALETTE } from "../render/palette.js";
 import { NO_REFITS, type Loadout } from "../chart/economy.js";
+import { flight } from "./altitude.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 
 /**
@@ -142,6 +143,11 @@ const sweepToTarget = new Vector3();
  * test and enough for a game where the fastest closing pair covers ~5 units a
  * frame, and a genuinely continuous test would need both paths swept against
  * each other for no perceptible gain.
+ *
+ * It needed nothing at all when the play space gained a third dimension: it is
+ * a point-to-segment distance written in `Vector3` arithmetic — `subVectors`,
+ * `dot`, `lengthSq` — and has been correct in three dimensions since the day it
+ * replaced point sampling. Checked rather than assumed.
  */
 export function sweepDistance(projectile: Projectile, target: Vector3): number {
   sweepStep.subVectors(projectile.position, projectile.previous);
@@ -160,6 +166,28 @@ export function sweepDistance(projectile: Projectile, target: Vector3): number {
 
 export function sweepHits(projectile: Projectile, target: Vector3, radius: number): boolean {
   return sweepDistance(projectile, target) <= radius;
+}
+
+/**
+ * How far off the nose a target is, measured as a **bearing** — the angle on
+ * the floor, with height thrown away.
+ *
+ * This is what every aim check in the game asks for, and the reason is the same
+ * everywhere: nothing here has a pitch axis. The hull yaws and only yaws, so
+ * "am I pointed at it" can only sensibly mean "am I pointed at it in plan".
+ * Elevation is the guns' problem, and inside a fourteen-unit slab it is a
+ * problem a turret can solve — that is most of why the slab is shallow.
+ *
+ * The hostiles have always worked this way (`aimError` in `hostiles.ts` is
+ * `atan2(x, z)`); this only gives the player's weapons the same rule, and with
+ * the slab switched off it is arithmetically identical to the 3D angle it
+ * replaced, because every `y` involved is zero.
+ */
+export function bearingOffset(forward: Vector3, dx: number, dz: number): number {
+  let delta = (Math.atan2(dx, dz) - Math.atan2(forward.x, forward.z)) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return Math.abs(delta);
 }
 
 /**
@@ -216,7 +244,12 @@ export class Ordnance {
       p.life += dt;
       p.previous.copy(p.position);
       p.position.addScaledVector(p.velocity, dt);
-      p.position.y = 0;
+      // With the slab off this is the pin that keeps the old game exactly the
+      // old game. With it on, ordnance travels where it was aimed — bolts are
+      // already led in three dimensions and the player's tube elevates, so
+      // flattening them here is the one line that would have made a climbing
+      // ship unhittable and an elevated hostile unshootable.
+      if (!flight.threeD) p.position.y = 0;
       if (p.dead || p.life >= p.maxLife) this.projectiles.splice(i, 1);
     }
     for (let i = this.beams.length - 1; i >= 0; i--) {

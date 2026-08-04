@@ -265,6 +265,14 @@ export class Presentation {
    * moving. It closes, it turns, it shoots, and once the pot is worth something
    * it flies the corridor home — because the greed loop is the thing actually
    * worth demonstrating, and it is invisible if the demo only ever fights.
+   *
+   * **It stays on the floor.** `PilotInput` has no `climb` and `main.ts` never
+   * asks for one on its behalf. A demo pilot that climbed would need a reason
+   * to — over a field, off a Bastion — and a wrong reason reads as a ship
+   * wandering vertically for no cause, which is worse than a ship that never
+   * does. The hostiles are using the slab around it either way, so the
+   * demonstration still shows a sector with height in it; what it does not show
+   * is the key. That is a gap, and it is the honest kind.
    */
   fly(realDt: number): PilotInput {
     this.torpedoTimer = Math.max(0, this.torpedoTimer - realDt);

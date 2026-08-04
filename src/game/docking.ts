@@ -54,6 +54,18 @@ export interface DockGuidance {
   readonly speed: number;
   readonly speedOk: boolean;
   readonly headingOk: boolean;
+  /**
+   * On the plane, or near enough to it that the gate can take you.
+   *
+   * The station, the corridor and the gate all stay at `y = 0` — having to come
+   * down to dock is a feature, and it is the price of having spent the run
+   * upstairs. `inGate` would have enforced this on its own, since it is a 3D
+   * range against a 7-unit radius, but silently: a ship holding the corridor
+   * centreline fourteen units up reads as perfectly lined up on every needle the
+   * panel has and simply never captures. That is indistinguishable from a bug,
+   * so the panel says the word instead.
+   */
+  readonly altitudeOk: boolean;
   readonly inGate: boolean;
   readonly visible: boolean;
 }
@@ -101,6 +113,7 @@ export class Docking {
     speed: 0,
     speedOk: false,
     headingOk: false,
+    altitudeOk: true,
     inGate: false,
     visible: false,
   };
@@ -148,6 +161,7 @@ export class Docking {
       speed: 0,
       speedOk: false,
       headingOk: false,
+      altitudeOk: true,
       inGate: false,
       visible: false,
     };
@@ -199,6 +213,10 @@ export class Docking {
       speed: player.speed,
       speedOk: player.speed < DOCK_GEOMETRY.maxCaptureSpeed,
       headingOk: heading < DOCK_GEOMETRY.alignTolerance,
+      // The gate's own radius, reused rather than invented: if you are further
+      // off the plane than the gate is wide, the gate cannot have you, and that
+      // is exactly the condition `inGate` is about to test in three dimensions.
+      altitudeOk: player.position.y < DOCK_GEOMETRY.captureRadius,
       inGate: range < DOCK_GEOMETRY.captureRadius,
       visible: player.position.distanceTo(this.station) < DOCK_GEOMETRY.guidanceRange,
     };
@@ -223,13 +241,18 @@ export class Docking {
     if (g.range > DOCK_GEOMETRY.captureRadius * 2.2) this.rearm = false;
 
     this.phase = "aligning";
-    this.status = !g.headingOk
-      ? "CORRECT HEADING"
-      : !g.speedOk
-        ? "REDUCE SPEED"
-        : g.inGate
-          ? "STAND BY FOR CAPTURE"
-          : "ON APPROACH";
+    // Altitude first in the ladder. Every other correction is one you can make
+    // while you keep closing; this one is the only one that makes the rest of
+    // the readout meaningless while it is true.
+    this.status = !g.altitudeOk
+      ? "DESCEND TO PLANE"
+      : !g.headingOk
+        ? "CORRECT HEADING"
+        : !g.speedOk
+          ? "REDUCE SPEED"
+          : g.inGate
+            ? "STAND BY FOR CAPTURE"
+            : "ON APPROACH";
 
     if (!this.rearm && g.inGate && g.speedOk && g.headingOk) {
       this.phase = "capture";
@@ -249,8 +272,12 @@ export class Docking {
     this.captureProgress = Math.min(1, this.captureProgress + dt / TIMING.capture);
     const t = easeInOut(this.captureProgress);
 
+    // The lerp already lands you on the plane, because the mooring is on it —
+    // so the last few units of descent are the tractor's, drawn on the same
+    // ease as everything else it does to you. Pinning `y` here instead would
+    // snap a ship that entered the gate slightly high, on the one frame the
+    // station takes the helm.
     player.position.lerpVectors(this.captureFrom, this.mooring, t);
-    player.position.y = 0;
     player.velocity.multiplyScalar(1 - Math.min(1, dt * 6));
     player.heading = this.captureHeading + wrapAngle(this.mooringHeading - this.captureHeading) * t;
     player.angularVelocity *= 1 - Math.min(1, dt * 6);
