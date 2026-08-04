@@ -71,9 +71,9 @@ export interface BedSpec {
 /**
  * Ceiling on simultaneous voices. A wave-eight fight with a chain of mines
  * going off and three hostiles firing will ask for more than this, and the
- * honest answer is to drop the oldest rather than to let a hundred oscillators
- * accumulate — the eleventh explosion in a second is not information anyone is
- * listening for.
+ * honest answer is to refuse the surplus rather than to let a hundred
+ * oscillators accumulate — the eleventh explosion in a second is not
+ * information anyone is listening for.
  */
 const MAX_VOICES = 18;
 
@@ -84,6 +84,32 @@ const BUS_LEVELS: Record<Bus, number> = {
   panel: 0.7,
   bed: 0.6,
 };
+
+/**
+ * The loudest sum the limiter handles exactly, in units of full scale.
+ *
+ * A `WaveShaperNode`'s curve is indexed by input over [-1, 1] and anything
+ * outside that is clamped to the end of the table — which would be a hard clip,
+ * the exact fault we are here to avoid. So the signal is scaled down by this
+ * factor going in and the curve is built over the widened range, which makes
+ * the transfer exactly `tanh(x)` for any pile-up up to ±4 and asymptotic
+ * beyond it. Four is not a taste decision: eighteen voices at the levels in
+ * `sound.ts` cannot reach it.
+ */
+const LIMIT_CEILING = 4;
+
+/**
+ * `tanh`, sampled. Identity to within 1% below -15 dBFS, so nothing quiet is
+ * touched, and it can never return ±1, so the destination can never clip.
+ */
+function limiterCurve(): Float32Array<ArrayBuffer> {
+  const points = 8193;
+  const curve = new Float32Array(new ArrayBuffer(points * 4));
+  for (let i = 0; i < points; i++) {
+    curve[i] = Math.tanh(((i / (points - 1)) * 2 - 1) * LIMIT_CEILING);
+  }
+  return curve;
+}
 
 interface Rig {
   readonly ctx: AudioContext;
@@ -178,7 +204,13 @@ export class Synth {
       const end = at + attack + hold + Math.max(spec.decay, 0.01);
 
       this.reap(now);
-      if (this.voices.length >= MAX_VOICES) this.steal(now);
+      // Cap and drop, never steal. The pool used to cut the voice nearest the
+      // end of its life to make room; `audio-prior-art.md` §5 and §6.2 are both
+      // explicit that this is backwards — a shot that never sounds in a dense
+      // moment is imperceptible, and a voice cut while it is still saying
+      // something is not. Dropping also degrades *predictably*, which is the
+      // half of §6's static-allocation argument that needs no new numbers.
+      if (this.voices.length >= MAX_VOICES) return;
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0.0001, at);
@@ -187,6 +219,9 @@ export class Synth {
       // Exponential, because a linear fade to nothing reads as a note being cut
       // off and an exponential one reads as a note ending.
       gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+      // Everything downstream of the source, so it can all be let go at once.
+      const chain: AudioNode[] = [gain];
 
       let source: AudioScheduledSourceNode;
       if (spec.kind === "noise") {
@@ -201,8 +236,12 @@ export class Synth {
           filter.frequency.exponentialRampToValueAtTime(clamp(spec.to, 20, 18000), end);
         }
         player.connect(filter).connect(gain);
-        // A different grain each time, so a burst repeated at the phaser's
-        // cadence does not turn into one buzzing pitch.
+        chain.push(filter);
+        // A different grain each time, and a different rate to read it at, so a
+        // burst repeated at the phaser's cadence does not turn into one buzzing
+        // pitch. Free variation at zero allocation, which is the one axis the
+        // CHI 2024 result says actually buys enjoyment.
+        player.playbackRate.value = 0.85 + Math.random() * 0.35;
         player.start(at, Math.random() * (rig.noise.duration - 0.5));
         source = player;
       } else {
@@ -222,6 +261,7 @@ export class Synth {
         const panner = ctx.createStereoPanner();
         panner.pan.value = clamp(spec.pan, -1, 1);
         gain.connect(panner).connect(bus);
+        chain.push(panner);
       } else {
         gain.connect(bus);
       }
@@ -229,7 +269,15 @@ export class Synth {
       source.stop(end + 0.02);
       const voice: Voice = { end, gain, source };
       source.onended = () => {
-        gain.disconnect();
+        // The whole chain, not just the gain. A filter or a panner left hanging
+        // off a dead source is a node the engine has to keep considering, and
+        // this fires from the audio thread where a throw has nowhere to go.
+        try {
+          source.disconnect();
+          for (const node of chain) node.disconnect();
+        } catch {
+          // Already gone. Nothing to do, and nothing worth saying about it.
+        }
         const index = this.voices.indexOf(voice);
         if (index >= 0) this.voices.splice(index, 1);
       };
@@ -286,17 +334,42 @@ export class Synth {
     const master = ctx.createGain();
     master.gain.value = this.silenced ? 0 : 1;
 
-    // One compressor across the whole mix. A chain of mines, a kill and three
-    // hostiles firing in the same tenth of a second is a legitimate game state,
-    // and without this it is a clipped bang with no detail in it.
-    const compressor = ctx.createDynamicsCompressor();
-    compressor.threshold.value = -20;
-    compressor.knee.value = 8;
-    compressor.ratio.value = 8;
-    compressor.attack.value = 0.003;
-    compressor.release.value = 0.2;
+    // DC offset accumulates from anything not symmetric about zero — a short
+    // random buffer with a non-zero mean, a pulse that is not half duty — and
+    // it costs headroom without ever being audible as itself. One highpass and
+    // it is never a problem again.
+    const dc = ctx.createBiquadFilter();
+    dc.type = "highpass";
+    dc.frequency.value = 22;
 
-    master.connect(compressor).connect(ctx.destination);
+    // One limiter across the whole mix, and it is deliberately *not* a
+    // compressor. A chain of mines, a kill and three hostiles firing in the
+    // same tenth of a second is a legitimate game state and the destination
+    // hard-clips, which sounds like a fault rather than like distortion — but
+    // `DynamicsCompressorNode` buys its detection with a fixed 6 ms of
+    // lookahead, and 6 ms is a pre-delay on *every* transient in a game whose
+    // only time-scaling mechanism exists to sell the frame an impact landed on.
+    // Hit-stop, the shield flash and the torpedo's crack are all trying to
+    // arrive at once and the compressor moves one of the three.
+    //
+    // `docs/audio-prior-art.md` §5 names the cost and the alternative: a `tanh`
+    // shaper is zero-latency, cannot clip, and leaves quiet material alone. The
+    // trade is real and taken with eyes open — the shaper does not squash the
+    // way a -20 dB / 8:1 compressor did, so a dense moment is now genuinely
+    // louder and more dynamic than a single shot. That is the honest behaviour
+    // and the player owns the volume knob; the smear was not theirs to fix.
+    //
+    // Oversampling stays off. Chrome implements it with a linear-phase
+    // resampler that reintroduces latency, which is the one thing we came here
+    // to remove, and `tanh` is gentle enough that what it folds back is far
+    // below anything the phosphor pass is doing to the picture.
+    const trim = ctx.createGain();
+    trim.gain.value = 1 / LIMIT_CEILING;
+    const limiter = ctx.createWaveShaper();
+    limiter.curve = limiterCurve();
+    limiter.oversample = "none";
+
+    master.connect(dc).connect(trim).connect(limiter).connect(ctx.destination);
 
     const buses = {} as Record<Bus, GainNode>;
     for (const name of Object.keys(BUS_LEVELS) as Bus[]) {
@@ -319,13 +392,6 @@ export class Synth {
     for (let i = this.voices.length - 1; i >= 0; i--) {
       if (this.voices[i].end <= now) this.voices.splice(i, 1);
     }
-  }
-
-  /** Oldest first: the voice nearest the end of its life is the one nobody misses. */
-  private steal(now: number): void {
-    let oldest = this.voices[0];
-    for (const voice of this.voices) if (voice.end < oldest.end) oldest = voice;
-    this.cut(oldest, now);
   }
 
   private cut(voice: Voice, now: number): void {
