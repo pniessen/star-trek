@@ -62,6 +62,52 @@ export function buildCruiser(): BufferGeometry {
 }
 
 /**
+ * Warden — the ally, and the only hull in the game that is neither you nor
+ * something trying to kill you.
+ *
+ * It is deliberately built out of *your* vocabulary rather than the hostiles':
+ * a faceted disc up front, a spine, two level nacelles on short pylons. Same
+ * yard, smaller ship. Every hostile silhouette is asymmetric about its length
+ * or reaches forward at you — a stooping raptor, a mouth held open, a bulb
+ * thrust out on a neck, a blade. This one is squat, level and symmetrical, with
+ * nothing sticking out in front of the disc and a broad stern: the outline of
+ * something that holds a position rather than something that comes at you.
+ *
+ * A friendly ship has to be readable as friendly in the half second before you
+ * decide whether to shoot, so it is legible by outline alone and does not lean
+ * on colour to say it.
+ */
+export function buildWarden(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  // Forward disc — the cruiser's saucer at two thirds the size, and the one
+  // shape in the game that only ever appears on our own hulls.
+  parts.push(placed(new CylinderGeometry(0.92, 0.78, 0.26, 10, 1), at(0, 0, 1.0)));
+  parts.push(placed(new CylinderGeometry(0.34, 0.6, 0.22, 10, 1), at(0, 0.22, 1.0)));
+
+  // Spine, running the length of it. No neck, no head: nothing reaches forward.
+  parts.push(placed(new BoxGeometry(0.44, 0.4, 2.5), at(0, -0.06, -0.5)));
+  parts.push(placed(new CylinderGeometry(0.26, 0.34, 0.5, 8, 1), alongZ(0, -0.06, -1.95)));
+
+  for (const side of [-1, 1]) {
+    // Nacelles held level and low, on short straight pylons. Level is the whole
+    // point — every hostile's wings are canted, swept or drooped.
+    parts.push(placed(new CylinderGeometry(0.17, 0.17, 1.9, 8, 1), alongZ(side * 1.0, -0.2, -0.35)));
+    parts.push(placed(new CylinderGeometry(0.11, 0.17, 0.26, 8, 1), alongZ(side * 1.0, -0.2, 0.72)));
+    parts.push(placed(new BoxGeometry(0.66, 0.11, 0.42), at(side * 0.66, -0.2, -0.5)));
+  }
+
+  // A low bridge block, and the sensor loop that says this thing is here to
+  // watch a sector rather than to hunt across one.
+  parts.push(placed(new BoxGeometry(0.5, 0.26, 0.7), at(0, 0.28, -0.3)));
+  parts.push(
+    placed(new TorusGeometry(0.34, 0.05, 3, 8), at(0, 0.62, -0.3).multiply(new Matrix4().makeRotationX(Math.PI / 2))),
+  );
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
  * The hostile roster is built from the genre's silhouette grammar rather than
  * from any particular studio's ships: a stooping raptor, a horseshoe with its
  * mouth open, a bulb on a neck between swept wings, a flat-decked working
