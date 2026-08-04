@@ -709,19 +709,38 @@ Three open questions from this section and from `strategy-layer.md`'s own
 
 ## 8. Repository
 
-Everything lives on the branch `claude/star-trek-game-research-vyae7o` in
-`pniessen/star-trek`, fully pushed. `main` still holds only the initial commit —
-nothing has been merged, and no pull request has been opened.
+Everything is on `main` in `pniessen/star-trek`, and every push to `main`
+deploys the build to GitHub Pages (`.github/workflows/pages.yml`, gated on
+`npm run campaigntest`). Feature work happens on branches off `main` and is
+merged back; no long-lived development branch survives.
+
+The milestones, oldest first:
 
 | Commit | Contents |
 |---|---|
 | `54faabc` | Prior-art research, four concept options, visual dossier |
 | `11eb866` | Vector renderer, wireframe/occluded toggle, post chain, stroke HUD |
-| `45b824e` | Combat, hostiles, waves, docking, the multiplier, the scanner, strategy-layer design |
+| `45b824e` | Combat, hostiles, waves, docking, the multiplier, the scanner |
+| `f90ac72` | The enemy's turn — pressure budget, committed moves, interception |
+| `dab239c` | Hyperwarp, priced at half the multiplier |
+| `10ca379` | The in-run tactical chart, drawn over the run without pausing it |
+| `cce677e` | The command view, closing run → tally → chart → run |
+| `e5e5b79` | The audio layer: two oscillators and some noise |
+| `469efab` | The audio prior-art research, which the layer predates and contradicts |
+| `af6a8b4` | Pages deployment on every push to `main` |
+| `8f3747d` | Swept projectile collision, replacing point sampling |
+| `589b49c` | Alert conditions, and shields worth managing |
+| `ed22402` | The Warden — the one thing that is neither you nor hostile |
+| `435f187` | Sector names, prices, and a cursor you can find |
+
+What to do next lives in [todo.md](todo.md), not here.
 
 ```
 npm install
 npm run dev                  # http://127.0.0.1:5173
-npm run typecheck
-node tools/playtest.mjs      # headless run + assertions + screenshots
+npm run typecheck            # before every commit
+npm run playtest             # headless run + assertions (needs a Playwright browser)
+npm run campaigntest         # chart logic assertions, bare node
+npm run campaignlength       # campaign length distribution over many seeds
+npm run standalone           # dist/kobayashi.html, one self-contained file
 ```

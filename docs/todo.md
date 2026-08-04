@@ -56,11 +56,6 @@ starbase sits at one fixed world position however the chart is drawn. Either
 make per-sector docking real or stop claiming it. Listed again under §3 because
 making it true is a design decision, not a bug fix.
 
-### 1.3 `status.md` §8 is stale
-
-It still says `main` holds only the initial commit and nothing has been merged.
-Everything is on `main` and deployed. The commit table stops at `45b824e`.
-
 ---
 
 ## 2. Tuning — needs a human at the keyboard, not more reasoning
