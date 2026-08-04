@@ -3,7 +3,7 @@ import { DebrisField } from "./debris.js";
 import { DeathSequence } from "./death.js";
 import { HIT_STOP, HitStop } from "./hitStop.js";
 import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
-import { Ordnance, PHASER, TORPEDO, phaserCostOf, phaserDamageAt, phaserRangeOf } from "./weapons.js";
+import { Ordnance, PHASER, TORPEDO, phaserCostOf, phaserDamageAt, phaserRangeOf, sweepHits } from "./weapons.js";
 import { MINE, Minefield } from "./mines.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
@@ -344,7 +344,7 @@ export class Session {
       if (projectile.friendly) {
         for (const hostile of this.fleet.hostiles) {
           if (hostile.hidden) continue; // torpedoes pass straight through a veil
-          if (projectile.position.distanceTo(hostile.position) > hostile.spec.radius) continue;
+          if (!sweepHits(projectile, hostile.position, hostile.spec.radius)) continue;
           projectile.dead = true;
           // Only torpedoes reach here — phasers resolve instantly — which is
           // what keeps hit-stop an event. A phaser burst lands every 0.16s and
@@ -362,12 +362,12 @@ export class Session {
         // Only the player's own fire clears mines. Letting hostile bolts set
         // the field off would make the danger something that happens to you
         // rather than something you flew into.
-        const mine = this.mines.intercept(projectile.position, 2.4);
+        const mine = this.mines.interceptSwept(projectile, 2.4);
         if (mine) {
           projectile.dead = true;
           if (this.mines.strike(mine, projectile.damage)) this.pending += MINE.value * this.salvageScale;
         }
-      } else if (projectile.position.distanceTo(player.position) <= PLAYER_RADIUS) {
+      } else if (sweepHits(projectile, player.position, PLAYER_RADIUS)) {
         projectile.dead = true;
         // A facing eating a bolt and a bolt reaching the hull are different
         // events and have to sound like it — that distinction is the whole

@@ -67,6 +67,16 @@ export function phaserDamageAt(distance: number, loadout: Loadout = NO_REFITS): 
 
 export interface Projectile {
   readonly position: Vector3;
+  /**
+   * Where it was at the end of the previous step.
+   *
+   * Hit tests use the segment from here to `position`, not `position` alone. A
+   * torpedo travels up to 3.7 units in one clamped frame and the smallest
+   * hostile is 4.4 across, so a point test lets anything but a near-central
+   * hit straddle the target and pass through it — and leading a strafing
+   * target is precisely how you produce a grazing pass.
+   */
+  readonly previous: Vector3;
   readonly velocity: Vector3;
   life: number;
   readonly maxLife: number;
@@ -85,6 +95,38 @@ interface Beam {
 }
 
 const BEAM_LIFE = 0.11;
+
+const sweepStep = new Vector3();
+const sweepToTarget = new Vector3();
+
+/**
+ * Did a projectile's travel this frame pass within `radius` of `target`?
+ *
+ * The closest approach of the segment `previous → position` to a point, rather
+ * than the distance from the sampled endpoint. Everything that moves fast
+ * enough to skip a target in one clamped frame has to ask the question this
+ * way — see `Projectile.previous` for the arithmetic that makes it necessary.
+ *
+ * Targets move too, so this is not exact: it sweeps the projectile against a
+ * stationary snapshot of the target. That is a large improvement on a point
+ * test and enough for a game where the fastest closing pair covers ~5 units a
+ * frame, and a genuinely continuous test would need both paths swept against
+ * each other for no perceptible gain.
+ */
+export function sweepHits(projectile: Projectile, target: Vector3, radius: number): boolean {
+  sweepStep.subVectors(projectile.position, projectile.previous);
+  sweepToTarget.subVectors(target, projectile.previous);
+
+  const lengthSq = sweepStep.lengthSq();
+  // A projectile that has not moved yet — its first frame — is just a point.
+  if (lengthSq < 1e-9) return sweepToTarget.lengthSq() <= radius * radius;
+
+  // Clamped so the segment stays a segment: a target behind the muzzle or
+  // beyond this frame's travel is not hit by it.
+  const t = Math.max(0, Math.min(1, sweepToTarget.dot(sweepStep) / lengthSq));
+  sweepStep.multiplyScalar(t);
+  return sweepToTarget.distanceToSquared(sweepStep) <= radius * radius;
+}
 
 export class Ordnance {
   readonly projectiles: Projectile[] = [];
@@ -105,6 +147,7 @@ export class Ordnance {
 
     this.projectiles.push({
       position: position.clone(),
+      previous: position.clone(),
       velocity,
       life: 0,
       maxLife: spec.life,
@@ -123,6 +166,7 @@ export class Ordnance {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.life += dt;
+      p.previous.copy(p.position);
       p.position.addScaledVector(p.velocity, dt);
       p.position.y = 0;
       if (p.dead || p.life >= p.maxLife) this.projectiles.splice(i, 1);

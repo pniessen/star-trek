@@ -3,6 +3,7 @@ import { sound } from "../audio/sound.js";
 import { PALETTE } from "../render/palette.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 import type { Ship } from "./Ship.js";
+import { sweepHits, type Projectile } from "./weapons.js";
 
 /**
  * The minefield: the one thing in the game that is dangerous without being
@@ -128,6 +129,28 @@ export class Minefield {
   }
 
   /** Nearest mine within `radius` of a point — projectile resolution. */
+  /**
+   * The nearest mine a projectile's travel this frame passed through.
+   *
+   * Mines do not move, but torpedoes cover up to 3.7 units in a clamped frame
+   * against a 4.8-unit-wide mine, so a point test skips them for the same
+   * reason it skipped hostiles — see `Projectile.previous`.
+   */
+  interceptSwept(projectile: Projectile, radius: number): Mine | null {
+    let best: Mine | null = null;
+    let bestDistance = Infinity;
+    for (const mine of this.mines) {
+      if (!sweepHits(projectile, mine.position, radius)) continue;
+      // Nearest to where the shot came from, so a line of mines detonates from
+      // the near end rather than the middle.
+      const distance = mine.position.distanceTo(projectile.previous);
+      if (distance > bestDistance) continue;
+      best = mine;
+      bestDistance = distance;
+    }
+    return best;
+  }
+
   intercept(point: Vector3, radius: number): Mine | null {
     let best: Mine | null = null;
     let bestDistance = radius;
