@@ -1,4 +1,5 @@
 import { MathUtils, Vector3 } from "three";
+import { Briefing } from "./briefing.js";
 import { DOCK_GEOMETRY } from "./docking.js";
 import { isLost, isWon, newCampaign, type Campaign } from "../chart/campaign.js";
 import { advanceCampaign, campaignFor, restartCampaign, type RunReport } from "../chart/economy.js";
@@ -85,6 +86,27 @@ export class Presentation {
   report: RunReport | null = null;
 
   /**
+   * The opening log, and the run it is holding at the gate.
+   *
+   * Live only between `startRun` and whatever ends it, and only on a new war —
+   * see `briefing.ts` for why it is a hold inside a run rather than a fifth
+   * `PresentationMode`. While it is up nothing is stepped: not the session, not
+   * the demo pilot, not the chart. `main.ts` reads `active` for all of that.
+   */
+  readonly briefing = new Briefing();
+
+  /**
+   * The seed of the campaign the log has already been read for.
+   *
+   * `runsElapsed === 0` alone is not enough: `R` restarts a run that has not
+   * ended yet, and the campaign's clock has not moved, so the log would replay
+   * every time a player bounced off the first wave. Keyed on the seed rather
+   * than a bare flag because `restartCampaign` opens a new war in the same
+   * object — a new seed is exactly the event that earns a second reading.
+   */
+  private briefedSeed: number | null = null;
+
+  /**
    * The demonstration's throwaway campaign. The demo pilot flies the real
    * session and the real session banks salvage, so without a second campaign to
    * bank into an unattended cabinet spends the player's savings. See
@@ -124,6 +146,15 @@ export class Presentation {
   /** @param realDt wall-clock seconds; the shell's clock is never dilated. */
   update(realDt: number): void {
     this.time += realDt;
+
+    // The log holds the run at the gate, so the shell's own clock is the only
+    // thing that runs while it is up. Nothing can die, dock or spawn behind it
+    // — `main.ts` does not step the session either — so there is no state below
+    // that could have changed.
+    if (this.briefing.active) {
+      this.briefing.update(realDt);
+      return;
+    }
 
     switch (this.mode) {
       case "title":
@@ -176,6 +207,14 @@ export class Presentation {
       this.persist(this.campaign);
     }
     this.enter("run");
+    // After `enter`, never before: `Session.restart` is what puts
+    // `campaign.current` back on the front, and the log names the sector the
+    // run actually drops into. Read first and it would name wherever the last
+    // run's hyperwarp left the cursor.
+    if (this.campaign.runsElapsed === 0 && this.briefedSeed !== this.campaign.seed) {
+      this.briefedSeed = this.campaign.seed;
+      this.briefing.begin(this.campaign);
+    }
   }
 
   /** Straight from the epitaph to the chart, for a player who does not want to wait. */
@@ -198,6 +237,10 @@ export class Presentation {
   private enter(mode: PresentationMode): void {
     this.mode = mode;
     this.time = 0;
+    // A log belongs to the run it opens. Any mode change is that run ending,
+    // including the one `startRun` is in the middle of making — which is why
+    // it begins the log *after* calling this rather than before.
+    this.briefing.skip();
     this.torpedoTimer = 0;
     this.tallyTime = 0;
     // The command view is the one mode that exists to read the report, so it
