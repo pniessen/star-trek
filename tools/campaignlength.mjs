@@ -1,12 +1,11 @@
 /**
- * Runs many campaigns against a model player and reports how long they take to
- * resolve. This does not say whether the chart is fun. It says whether
- * ENEMY_START_DEPTH and the pressure formula produce the 15-25 run campaign
- * they are supposed to, and — since the command view exists — whether an
- * economy on the player's side of the ledger can win one at all.
+ * Runs many campaigns against a model player and reports how they resolve.
+ * This does not say whether the chart is fun. It says whether the pressure
+ * formula and the ground a run takes produce a war whose outcome is ever in
+ * doubt.
  *
- * The model player now has the tools the command view gives a real one. It
- * banks salvage, takes ground by flying somewhere and clearing it, fields and
+ * The model player has the tools the command view gives a real one. It banks
+ * salvage, takes ground by flying somewhere and clearing it, fields and
  * reinforces patrols, builds outposts, starbases and yards, and picks its
  * front. It spends through the same functions the game does, so a rule change
  * in `economy.ts` shows up here without this file being touched.
@@ -23,21 +22,52 @@
  *  - **Skill.** `--take` is a flat figure per run; a real player's banked
  *    salvage varies enormously with how greedy they were.
  *
+ * ## What this reports, and why it grew
+ *
+ * A length distribution was enough while the only question was "how long".
+ * The question now is "is the outcome ever in doubt", and a median cannot
+ * answer that. So alongside the outcome split there are three readings that
+ * can:
+ *
+ *  - **The trajectory.** Mean enemy-held sectors at fixed runs. A war decided
+ *    on the first run and a war that swings look identical in a median and
+ *    nothing alike here.
+ *  - **Where a loss turns.** For campaigns that end badly, how far the player
+ *    got before the tide went the other way, and on which run. A player who
+ *    reaches nine enemy sectors out of twenty-four and then loses anyway is
+ *    being told a different thing about the model than one who never advances.
+ *  - **`--sweep`**, which runs the whole reach ladder in one command and says
+ *    outright whether there is a **contested band** — a range of reach values
+ *    where the same rules produce both wins and losses. A candidate feedback
+ *    term that only moves the threshold has failed, and the sweep is the one
+ *    reading that shows the difference.
+ *
  *   npm run campaignlength -- [trials] [--take=N] [--reach=N] [--refits]
+ *                             [--feedback=SPEC] [--sweep] [--trace=SEED]
+ *
+ * `--feedback` selects the candidate terms in `chart/feedback.ts`, plus-joined
+ * — `--feedback=supply+entrench`. The default is `none`, which is the shipped
+ * game exactly.
  */
-const { newCampaign, creditSalvage, hasStructure, isWon, isLost } =
+const { newCampaign, creditSalvage, hasStructure, isWon, isLost, ENEMY_START_DEPTH } =
   await import("../.campaign-build/chart/campaign.js");
 const {
   advanceCampaign, build, deployPatrol, gainGround,
   patrolCapacity, patrolCount, toggleRefit, PATROL, REFITS,
 } = await import("../.campaign-build/chart/economy.js");
+const { pressureBudget } = await import("../.campaign-build/chart/enemyTurn.js");
+const { setFeedback, describeFeedback } = await import("../.campaign-build/chart/feedback.js");
 const { makeRng } = await import("../.campaign-build/chart/rng.js");
-const { neighbours } = await import("../.campaign-build/chart/sectors.js");
+const { GRID, SECTOR_COUNT, neighbours } = await import("../.campaign-build/chart/sectors.js");
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
   const found = args.find((a) => a.startsWith(`--${name}=`));
   return found === undefined ? fallback : Number(found.split("=")[1]);
+};
+const text = (name, fallback) => {
+  const found = args.find((a) => a.startsWith(`--${name}=`));
+  return found === undefined ? fallback : found.split("=").slice(1).join("=");
 };
 const TRIALS = Number(args.find((a) => !a.startsWith("--")) ?? 2000);
 /**
@@ -52,11 +82,23 @@ const TAKE = flag("take", 1200);
  * are standing in — theirs to contested, or contested to yours — so three is a
  * run that takes its drop sector outright and hyperwarps once to start on the
  * next. This is the single most decisive number in the whole model; see the
- * sweep recorded in status.md §3 before changing it.
+ * sweep recorded in docs/campaign-balance.md before changing it.
  */
 const REACH = flag("reach", 3);
 const BUY_REFITS = args.includes("--refits");
+const FEEDBACK = text("feedback", "none");
+const SWEEP = args.some((a) => a === "--sweep" || a.startsWith("--sweep="));
+const SWEEP_REACHES = (text("sweep", "") || "1,2,3,4,5,6,7,8,10")
+  .split(",").map(Number).filter((n) => Number.isFinite(n));
+const TRACE = args.some((a) => a.startsWith("--trace=")) ? flag("trace", 1) : null;
 const CEILING = 200;
+
+/** The board the enemy opens holding. Every "how far has the front moved" reads against this. */
+const START_THEIRS = ENEMY_START_DEPTH * GRID;
+
+setFeedback(FEEDBACK);
+
+// ── the model player ────────────────────────────────────────────────────────
 
 /** Ground the player can reach: theirs or contested, next to something held. */
 function reachable(campaign) {
@@ -84,7 +126,7 @@ function frontLine(campaign) {
 }
 
 /**
- * One visit to the command view, then one run.
+ * One visit to the command view.
  *
  * Spending order is cheapest-useful-first, which is what a player short of
  * salvage actually does: hold the line with patrols, then buy somewhere to
@@ -144,7 +186,13 @@ function deepestHeld(campaign) {
   return best;
 }
 
-function modelPlayerRun(campaign) {
+/**
+ * One run. Returns the steps of ground it actually converted, which is not
+ * always `reach`: a candidate that makes ground cost more to take spends the
+ * same reach on fewer sectors, and the difference between the two is the
+ * whole point of measuring it.
+ */
+function modelPlayerRun(campaign, reach) {
   const targets = reachable(campaign);
   // Decision four: where to drop. Richest reachable ground, or stay home.
   if (targets.length) {
@@ -160,67 +208,214 @@ function modelPlayerRun(campaign) {
   // richest reachable sectors, which is what hyperwarp makes possible.
   let moved = 0;
   for (const index of targets) {
-    while (moved < REACH && gainGround(campaign, index)) moved++;
-    if (moved >= REACH) break;
+    while (moved < reach && gainGround(campaign, index)) moved++;
+    if (moved >= reach) break;
   }
 
   spend(campaign);
+  return moved;
 }
 
-const lengths = [];
-let won = 0;
-let lost = 0;
-let stalled = 0;
-const structuresBuilt = [];
-const groundHeld = [];
+// ── one campaign ────────────────────────────────────────────────────────────
 
-for (let trial = 0; trial < TRIALS; trial++) {
-  const campaign = newCampaign(trial + 1);
-  let run = 0;
-  for (; run < CEILING; run++) {
-    modelPlayerRun(campaign);
+const count = (campaign, control) =>
+  campaign.sectors.filter((s) => s.control === control).length;
+
+/**
+ * Plays one campaign to a conclusion and records the shape of it, not only the
+ * end of it. `theirs` per run is what every trajectory reading below is derived
+ * from — it is the front, as one number.
+ */
+function runCampaign(seed, reach) {
+  const campaign = newCampaign(seed);
+  const theirsPerRun = [];
+  const budgetPerRun = [];
+  let outcome = "unresolved";
+
+  for (let run = 0; run < CEILING; run++) {
+    modelPlayerRun(campaign, reach);
+    budgetPerRun.push(pressureBudget(campaign));
     advanceCampaign(campaign, makeRng(campaign.seed, campaign.rngCursor));
-    if (isWon(campaign)) { won++; break; }
-    if (isLost(campaign)) { lost++; break; }
+    theirsPerRun.push(count(campaign, "theirs"));
+    if (isWon(campaign)) { outcome = "won"; break; }
+    if (isLost(campaign)) { outcome = "lost"; break; }
   }
-  if (run >= CEILING) stalled++;
-  lengths.push(run);
-  structuresBuilt.push(campaign.sectors.reduce((n, s) => n + s.structures.length, 0));
-  groundHeld.push(campaign.sectors.filter((s) => s.control === "ours").length);
+
+  // Deepest advance: the fewest sectors the enemy ever held, and when. For a
+  // loss this is the high-water mark of the whole war.
+  let deepest = START_THEIRS;
+  let deepestAt = 0;
+  theirsPerRun.forEach((theirs, i) => {
+    if (theirs < deepest) { deepest = theirs; deepestAt = i + 1; }
+  });
+
+  return {
+    outcome,
+    runs: campaign.runsElapsed,
+    theirsPerRun,
+    budgetPerRun,
+    deepest,
+    deepestAt,
+    structures: campaign.sectors.reduce((n, s) => n + s.structures.length, 0),
+    ours: count(campaign, "ours"),
+  };
 }
 
-lengths.sort((a, b) => a - b);
-const at = (q) => lengths[Math.floor(lengths.length * q)];
-const winRate = won / TRIALS;
-const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+// ── reporting ───────────────────────────────────────────────────────────────
 
-// Outcome split first: it frames what the length percentiles below actually
-// mean. A campaign length is only meaningful once both sides can plausibly
-// win it; a 100%-loss distribution is a time-to-defeat, not a length.
-console.log(`trials      ${TRIALS}`);
-// One step is half a sector: theirs to contested, or contested to yours.
-console.log(`model       take=${TAKE}/run  reach=${REACH} steps/run  refits=${BUY_REFITS ? "bought" : "not modelled"}`);
-console.log(`won         ${won}  (${(winRate * 100).toFixed(1)}%)`);
-console.log(`lost        ${lost}  (${((lost / TRIALS) * 100).toFixed(1)}%)`);
-console.log(`unresolved  ${stalled}  (${((stalled / TRIALS) * 100).toFixed(1)}%)`);
-console.log(`runs        p10=${at(0.1)}  median=${at(0.5)}  p90=${at(0.9)}`);
-// What the economy actually bought, so a run where salvage made no difference
-// is visible as such rather than being hidden inside the outcome split.
-console.log(`economy     ${mean(structuresBuilt).toFixed(1)} structures standing, ${mean(groundHeld).toFixed(1)} of 64 sectors held at the end`);
-console.log();
+const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+const pct = (n, of) => `${((n / of) * 100).toFixed(1)}%`;
 
-if (winRate === 0) {
+function summarise(results) {
+  const lengths = results.map((r) => r.runs).sort((a, b) => a - b);
+  const at = (q) => lengths[Math.min(lengths.length - 1, Math.floor(lengths.length * q))];
+  const of = (outcome) => results.filter((r) => r.outcome === outcome);
+  return {
+    trials: results.length,
+    won: of("won").length,
+    lost: of("lost").length,
+    unresolved: of("unresolved").length,
+    p10: at(0.1), median: at(0.5), p90: at(0.9),
+    results,
+  };
+}
+
+/**
+ * Mean enemy-held sectors at fixed runs, over campaigns still going at that
+ * run. A resolved campaign drops out rather than being held flat, because a
+ * won campaign padded with zeroes would report an advance that nobody made.
+ */
+function trajectory(results, marks) {
+  return marks.map((run) => {
+    const alive = results.filter((r) => r.theirsPerRun.length >= run);
+    return { run, alive: alive.length, theirs: mean(alive.map((r) => r.theirsPerRun[run - 1])) };
+  });
+}
+
+function report(stats, label) {
+  const { trials, won, lost, unresolved } = stats;
+  console.log(`trials      ${trials}`);
+  console.log(`model       ${label}`);
+  console.log(`won         ${won}  (${pct(won, trials)})`);
+  console.log(`lost        ${lost}  (${pct(lost, trials)})`);
+  console.log(`unresolved  ${unresolved}  (${pct(unresolved, trials)})`);
+  console.log(`runs        p10=${stats.p10}  median=${stats.median}  p90=${stats.p90}`);
   console.log(
-    "every campaign resolved in the enemy's favour (0% won) — with an economy\n" +
-    "on the board this is no longer a statement about the model player's\n" +
-    "incapacity, and should be read as evidence about the pressure formula.",
+    `economy     ${mean(stats.results.map((r) => r.structures)).toFixed(1)} structures standing, ` +
+    `${mean(stats.results.map((r) => r.ours)).toFixed(1)} of ${SECTOR_COUNT} sectors held at the end`,
   );
-} else if (stalled / TRIALS > 0.05) {
-  console.log(
-    `${((stalled / TRIALS) * 100).toFixed(1)}% of campaigns never resolved inside ${CEILING} runs.\n` +
-    "A deadlock is its own failure: neither side can finish, so the war has no\n" +
-    "length rather than a long one.",
-  );
+
+  // The trajectory. `theirs` opens at START_THEIRS; anything below that is
+  // ground the player has taken, anything above is ground they have lost.
+  const marks = [1, 3, 5, 10, 15, 20, 30, 50].filter((m) => m <= CEILING);
+  console.log();
+  console.log(`front       enemy-held sectors, mean over campaigns still running (opens at ${START_THEIRS})`);
+  const rows = trajectory(stats.results, marks).filter((r) => r.alive > 0);
+  console.log(`            run    ${rows.map((r) => String(r.run).padStart(6)).join("")}`);
+  console.log(`            theirs ${rows.map((r) => r.theirs.toFixed(1).padStart(6)).join("")}`);
+  console.log(`            still  ${rows.map((r) => String(r.alive).padStart(6)).join("")}`);
+
+  // Where a loss turns. The high-water mark of a campaign that ends badly is
+  // the difference between "never got going" and "was winning and lost it".
+  const bad = stats.results.filter((r) => r.outcome !== "won");
+  if (bad.length) {
+    const led = bad.filter((r) => r.deepest < START_THEIRS - 4).length;
+    console.log();
+    console.log(
+      `turning     campaigns not won reached ${mean(bad.map((r) => r.deepest)).toFixed(1)} enemy sectors ` +
+      `at run ${mean(bad.map((r) => r.deepestAt)).toFixed(1)} before the tide turned`,
+    );
+    console.log(`            ${led} of ${bad.length} (${pct(led, bad.length)}) had taken five sectors or more first`);
+  }
+  console.log();
+}
+
+// ── modes ───────────────────────────────────────────────────────────────────
+
+const label = (reach) =>
+  `take=${TAKE}/run  reach=${reach} steps/run  refits=${BUY_REFITS ? "bought" : "not modelled"}  ` +
+  `feedback=${describeFeedback()}`;
+
+if (TRACE !== null) {
+  // One campaign, run by run. The aggregate says which way a war went; this
+  // says how, and it is the only reading that shows the pressure budget
+  // overtaking the player's fixed rate at the run it happens.
+  const campaign = newCampaign(TRACE);
+  console.log(`seed ${TRACE}  ${label(REACH)}`);
+  console.log("run  theirs  contested  ours  budget  pushes  consolidates  moved");
+  for (let run = 0; run < CEILING; run++) {
+    const moved = modelPlayerRun(campaign, REACH);
+    const budget = pressureBudget(campaign);
+    const actions = advanceCampaign(campaign, makeRng(campaign.seed, campaign.rngCursor)).actions;
+    const p = (x, w) => String(x).padStart(w);
+    console.log(
+      `${p(campaign.runsElapsed, 3)}  ${p(count(campaign, "theirs"), 6)}  ` +
+      `${p(count(campaign, "contested"), 9)}  ${p(count(campaign, "ours"), 4)}  ${p(budget, 6)}  ` +
+      `${p(actions.filter((a) => a.kind.startsWith("push")).length, 6)}  ` +
+      `${p(actions.filter((a) => a.kind === "consolidate").length, 12)}  ${p(moved, 5)}`,
+    );
+    if (isWon(campaign)) { console.log("WON"); break; }
+    if (isLost(campaign)) { console.log("LOST"); break; }
+  }
+} else if (SWEEP) {
+  // The whole reach ladder in one command, because the finding that matters is
+  // not any single row but whether two adjacent rows disagree.
+  console.log(`trials      ${TRIALS} per row`);
+  console.log(`model       take=${TAKE}/run  refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`);
+  console.log();
+  console.log("reach    won     lost   unres   median   deepest   turns at");
+  const band = [];
+  for (const reach of SWEEP_REACHES) {
+    const results = [];
+    for (let trial = 0; trial < TRIALS; trial++) results.push(runCampaign(trial + 1, reach));
+    const s = summarise(results);
+    const bad = results.filter((r) => r.outcome !== "won");
+    const p = (x, w) => String(x).padStart(w);
+    console.log(
+      `${p(reach, 5)}  ${p(pct(s.won, s.trials), 6)}  ${p(pct(s.lost, s.trials), 6)}  ` +
+      `${p(pct(s.unresolved, s.trials), 6)}  ${p(s.median, 6)}   ${p(mean(bad.map((r) => r.deepest)).toFixed(1), 7)}   ` +
+      `${p(mean(bad.map((r) => r.deepestAt)).toFixed(1), 8)}`,
+    );
+    // Contested: both outcomes genuinely occur, and the war still ends. A row
+    // that is 50% won and 50% deadlocked is not a contest, it is a coin flip
+    // between winning and nothing happening.
+    if (s.won / s.trials >= 0.1 && s.won / s.trials <= 0.9 && s.unresolved / s.trials <= 0.25) {
+      band.push(reach);
+    }
+  }
+  console.log();
+  console.log("`deepest` and `turns at` describe the campaigns that were not won: how few");
+  console.log("sectors the enemy was reduced to, and on which run, before the tide turned.");
+  console.log();
+  if (band.length === 0) {
+    console.log("NO CONTESTED BAND. Every row resolves the same way for nearly every seed, so");
+    console.log("the war is decided by the ratio of two rates and not by anything that happens");
+    console.log("in it. A feedback term that only moves the threshold lands here too.");
+  } else {
+    console.log(`CONTESTED BAND at reach ${band.join(", ")} — ${band.length} of ${SWEEP_REACHES.length} rows`);
+    console.log("produce both wins and losses with the war still resolving. This is the reading");
+    console.log("a candidate has to move; a threshold that merely shifted will show none.");
+  }
 } else {
-  console.log(`target: median within 15-25, unresolved at 0% (won ${(winRate * 100).toFixed(1)}% of trials)`);
+  const results = [];
+  for (let trial = 0; trial < TRIALS; trial++) results.push(runCampaign(trial + 1, REACH));
+  const stats = summarise(results);
+  report(stats, label(REACH));
+
+  const winRate = stats.won / stats.trials;
+  if (winRate === 0) {
+    console.log(
+      "every campaign resolved in the enemy's favour (0% won) — with an economy\n" +
+      "on the board this is no longer a statement about the model player's\n" +
+      "incapacity, and should be read as evidence about the pressure formula.",
+    );
+  } else if (stats.unresolved / stats.trials > 0.05) {
+    console.log(
+      `${pct(stats.unresolved, stats.trials)} of campaigns never resolved inside ${CEILING} runs.\n` +
+      "A deadlock is its own failure: neither side can finish, so the war has no\n" +
+      "length rather than a long one.",
+    );
+  } else {
+    console.log(`target: median within 15-25, unresolved at 0% (won ${pct(stats.won, stats.trials)} of trials)`);
+  }
 }
