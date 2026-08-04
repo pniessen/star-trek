@@ -88,21 +88,22 @@ export class Presentation {
   /**
    * The opening log, and the run it is holding at the gate.
    *
-   * Live only between `startRun` and whatever ends it, and only on a new war —
-   * see `briefing.ts` for why it is a hold inside a run rather than a fifth
-   * `PresentationMode`. While it is up nothing is stepped: not the session, not
-   * the demo pilot, not the chart. `main.ts` reads `active` for all of that.
+   * Live only between `startRun` and whatever ends it — see `briefing.ts` for
+   * why it is a hold inside a run rather than a fifth `PresentationMode`.
+   * While it is up nothing is stepped: not the session, not the demo pilot,
+   * not the chart. `main.ts` reads `active` for all of that.
    */
   readonly briefing = new Briefing();
 
   /**
-   * The seed of the campaign the log has already been read for.
+   * The seed of the campaign the *rules* have already been read for.
    *
-   * `runsElapsed === 0` alone is not enough: `R` restarts a run that has not
-   * ended yet, and the campaign's clock has not moved, so the log would replay
-   * every time a player bounced off the first wave. Keyed on the seed rather
-   * than a bare flag because `restartCampaign` opens a new war in the same
-   * object — a new seed is exactly the event that earns a second reading.
+   * The log itself opens every run now; this only decides whether it teaches.
+   * Keyed on the seed rather than on `runsElapsed` because `R` restarts a run
+   * the campaign's clock has not counted yet — a player bouncing off wave one
+   * would be taught the rules again every time — and because
+   * `restartCampaign` opens a new war in the same object, so a new seed is
+   * exactly the event that earns a second lesson.
    */
   private briefedSeed: number | null = null;
 
@@ -211,10 +212,15 @@ export class Presentation {
     // `campaign.current` back on the front, and the log names the sector the
     // run actually drops into. Read first and it would name wherever the last
     // run's hyperwarp left the cursor.
-    if (this.campaign.runsElapsed === 0 && this.briefedSeed !== this.campaign.seed) {
-      this.briefedSeed = this.campaign.seed;
-      this.briefing.begin(this.campaign);
-    }
+    //
+    // Every run gets a log — the sector, its threat, its yield and its mooring
+    // are different every time, which is the whole case for briefing at all.
+    // Only the first run of a war gets the rules with it.
+    this.briefing.begin(this.campaign, this.briefedSeed !== this.campaign.seed);
+    // Marked only if it actually played. With the log switched off nothing was
+    // taught, so a player who switches it back on mid-war still gets the
+    // lesson once rather than never.
+    if (this.briefing.active) this.briefedSeed = this.campaign.seed;
   }
 
   /** Straight from the epitaph to the chart, for a player who does not want to wait. */

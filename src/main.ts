@@ -201,7 +201,7 @@ const pressed = new Set<string>();
  * cabinet convention — but you should still be able to turn the CRT glass off
  * while admiring the title screen.
  */
-const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "m", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "l", "m", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
 
 /**
  * The command view's keys that only move a highlight — the two idioms of
@@ -306,6 +306,17 @@ window.addEventListener("keydown", (event) => {
     case "h":
       settings.diagnostics = !settings.diagnostics;
       break;
+    case "l":
+      // The deck log, on and off. In `DISPLAY_KEYS` above so that pressing it
+      // on the title screen turns the log off rather than launching a run into
+      // one — the same courtesy the CRT glass and the slab already get.
+      presentation.briefing.enabled = !presentation.briefing.enabled;
+      // Turning it off while one is up means it now: a switch that only takes
+      // effect next run would answer a player who is reading a log right this
+      // second with nothing at all. Turning it back on does not conjure one —
+      // the run this log was briefing is already under way.
+      if (!presentation.briefing.enabled) presentation.briefing.skip();
+      break;
     case "m":
       sound.muted = !sound.muted;
       break;
@@ -333,6 +344,12 @@ window.addEventListener("keydown", (event) => {
         // starts in. `run` → `run` is not a mode change, so the frame loop
         // would never notice on its own.
         adoptMode();
+        // Straight out, rather than falling through to the skip below. Now
+        // that every run opens on a log, `startRun` has just begun one — and
+        // the press that asked for the run would otherwise destroy the
+        // briefing it came with, on the frame it arrived. The one press that
+        // is allowed to mean both is not this one.
+        return;
       }
       break;
     case "1":
@@ -793,6 +810,14 @@ function frame(now: number): void {
       // The opening log, which is a hold inside mode "run" rather than a mode
       // of its own — so a harness cannot see it from `mode` and has to be told.
       briefing: presentation.briefing.active,
+      // What of it a player could read *this instant*. `briefing` alone says
+      // the log is running, which is exactly what an empty screen with the
+      // whole crawl still below the band also says — the bug this field exists
+      // to make assertable. See `Briefing.readable`.
+      briefingLines: presentation.briefing.readable(),
+      // The `L` switch, so the harness can prove it suppresses the log rather
+      // than merely toggling a field nothing reads.
+      deckLog: presentation.briefing.enabled,
       death: session.death.phase,
       dock: session.docking.phase,
       // Hit-stop, so the harness can prove it dilates and then lets go. A
