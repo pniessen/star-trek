@@ -6,7 +6,8 @@ import {
   type Sector,
   type StructureKind,
 } from "./campaign.js";
-import { runEnemyTurn, type EnemyAction } from "./enemyTurn.js";
+import { reserveOf, runEnemyTurn, type EnemyAction } from "./enemyTurn.js";
+import { feedbackOn, RESERVE } from "./feedback.js";
 import { neighbours } from "./sectors.js";
 import type { Rng } from "./rng.js";
 
@@ -320,6 +321,25 @@ export function deployPatrol(campaign: Campaign, index: number): boolean {
  */
 export function gainGround(campaign: Campaign, index: number): boolean {
   const sector = campaign.sectors[index];
+  if (sector.control === "ours") return false;
+
+  // Candidate: the invasion is finite. Ground taken costs them strength they
+  // have to make back, so a run is the weapon and not only the bookkeeping —
+  // and holding a line you cannot advance still wins the war eventually.
+  if (feedbackOn("reserve")) {
+    campaign.reserve = Math.max(0, reserveOf(campaign) - RESERVE.costPerStep);
+  }
+
+  // Candidate: entrenchment. Dug-in ground has to be broken before it will
+  // move, so a clear here is progress that does not yet change the colour of
+  // the square. Off unless `tools/campaignlength.mjs` turns it on; see
+  // `feedback.ts`, including the note that `Session`'s "SECTOR TAKEN" would
+  // need a third line before this could ship.
+  if (feedbackOn("entrench") && (sector.entrenched ?? 0) > 0) {
+    sector.entrenched!--;
+    return true;
+  }
+
   if (sector.control === "theirs") {
     sector.control = "contested";
     return true;
