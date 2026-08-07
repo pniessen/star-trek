@@ -16,6 +16,7 @@ import {
   sweepHits,
 } from "./weapons.js";
 import { flight } from "./altitude.js";
+import { LOOM, Loom, type Spinner } from "./loom.js";
 import { MINE, Minefield } from "./mines.js";
 import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
@@ -237,6 +238,13 @@ export class Session {
   constructor(
     private readonly fleet: Fleet,
     private readonly wing: Wing,
+    /**
+     * The Loom. Public because the HUD draws its ring on the tube and a headless
+     * harness reads its phase, and passed in rather than built here for the same
+     * reason `Fleet` and `Wing` are: it owns `VectorObject`s, and this file does
+     * not know how to make one.
+     */
+    readonly loom: Loom,
     starbase: Vector3,
     private readonly playerShape: VectorObject,
     private campaign: Campaign,
@@ -305,6 +313,11 @@ export class Session {
       // Keeps running so blasts already in flight finish expanding rather than
       // freezing half-drawn on the death screen.
       this.mines.update(dt, player, () => {});
+      // And so does the weave, for the reason the fleet does: a machine that
+      // stops the instant the hull goes reads as a stopped program. Nothing it
+      // does can matter now — the breach callback is a no-op, and `kill()` has
+      // already taken everything a breach would have cost.
+      this.loom.update(dt, player, () => {});
       this.debris.update(dt);
 
       const before = this.death.phase;
@@ -316,6 +329,7 @@ export class Session {
       if (before !== "tally" && this.death.phase === "tally") {
         this.fleet.clear();
         this.wing.clear();
+        this.loom.clear();
         this.ordnance.clear();
       }
       return;
@@ -350,6 +364,7 @@ export class Session {
     }
 
     this.stepEscort(dt, player);
+    this.stepLoom(dt, player);
     this.ordnance.update(dt);
     this.resolveProjectiles(player);
     this.mines.update(dt, player, () => this.breach());
@@ -429,6 +444,12 @@ export class Session {
     this.multiplier = Math.max(1, this.multiplier * 0.5);
     this.fleet.clear();
     this.mines.clear();
+    // Ending 3: hyperwarp out of a Loom. It stays where you left it, in the
+    // sector you left it in, and it costs nothing beyond what the jump already
+    // costs. Charging a second price for the same escape is exactly how an
+    // escape valve stops being one, and the game has already taught this price
+    // — half the multiplier, the same as letting something reach the hull.
+    this.loom.clear();
     player.energy = HYPERWARP.arrivalEnergy;
     // Deliberately no wave decrement here. `arrive()` clears the fleet, so
     // `updateWaves()` → `spawnWave()` already increments on the very next
@@ -541,20 +562,38 @@ export class Session {
         if (!best || distance < best.distance) best = { hostile, distance };
       }
 
-      // Whatever is nearer takes the beam, mine or ship. Clearing a lane costs
-      // you the shots you would rather have spent on the thing shooting back.
+      // Whatever is nearer takes the beam: mine, ship, or spinner. Clearing a
+      // lane costs you the shots you would rather have spent on the thing
+      // shooting back — and a spinner joins that queue on exactly the same
+      // terms, so lining one up through a wave is genuinely a choice about
+      // where the next shot goes.
       const mine = this.mines.aim(player.position, forward, PHASER.aimCone, shotRange);
+      const spun = this.loom.aim(player.position, forward, PHASER.aimCone, shotRange);
       let landed = false;
       // Fraction of full damage delivered, so the falloff rule is audible
       // rather than merely invisible. A shot into empty space keeps the full
       // figure: there was nothing out there for the range to eat.
       let reach = 1;
-      if (mine && (!best || mine.distance < best.distance)) {
+      if (
+        mine &&
+        (!best || mine.distance < best.distance) &&
+        (!spun || mine.distance < spun.distance)
+      ) {
         this.ordnance.discharge(this.nose, mine.mine.position, true);
         const damage = phaserDamageAt(mine.distance, fit);
         landed = damage > 0;
         reach = damage / PHASER.damage;
         if (landed && this.mines.strike(mine.mine, damage)) this.pending += MINE.value * this.salvageScale;
+      } else if (spun && (!best || spun.distance < best.distance)) {
+        // The falloff is charged on the true range like everything else, which
+        // is most of why crossing the ring is the price of the kill: a spinner
+        // shot at from the middle of a 138-unit ring is well past the beam's
+        // 78-unit reach and takes nothing at all.
+        const damage = phaserDamageAt(spun.distance, fit);
+        this.ordnance.discharge(this.nose, spun.spinner.position, true);
+        landed = damage > 0;
+        reach = damage / PHASER.damage;
+        if (landed && spun.spinner.damage(damage)) this.destroySpinner(spun.spinner);
       } else if (best) {
         const damage = phaserDamageAt(best.distance, fit);
         this.ordnance.discharge(this.nose, best.hostile.position, true);
@@ -665,6 +704,33 @@ export class Session {
           } else {
             this.hitStop.strike(HIT_STOP.impact);
             sound.impact(hostile.position.x, hostile.position.z);
+          }
+          break;
+        }
+        if (projectile.dead) continue;
+
+        // The Loom, on the same terms as a hull. Checked after the hostiles
+        // because a spinner is the thing you meant to shoot *at range* and a
+        // Raider crossing the line at the last moment has the better claim on
+        // the warhead — and because a projectile only ever hits one thing.
+        //
+        // Note what is deliberately not here: the strands do not stop anything.
+        // Ordnance passes through the fence in both directions, which is what
+        // makes shooting the far spinner through the wall a legal shot and
+        // stops the encounter quietly becoming cover.
+        for (const spinner of this.loom.spinners) {
+          const torpedo = projectile.kind === "torpedo";
+          const reach = LOOM.bodyRadius + (torpedo ? TORPEDO.blast : 0);
+          const approach = sweepDistance(projectile, spinner.position);
+          if (approach > reach) continue;
+          const damage = torpedo ? blastDamageAt(approach, LOOM.bodyRadius) : projectile.damage;
+          if (damage <= 0) continue;
+          projectile.dead = true;
+          if (spinner.damage(damage)) {
+            this.destroySpinner(spinner);
+          } else {
+            this.hitStop.strike(HIT_STOP.impact);
+            sound.impact(spinner.position.x, spinner.position.z);
           }
           break;
         }
@@ -876,6 +942,67 @@ export class Session {
     this.escortTimer = patrolled ? ESCORT.stationDelay : between(ESCORT.firstVisit);
   }
 
+  // ── the Loom ─────────────────────────────────────────────────────────────
+
+  /**
+   * One step of the weave, and the panel line it wants said.
+   *
+   * Everything the encounter *is* lives in `loom.ts`; everything it *costs*
+   * lives here, which is the same split the Warden takes. The Loom cannot reach
+   * the multiplier, the salvage or the projectile list — it hands back a breach
+   * through a callback and a line through `says`, exactly as `Escort` does.
+   */
+  private stepLoom(dt: number, player: Ship): void {
+    this.loom.update(dt, player, () => this.breach());
+    if (!this.loom.says) return;
+    this.say(this.loom.says);
+    this.loom.says = null;
+  }
+
+  /**
+   * Opens one around the player. Public so a localhost harness can summon one
+   * rather than fly fourteen waves waiting for the dice — see `window.__loom`.
+   * Every guard that matters is inside `Loom.open`.
+   */
+  seedLoom(player: Ship): void {
+    this.loom.open(player);
+  }
+
+  /**
+   * A spinner killed.
+   *
+   * The ledger is `destroy`'s, line for line and deliberately so: a kill is a
+   * kill, the multiplier is the currency, and an encounter that paid on its own
+   * schedule would be a second economy. What differs is only that this one also
+   * ends the encounter — the weave fails on either spinner, because a loom with
+   * one end is not a loom, and because "kill *either*" is what keeps the near
+   * one always worth crossing for.
+   *
+   * The demo is safe here by construction rather than by a check: this pays into
+   * `pending`, `pending` only ever reaches a campaign through `bank()`, and
+   * `bank()` credits `this.campaign` — which is the throwaway during a
+   * demonstration. See `bindCampaign` and `campaignFor`. There is no path from a
+   * spinner to the player's salvage that does not go through a dock.
+   */
+  private destroySpinner(spinner: Spinner): void {
+    spinner.shape.group.updateMatrixWorld(true);
+    this.debris.burst(
+      spinner.shape.edgePositions,
+      spinner.shape.group.matrixWorld,
+      PALETTE.harrow,
+      new Vector3(),
+      1.3,
+    );
+
+    this.hitStop.strike(HIT_STOP.kill);
+    sound.kill(spinner.position.x, spinner.position.z, 1.3);
+    this.kills++;
+    this.pending += LOOM.value * this.salvageScale;
+    this.multiplier = Math.min(9.9, this.multiplier + 0.2);
+    this.loom.collapse();
+    this.say("WEAVE COLLAPSING");
+  }
+
   private kill(player: Ship): void {
     this.state = "dead";
     // Told before the state is read anywhere else, so its farewell lands over
@@ -1008,6 +1135,26 @@ export class Session {
       this.fleet.spawn(kind, position, angle + Math.PI);
     });
 
+    // The Loom, at the break and never mid-wave.
+    //
+    // This is the last thing `spawnWave` does, and the placement is the whole
+    // guarantee: `spawnWave` is only ever reached from the wave-break branch of
+    // `updateWaves`, so a wall can only ever begin closing at the one moment the
+    // board is being rebuilt anyway. A ring that materialised around a fight
+    // already in progress would be something that happened *to* the player;
+    // arriving with the wave, it is something they are offered.
+    //
+    // Gated on `n` rather than on the raw wave count so a jump into the front
+    // pulls it forward exactly as it pulls every class forward — the escalation
+    // index is one number and this reads the same one.
+    if (n >= LOOM.earliest && !this.loom.active && Math.random() < LOOM.chance) {
+      this.loom.open(player);
+      // Deliberately no message here. `Loom.open` writes its own line and
+      // `stepLoom` says it on the next frame, over the top of `WAVE n` — which
+      // is the correct order to read them in: the wave is the situation, the
+      // weave is the thing that just changed about it.
+    }
+
     sound.wave(this.wave);
     this.say(`WAVE ${this.wave}`);
   }
@@ -1023,6 +1170,7 @@ export class Session {
     this.condition = "green";
     this.reinforcing = null;
     this.fleet.clear();
+    this.loom.clear();
     this.ordnance.clear();
     this.debris.clear();
     this.mines.clear();

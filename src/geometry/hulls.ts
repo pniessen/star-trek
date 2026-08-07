@@ -395,6 +395,55 @@ export function buildShroud(): BufferGeometry {
 }
 
 /**
+ * Spinner — one end of the Loom, and the only hull in the game whose long axis
+ * is vertical.
+ *
+ * Every other silhouette here is read in plan: a raptor, a horseshoe, a bulb on
+ * a neck, a working deck, a blade — things with a front and a length, because
+ * they are all going somewhere and most of them are going at you. This one is
+ * built the other way up. A tall emitter spindle standing on end, a heavy
+ * counterweighted collar around its waist, two stub booms with the guide eyes
+ * the filament runs through, and nothing whatever pointing forward.
+ *
+ * That is the whole brief: a machine, seen end-on, that is obviously drawing
+ * something downward. It shares the Harrow's violet, so the outline is what has
+ * to keep the two apart — and it does, comfortably: the Harrow is a flat deck
+ * lying in the plane and this is a spindle standing out of it. Nothing else in
+ * the roster is legible as an upright.
+ */
+export function buildSpinner(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  // The spindle. Standing, tapering, and the tallest thing on any hull here.
+  parts.push(new CylinderGeometry(0.22, 0.34, 3.2, 6, 1));
+  // The emitter head, and the aperture the filament leaves from, underneath.
+  parts.push(placed(new CylinderGeometry(0.52, 0.22, 0.5, 6, 1), at(0, 1.7, 0)));
+  parts.push(placed(new CylinderGeometry(0.36, 0.5, 0.4, 6, 1), at(0, -1.75, 0)));
+
+  // The collar: a wide flat ring at the waist, which is what makes the thing
+  // read as spun rather than as flown.
+  parts.push(
+    placed(new TorusGeometry(0.95, 0.11, 3, 10), new Matrix4().makeRotationX(Math.PI / 2)),
+  );
+
+  for (const side of [-1, 1]) {
+    // Stub booms out to the guide eyes. Level, short, and set on the ring's own
+    // axis rather than fore and aft, so there is no front to mistake for one.
+    parts.push(placed(new BoxGeometry(1.5, 0.16, 0.22), at(side * 0.85, 0.1, 0)));
+    parts.push(
+      placed(
+        new TorusGeometry(0.26, 0.06, 3, 8),
+        at(side * 1.55, 0.1, 0).multiply(new Matrix4().makeRotationY(Math.PI / 2)),
+      ),
+    );
+    // Counterweights, hung under the collar.
+    parts.push(placed(new BoxGeometry(0.3, 0.44, 0.3), at(side * 0.85, -0.5, 0)));
+  }
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
  * Starbase: a drum inside a docking ring. The ring matters — docking is a skill
  * test, so the approach corridor has to be legible from a long way out.
  */

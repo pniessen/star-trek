@@ -494,6 +494,67 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     hud.segments(diamond(mark.x, mark.y, 2.2), scratch);
   }
 
+  // The Loom, drawn here — after the mines and under every live contact —
+  // because the wall is *board*, not traffic. A hostile crossing it has to be on
+  // top of it, the same way the Warden is drawn on top of the hostile it is
+  // closing on.
+  //
+  // The wall is a dotted violet circle: one tick per filament, on the deck, with
+  // no stalk at all. A hundred and twenty-six stalks would be a hedge rather
+  // than an instrument, and a wall's height is not a per-contact fact anyway —
+  // it is one number for the whole ring. That number goes in the annunciator
+  // below the tube instead, and it goes there as the *decision* rather than as
+  // the measurement: see `drawLoomState`.
+  const loom = session.loom;
+  if (loom.active) {
+    const fence: number[] = [];
+    for (const strand of loom.strands) {
+      const mark = project(
+        point.set(
+          loom.centre.x + Math.sin(strand.bearing) * loom.radius,
+          0,
+          loom.centre.z + Math.cos(strand.bearing) * loom.radius,
+        ),
+      );
+      if (mark.clamped) continue;
+      // A radial tick rather than a dot: it lies across the wall's own
+      // thickness, so the ring reads as a fence seen from above rather than as
+      // a dashed orbit, which is what a ring of dots reads as.
+      const dx = mark.x - cx;
+      const dy = mark.y - cy;
+      const length = Math.max(1e-3, Math.hypot(dx, dy));
+      const nx = (dx / length) * 2.2;
+      const ny = (dy / length) * 2.2;
+      fence.push(mark.x - nx, mark.y - ny, mark.x + nx, mark.y + ny);
+    }
+    scratch.copy(PALETTE.harrow).multiplyScalar(0.85);
+    hud.segments(fence, scratch);
+
+    // The spinners: an upright bar with a crossbar at its waist, which is the
+    // hull's own silhouette at glyph size and the only *vertical* mark on the
+    // tube. That is what tells it from the Harrow's diamond sitting in the same
+    // violet — the two glyphs share a hue and share nothing else.
+    //
+    // They get a stalk like every other contact, and theirs is always exactly
+    // the height of the wall, because a spinner rides the lip of the fence it is
+    // drawing. So the one thing on the tube whose altitude the player genuinely
+    // has to know is the one thing whose altitude the tube keeps measuring, and
+    // it is measured against their own stalk at the centre.
+    for (const spinner of loom.spinners) {
+      const mark = project(spinner.position);
+      stalk(mark, PALETTE.harrow);
+      mark.y += mark.lift;
+      const marks: number[] = [];
+      if (mark.clamped) {
+        marks.push(mark.x, mark.y - 3, mark.x, mark.y + 3);
+      } else {
+        marks.push(mark.x, mark.y - 6, mark.x, mark.y + 6);
+        marks.push(mark.x - 4, mark.y, mark.x + 4, mark.y);
+      }
+      hud.segments(marks, PALETTE.harrow);
+    }
+  }
+
   // Resolved contacts. Glyph encodes class, so the scanner tells you what is
   // coming, not merely that something is. Brightness encodes how long ago the
   // arm last confirmed it — position is never in doubt, confidence is.
@@ -627,6 +688,38 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     const label = "UNRESOLVED";
     hud.text(label, cx - (label.length * 4.2 * 1.6) / 2, cy - radius - 22, 1.6, PALETTE.magenta);
   }
+
+  drawLoomState(hud, view, cx, cy - radius - 22);
+}
+
+/**
+ * One word for the whole encounter, under the tube.
+ *
+ * The player has exactly two questions while a Loom is up and neither of them is
+ * a number. *Can I still get out over the top?* — which is the wall's height
+ * against the ceiling, and is a yes or a no. *Has it shut?* — which is whether
+ * the ring is closed and coming in. So this is three states and no digits: OPEN,
+ * SEALED, CLOSING. A readout that said "LOOM 11.6/14" would be asking a player
+ * under fire to do arithmetic in order to learn something the game already knows
+ * the answer to.
+ *
+ * It shares the annunciator band with UNRESOLVED and can appear with it, which
+ * is fine: they are one line apart and they are never the same colour.
+ */
+function drawLoomState(hud: Hud, view: HudView, cx: number, y: number): void {
+  const loom = view.session.loom;
+  if (loom.phase === "none" || loom.phase === "fading") return;
+
+  // CLOSING is the state that has to be noticed, so it is the only one that
+  // blinks — the same treatment the cursor and the unresolved return get, and
+  // for the same reason. OPEN is a standing condition and a standing condition
+  // that flashes is a condition nobody reads twice.
+  const closing = loom.phase === "sealed";
+  if (closing && Math.sin(view.time * 6) < -0.35) return;
+
+  const label = closing ? "WEAVE CLOSING" : loom.sealed ? "WEAVE SEALED" : "WEAVE OPEN";
+  scratch.copy(PALETTE.harrow).multiplyScalar(loom.sealed || closing ? 1 : 0.6);
+  hud.text(label, cx - (label.length * 4.2 * 1.6) / 2, y - 20, 1.6, scratch);
 }
 
 /** The Harrow's glyph, and its mines at a third the size. */

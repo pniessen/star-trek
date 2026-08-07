@@ -10,6 +10,7 @@ import {
   buildLance,
   buildRaider,
   buildShroud,
+  buildSpinner,
   buildStarbase,
   buildWarden,
 } from "./geometry/hulls.js";
@@ -18,6 +19,7 @@ import { Ship } from "./game/Ship.js";
 import { ALTITUDE, flight } from "./game/altitude.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
+import { LOOM, Loom, encounters } from "./game/loom.js";
 import { Session } from "./game/session.js";
 import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
@@ -72,6 +74,7 @@ const HULLS = {
   miner: buildHarrow(),
   stalker: buildShroud(),
   warden: buildWarden(),
+  spinner: buildSpinner(),
 };
 
 const player = new Ship();
@@ -104,6 +107,16 @@ const wing = new Wing(() =>
   }).addTo(stage.scene),
 );
 
+// The Loom's two spinners. Drawn at a hostile's weight, because that is what
+// they are to a player deciding where the next shot goes — but in the violet
+// that means "sown, not shot", which is what tells you they are not aiming back.
+const loom = new Loom(() =>
+  new VectorObject(HULLS.spinner, {
+    color: PALETTE.harrow,
+    linewidth: 1.4,
+  }).addTo(stage.scene),
+);
+
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
   color: PALETTE.traceDim,
@@ -127,7 +140,7 @@ const campaign = load(window.localStorage, Date.now());
  */
 const persist = (state: Campaign): void => save(state, window.localStorage);
 
-const session = new Session(fleet, wing, STARBASE_POSITION, playerHull, campaign);
+const session = new Session(fleet, wing, loom, STARBASE_POSITION, playerHull, campaign);
 const presentation = new Presentation(
   session,
   player,
@@ -269,6 +282,7 @@ function applyShapeMode(): void {
   playerHull.setMode(settings.shape);
   starbase.setMode(settings.shape);
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
+  for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
 }
 
@@ -735,6 +749,7 @@ function frame(now: number): void {
   // Newly spawned hostiles have to inherit the current geometry mode, and so
   // does a Warden that arrived after the last time `G` was pressed.
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
+  for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
 
   playerHull.group.position.copy(player.position);
@@ -761,6 +776,10 @@ function frame(now: number): void {
   trace.begin();
   session.ordnance.draw(trace);
   session.mines.draw(trace, player);
+  // The weave is a transient stroke like every other one here — a hundred and
+  // twenty-six filaments as objects would be a hundred and twenty-six materials
+  // for something that is, in the end, a line.
+  session.loom.draw(trace);
   session.debris.draw(trace);
   session.death.draw(trace);
   session.docking.draw(trace, player);
@@ -843,6 +862,19 @@ function frame(now: number): void {
         .toFixed(2),
       flight3d: flight.threeD,
       ceiling: ALTITUDE.ceiling,
+      // The Loom. `loom` is the phase, which is the encounter's whole state
+      // machine — "none" / "weaving" / "sealed" / "fading". The rest is what a
+      // harness needs to prove the four endings without watching: the wall's
+      // height against the ceiling is the "can I still climb out" question,
+      // the radius is the "has it started squeezing" question, and the spinner
+      // count going to zero is the kill.
+      loom: session.loom.phase,
+      loomHeight: +session.loom.height.toFixed(2),
+      loomSealed: session.loom.sealed,
+      loomRadius: +session.loom.radius.toFixed(1),
+      loomStrands: session.loom.strands.length,
+      loomSpinners: session.loom.spinners.length,
+      loomEnabled: encounters.loom,
       torpedoes: player.torpedoes,
       debris: session.debris.count,
       mines: session.mines.count,
@@ -926,6 +958,26 @@ if (DEBUG_PROBE) {
       },
     },
     __sound: sound,
+    /**
+     * The Loom, summonable.
+     *
+     * It appears at a wave break with a one-in-ten chance from escalation index
+     * four, which means a person tuning `LOOM.rise` would spend most of an
+     * evening waiting for the thing they are tuning. This is the answer instead
+     * of a key: the control surface is full, and a display toggle for something
+     * that shows up once in fourteen waves is a binding spent on nothing.
+     *
+     * `seed()` opens one around the ship wherever it is standing; `weave.loom`
+     * is the switch the encounter ships behind, so `__loom.weave.loom = false`
+     * turns it off exactly the way `Y` turns the slab off.
+     */
+    __loom: {
+      seed: () => session.seedLoom(player),
+      collapse: () => session.loom.collapse(),
+      model: session.loom,
+      weave: encounters,
+      constants: LOOM,
+    },
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.
     __command: {

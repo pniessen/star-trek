@@ -478,6 +478,183 @@ export class Sound {
     });
   }
 
+  // ── the Loom ─────────────────────────────────────────────────────────────
+
+  /**
+   * The Loom opening.
+   *
+   * It has to be identifiable as *machinery* inside half a second, because
+   * nothing on the forward view says what has just happened — the two spinners
+   * are 138 units out and the first strand is a thread. So the vocabulary is the
+   * one nothing else uses: a low fifth held between two sawtooths, which is a
+   * motor rather than a voice, under a resonant band opening upward. It is the
+   * hyperwarp charge's *shape* — width rather than level, per
+   * `audio-prior-art.md` §6 — turned into something being started rather than
+   * something being spun up, which is the closest relative it has in this bank
+   * and the right family for a thing that is going to run on a clock.
+   *
+   * Centred and unplaced in effect, because it opens around you rather than
+   * somewhere: the ring is drawn on where you are standing.
+   */
+  loomOpen(x: number, z: number): void {
+    const at = this.place(x, z, 0.7);
+    for (const [freq, level] of [
+      [62, 0.11],
+      [93, 0.07],
+    ] as const) {
+      this.synth.play({
+        wave: "sawtooth",
+        freq,
+        to: freq * 1.06,
+        level: level * at.level,
+        attack: 0.18,
+        hold: 0.5,
+        decay: 0.7,
+        pan: at.pan,
+      });
+    }
+    this.synth.play({
+      kind: "noise",
+      filter: "bandpass",
+      q: 7,
+      freq: 260,
+      to: 2400,
+      level: 0.06 * at.level,
+      attack: 0.3,
+      hold: 0.3,
+      decay: 0.6,
+      pan: at.pan,
+    });
+  }
+
+  /**
+   * One filament going down. A wire being plucked and immediately damped: the
+   * tightest band in the bank, at twelve milliseconds.
+   *
+   * It fires roughly one and a half times a second for eighteen seconds, which
+   * is exactly the rate at which a cue stops being an event and starts being a
+   * texture — so it is very quiet, very short, and gated by distance the way
+   * `mineLay` is. The point of it is not the individual tick. It is that the
+   * pulse gets no faster and no slower for the whole weave, which is what a
+   * clock sounds like.
+   */
+  loomStrand(x: number, z: number): void {
+    const { level, pan } = this.place(x, z);
+    if (level < 0.08) return;
+    this.synth.play({
+      kind: "noise",
+      filter: "bandpass",
+      q: 22,
+      freq: 1450,
+      to: 1180,
+      level: 0.055 * level,
+      attack: 0.001,
+      decay: 0.012,
+      pan,
+    });
+  }
+
+  /**
+   * The ring closing. The one moment in the encounter that is bad news, and it
+   * is told the way the game tells bad news everywhere else: something falls.
+   *
+   * Unplaced and centred, because a boundary that has closed has closed in every
+   * direction and there is nothing to turn toward. Deliberately not a klaxon —
+   * the alert already owns that shape, and this is not a condition change, it is
+   * a door.
+   */
+  loomSeal(): void {
+    this.synth.play({
+      kind: "noise",
+      bus: "impact",
+      filter: "lowpass",
+      q: 0.8,
+      freq: 900,
+      to: 70,
+      level: 0.24,
+      attack: 0.003,
+      decay: 0.55,
+    });
+    for (const [freq, delay] of [
+      [110, 0],
+      [73.4, 0.16],
+    ] as const) {
+      this.synth.play({
+        bus: "panel",
+        wave: "sawtooth",
+        freq,
+        to: freq * 0.94,
+        level: 0.09,
+        attack: 0.01,
+        hold: 0.06,
+        decay: delay > 0 ? 0.6 : 0.22,
+        delay,
+      });
+    }
+  }
+
+  /** Brushing a filament. A wire against a hull: harsh, brief, and placed. */
+  loomTouch(x: number, z: number): void {
+    const { level, pan } = this.place(x, z, 0.25);
+    this.synth.play({
+      kind: "noise",
+      filter: "bandpass",
+      q: 11,
+      freq: 2100,
+      to: 620,
+      level: 0.16 * level,
+      attack: 0.001,
+      decay: 0.13,
+      pan,
+    });
+    this.synth.play({
+      wave: "sawtooth",
+      freq: 240,
+      to: 130,
+      level: 0.11 * level,
+      attack: 0.002,
+      decay: 0.16,
+      pan,
+    });
+  }
+
+  /**
+   * The weave failing — the motor losing the room, and the whole fence going
+   * down with it. `loomOpen` played backwards in every axis that matters: the
+   * fifth collapses to a unison instead of holding, the band shuts instead of
+   * opening, and it is the length of the wall's own fall rather than of a
+   * gesture.
+   */
+  loomCollapse(x: number, z: number): void {
+    const at = this.place(x, z, 0.55);
+    for (const [freq, level] of [
+      [93, 0.09],
+      [62, 0.1],
+    ] as const) {
+      this.synth.play({
+        wave: "sawtooth",
+        freq,
+        to: 34,
+        level: level * at.level,
+        attack: 0.01,
+        hold: 0.2,
+        decay: 1.1,
+        pan: at.pan,
+      });
+    }
+    this.synth.play({
+      kind: "noise",
+      filter: "bandpass",
+      q: 5,
+      freq: 2200,
+      to: 180,
+      level: 0.09 * at.level,
+      attack: 0.02,
+      decay: 1.2,
+      pan: at.pan,
+    });
+  }
+
   // ── the Shroud ───────────────────────────────────────────────────────────
 
   /**
