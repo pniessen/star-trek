@@ -10,6 +10,8 @@ import {
   Matrix4,
   Mesh,
   MeshBasicMaterial,
+  Points,
+  PointsMaterial,
   NormalBlending,
   type Object3D,
   SRGBColorSpace,
@@ -116,6 +118,68 @@ export const SKY = {
    * it, and before everything else, so nothing the game draws can ever be
    * hidden by scenery. Every layer of every body claims one step, back to front.
    */
+  /**
+   * The galactic plane, and it is the cheapest thing in this file by a wide
+   * margin.
+   *
+   * The starfield the game already had is *uniform*, and a uniform starfield
+   * reads as noise rather than as a place — there is no direction in it, so
+   * there is nothing to recognise. Real skies have a plane: you are inside a
+   * disc of stars, so they crowd toward a great circle and thin away from it.
+   * Weighting a scatter toward one is a few lines, and because the pole comes
+   * off the sector seed, **every sector gets a different sky for no extra
+   * content at all** — which does more for "this square is somewhere" than
+   * another planet would.
+   */
+  bandCandidates: 20000,
+  /** Degrees of latitude off the plane at which density has fallen by 1/e. */
+  bandWidth: 11,
+  /** Nothing below this elevation; the cameras cannot see it and it costs draw. */
+  bandFloor: -46,
+  /**
+   * The dust lane: a strip through the band where stars are simply *not placed*.
+   *
+   * Pure negative space, and therefore free — no geometry, no material, no draw
+   * call. It is also the only way a stroke renderer can draw a dark thing on a
+   * dark ground, and it only works because the band exists to be interrupted.
+   */
+  laneHalfWidth: 1.9,
+  /**
+   * Nebula filaments.
+   *
+   * A nebula is diffuse and diffuse is the one thing strokes cannot do — that
+   * is exactly the trap the limb fell into. But the *interesting* part of a real
+   * nebula is not the haze, it is the structure: long curved threads following a
+   * flow field. Those are strokes. So this draws the threads and lets the haze
+   * be somebody else's problem.
+   */
+  filaments: [7, 15] as const,
+  filamentSteps: 20,
+  /**
+   * How fast the sky wheels, degrees per second.
+   *
+   * The module shipped with no `update` at all and an argument for it: nothing
+   * in a real sky moves on the timescale of a run, so drift is a lie about a
+   * fixed star field. That argument is still *true* and has been overruled
+   * deliberately, by the owner, for the same reason the plane came unlocked —
+   * the game is not a planetarium, and a sky that is provably static is a sky
+   * the eye stops reading after the first second.
+   *
+   * The compromise is the axis. This wheels about the galactic pole rather than
+   * drifting in some arbitrary direction, so the star band stays where it is and
+   * everything turns around it. That is the one rotation a real sky does have.
+   * At this rate a three-minute run sweeps about twenty-seven degrees.
+   */
+  driftRate: 0.15,
+  /**
+   * What a jump does to it, as a multiplier on the drift.
+   *
+   * The one piece of sky motion that needs no apology: during a hyperwarp you
+   * genuinely are moving between sectors, so the sky tearing past is truthful
+   * rather than decorative. It is also staged at a moment the game already owns
+   * and already charges for.
+   */
+  warpSpin: 220,
   orderFirst: -1.95,
   orderStep: 0.02,
   orderLast: -1.05,
@@ -297,9 +361,35 @@ type BodyPlan =
   | (Common & { kind: "sun"; rays: number; spikes: boolean })
   | (Common & { kind: "moon"; curvature: number });
 
+interface BandPlan {
+  /** Pole of the galactic plane, in the sky's own frame. */
+  pole: Vector3;
+  /** Latitude offset of the dust lane from the plane, degrees. */
+  lane: number;
+  /**
+   * Its own seed, rather than a stored list of positions. Six hundred stars is
+   * eighteen hundred floats to carry around a plan object whose whole job is to
+   * be small and printable; a seed rebuilds them identically for one number.
+   */
+  seed: number;
+}
+
+interface NebulaPlan {
+  azimuth: number;
+  elevation: number;
+  /** Angular half-extent, degrees. */
+  extent: number;
+  filaments: number;
+  colour: Color;
+  /** Seeds the flow field, so two nebulae never thread the same way. */
+  phase: number;
+}
+
 interface SkyPlan {
   composition: SkyComposition;
   bodies: BodyPlan[];
+  band: BandPlan;
+  nebula: NebulaPlan | null;
 }
 
 /**
@@ -539,7 +629,35 @@ function planSky(seed: number, sector: number): SkyPlan {
     );
   }
 
-  return { composition, bodies };
+  /**
+   * The plane's pole is held *low*, which is the whole trick.
+   *
+   * A pole near the zenith puts its great circle around the horizon, where the
+   * grid and the contact labels already are and where nobody is looking. A pole
+   * near the horizon throws the band up over the top of the sky at a steep
+   * angle, so it crosses the frame diagonally — which is both what the Milky Way
+   * actually does from most of the year and the only placement that puts it
+   * where the player is looking.
+   */
+  const band: BandPlan = {
+    pole: direction(range(rng, 0, 360), range(rng, -18, 30), new Vector3()),
+    lane: range(rng, -4.5, 4.5),
+    seed: Math.floor(rng.next() * 0xffffff),
+  };
+
+  // Not every sky gets one. A nebula in every sector is wallpaper.
+  const nebula: NebulaPlan | null =
+    rng.next() < 0.42
+      ? {
+          ...placeApart(rng, bodies, 16),
+          extent: range(rng, 11, 21),
+          filaments: SKY.filaments[0] + Math.floor(rng.next() * (SKY.filaments[1] - SKY.filaments[0])),
+          colour: skyColour(rng, pick(rng, ["slate", "ochre", "ash"] as const)),
+          phase: range(rng, 0, TAU),
+        }
+      : null;
+
+  return { composition, bodies, band, nebula };
 }
 
 function clampElevation(elevation: number): number {
@@ -980,6 +1098,128 @@ function worldSize(size: number): number {
   return Math.tan(size * DEG) * SKY.radius;
 }
 
+
+/**
+ * The galactic plane, and the dust lane cut through it.
+ *
+ * Rejection sampling against a Gaussian in galactic latitude: throw darts at the
+ * whole sphere and keep the ones near the plane. That is more candidates than
+ * keeps, which would matter if this ran per frame — it runs once per sector, so
+ * the simple version is the right version.
+ *
+ * The lane is the interesting half. It is not drawn: it is a strip where stars
+ * are *not placed*. A stroke renderer over a black ground has no way to draw a
+ * dark thing — there is no darker than black — so the only honest dust lane is
+ * an absence, and an absence is only visible against something dense. The band
+ * and the lane are one feature; neither works without the other.
+ */
+function buildStarBand(plan: BandPlan, order: number): Points {
+  const rng = makeRng(plan.seed);
+  const points: number[] = [];
+  const colours: number[] = [];
+  const dir = new Vector3();
+  const tint = new Color();
+
+  for (let i = 0; i < SKY.bandCandidates; i++) {
+    // Uniform on the sphere: z uniform, angle uniform. Sampling latitude
+    // directly would crowd the poles and the crowding would be a bug.
+    const z = range(rng, -1, 1);
+    const a = range(rng, 0, TAU);
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    dir.set(Math.cos(a) * r, z, Math.sin(a) * r);
+
+    const elevation = Math.asin(MathClamp(dir.y, -1, 1)) / DEG;
+    if (elevation < SKY.bandFloor) continue;
+
+    const latitude = Math.asin(MathClamp(dir.dot(plan.pole), -1, 1)) / DEG;
+    if (Math.abs(latitude - plan.lane) < SKY.laneHalfWidth) continue;
+    if (rng.next() > Math.exp(-((latitude / SKY.bandWidth) ** 2))) continue;
+
+    points.push(dir.x * SKY.radius, dir.y * SKY.radius, dir.z * SKY.radius);
+    // Dim, near-monochrome and varied. Bright enough to read as a field, never
+    // bright enough to be mistaken for a contact at the edge of vision.
+    tint.setHSL(range(rng, 34, 54) / 360, range(rng, 0.02, 0.1), range(rng, 0.16, 0.44), SRGBColorSpace);
+    colours.push(tint.r, tint.g, tint.b);
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
+  geometry.setAttribute("color", new BufferAttribute(new Float32Array(colours), 3));
+  const stars = new Points(
+    geometry,
+    new PointsMaterial({
+      size: 1.7,
+      sizeAttenuation: false,
+      vertexColors: true,
+      blending: AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  stars.renderOrder = order;
+  return stars;
+}
+
+/** Clamp without importing MathUtils for one call. */
+function MathClamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+/**
+ * A nebula, as threads rather than as haze.
+ *
+ * Each filament starts near the centre and walks a flow field — the heading
+ * turns by an amount that depends on where it is, so neighbouring threads curve
+ * together and the whole patch reads as one structure being pushed by one force.
+ * That coherence is the entire effect; a scatter of unrelated squiggles reads as
+ * damage to the screen.
+ *
+ * Brightness peaks in the middle of a thread and dies at both ends, so nothing
+ * has a visible start or stop. A filament with square ends looks drawn.
+ */
+function buildNebula(plan: NebulaPlan, order: number): Group {
+  const group = new Group();
+  orient(group, plan.azimuth, plan.elevation);
+  const rng = makeRng(Math.floor(plan.phase * 100000) + 17);
+  const reach = worldSize(plan.extent);
+  const strokes = newStrokes();
+
+  for (let f = 0; f < plan.filaments; f++) {
+    let x = range(rng, -reach * 0.55, reach * 0.55);
+    let y = range(rng, -reach * 0.4, reach * 0.4);
+    let heading = range(rng, 0, TAU);
+    const step = (reach * 1.5) / SKY.filamentSteps;
+    // The field has to vary over the *length of a filament*, not over the whole
+    // patch. The first attempt used 2.4/reach, which changes by about a fifth of
+    // a radian across twenty steps — near-constant turning, and constant turning
+    // draws a circle. Every thread came out a closed loop. This is fast enough
+    // that a thread meets several different pushes on its way across.
+    const scale = 16 / reach;
+    const bias = range(rng, -0.5, 0.5);
+
+    for (let i = 0; i < SKY.filamentSteps; i++) {
+      const px = x;
+      const py = y;
+      // The field: a smooth function of position, shared by every filament in
+      // this nebula, which is what makes them curve as a family.
+      heading +=
+        Math.sin(x * scale + y * scale * 0.6 + plan.phase) * 0.34 +
+        Math.cos(y * scale * 1.37 - x * scale * 0.4 - plan.phase) * 0.26 +
+        bias * 0.08;
+      x += Math.cos(heading) * step;
+      y += Math.sin(heading) * step;
+      // Fade in and out, and fade with distance from the centre so the patch
+      // has an edge without anything drawing one.
+      const along = Math.sin((Math.PI * (i + 1)) / SKY.filamentSteps);
+      const out = Math.max(0, 1 - Math.hypot(x, y) / (reach * 1.15));
+      segment(strokes, px, py, x, y, plan.colour, along * out * 0.5, along * out * 0.5);
+    }
+  }
+  group.add(strokeLines(strokes, order));
+  return group;
+}
+
 function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
   const group = new Group();
   orient(group, plan.azimuth, plan.elevation);
@@ -1112,6 +1352,11 @@ export class Backdrop {
   private plan: SkyPlan | null = null;
   /** Set by the debug hook to hold one sky up regardless of where the ship is. */
   private pinned: { seed: number; sector: number } | null = null;
+  /** Radians wheeled about the galactic pole since this sky was built. */
+  private drift = 0;
+  /** 0 at rest, 1 at the top of a hyperwarp charge. Set by `warp`. */
+  private warpIntensity = 0;
+  private readonly axis = new Vector3(0, 1, 0);
 
   /**
    * Build the sky for a sector, if it is not already the sky that is up.
@@ -1136,7 +1381,13 @@ export class Backdrop {
     let layer = 0;
     const nextOrder = (): number =>
       Math.min(SKY.orderLast, SKY.orderFirst + layer++ * SKY.orderStep);
+    // Furthest first: the star band is the ground everything else stands on,
+    // then the nebula, then the bodies.
+    this.object.add(buildStarBand(this.plan.band, nextOrder()));
+    if (this.plan.nebula) this.object.add(buildNebula(this.plan.nebula, nextOrder()));
     for (const body of this.plan.bodies) this.object.add(buildBody(body, nextOrder));
+    this.drift = 0;
+    this.object.quaternion.identity();
   }
 
   /**
@@ -1150,6 +1401,40 @@ export class Backdrop {
   follow(camera: Object3D): void {
     this.object.visible = backdrop.enabled;
     this.object.position.copy(camera.position);
+  }
+
+  /**
+   * Wheel the sky, and tear it during a jump.
+   *
+   * The module shipped with no `update` and a good argument for it: nothing in a
+   * real sky moves fast enough to see inside a three-minute run, so drift is a
+   * lie about a fixed star field. That argument has been overruled deliberately
+   * — recorded in `SKY.driftRate` — on the grounds that a provably static sky is
+   * one the eye stops reading. The concession is the *axis*: this turns about
+   * the galactic pole, so the star band holds its place and everything wheels
+   * around it, which is the one rotation a real sky genuinely has.
+   *
+   * The jump term needs no such apology. During a hyperwarp you are actually
+   * travelling between sectors, so the sky tearing past is the truthful thing to
+   * draw, and it is staged at a moment the game already owns and already charges
+   * half a multiplier for.
+   *
+   * Time-based, like everything else that accumulates here. A sky that wheels
+   * faster on a faster machine would be the same bug as a lengthening trail.
+   */
+  update(dt: number): void {
+    if (!backdrop.enabled || !this.plan) return;
+    this.axis.copy(this.plan.band.pole);
+    this.drift += (SKY.driftRate * DEG) * (1 + this.warpIntensity * SKY.warpSpin) * dt;
+    this.object.quaternion.setFromAxisAngle(this.axis, this.drift);
+  }
+
+  /**
+   * How hard the jump is pulling, 0 to 1. Fed the charge's own progress, so the
+   * sky accelerates as the drive winds up and stops the instant it lets go.
+   */
+  warp(intensity: number): void {
+    this.warpIntensity = MathClamp(intensity, 0, 1);
   }
 
   /** What is up, for the debug hook and for a headless harness. */

@@ -810,6 +810,10 @@ function frame(now: number): void {
   // campaign" rule is untouched, and the cabinet showing the sky of the sector
   // you would actually launch into is the better of the two readings anyway.
   sky.show(campaign.seed, campaign.current);
+  // The jump's own charge drives the tear, so the sky winds up with the drive
+  // and stops the instant it lets go — no second clock to keep in step.
+  sky.warp(session.hyperwarp.phase === "charging" ? session.hyperwarp.progress : 0);
+  sky.update(dt);
   sky.follow(stage.camera);
 
   drawHud(stage.hud, {
