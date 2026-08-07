@@ -117,7 +117,8 @@ alternatives deliberately.
 
 ```
 src/render/   Stage (post chain), VectorObject (the two draw modes),
-              PhosphorPass, CrtPass, TraceBuffer, palette
+              PhosphorPass, CrtPass, TraceBuffer, palette, Backdrop (the
+              per-sector sky, derived from the campaign seed, camera-pinned)
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
 src/game/     Ship, altitude (the slab, its constants and its switch), session
               (rules), docking, death, hostiles, allies (the Warden), weapons,
