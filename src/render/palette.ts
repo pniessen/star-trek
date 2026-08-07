@@ -26,7 +26,15 @@ export const PALETTE = {
   // Violet sits in the widest gap left on the wheel — 75° clear of both the
   // player's cyan and the magenta unresolved return — so the mine-layer and
   // the hazards it leaves behind can never be mistaken for either.
-  harrow: new Color(0x9a6cf0), // violet — the mine-layer, and its mines
+  //
+  // Read as a *meaning* rather than as a class, this one says "sown, not shot":
+  // a machine that lays rather than fires, and the inert thing it leaves lying
+  // in the sector. That is why the Loom takes it too — its spinners never fire
+  // and its strands are exactly a mine's grammar drawn upward. A sixth hostile
+  // hue there would have said "another class to shoot"; violet already says the
+  // true thing, and silhouette keeps the two machines apart. See `game/loom.ts`.
+  harrow: new Color(0x9a6cf0), // violet — what is sown: the mine-layer and its
+  //                              mines, the Loom's spinners and its strands
   magenta: new Color(0xe45fa0), // unresolved contacts, anomalies, the cloaker
   star: new Color(0x7fb6bd),
 } as const;

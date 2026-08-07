@@ -183,6 +183,18 @@ tactical overlay, hyperwarp, and the command view — build, refit, deploy,
 front, with the run-to-run loop closed through docking (which credits salvage)
 and the epitaph (which runs the enemy's turn and saves).
 
+Also built: **the Loom**, the first encounter here that is a clock rather than a
+fight. Two spinners orbit a common centre at opposite points and lay a vertical
+filament at every bearing they pass; the strands accumulate into a picket fence
+closing around where you were standing, and **the wall rises as it goes** — so
+altitude buys *time*, not immunity, and the lid shuts about six seconds before
+the ring does. They never fire, never chase and never target. Four ways out:
+kill either spinner (pays salvage and the multiplier, in the house pattern),
+leave through a gap or over the top, hyperwarp (no second price), or let it
+close and be squeezed until you kill one. Behind `encounters.loom` in
+`game/loom.ts`, defaulting on, with **no keyboard binding** — `window.__loom.seed()`
+on localhost summons one. See `game/loom.ts`.
+
 Also built: **the Warden**, the one thing in the sector that is neither you nor
 trying to kill you. A patrol deployed in the sector you drop into flies in it
 for the whole run; anywhere else, one crosses the sector once in a long while,
@@ -205,7 +217,10 @@ sits at one fixed world position however the chart is drawn).
    `ALTITUDE` joins that list** — ceiling, climb rate, fall rate, drain — along
    with `SCANNER.altitudeScale`, `TUBE_WINDOW` and the five `slab` fractions,
    and it is the block most worth flying first: it is the newest thing here and
-   `Y` makes the A/B free. Needs a human at the keyboard with the speakers on.
+   `Y` makes the A/B free. **The whole of `LOOM` joins it too** — `rise` above
+   all, which is the one number deciding whether the encounter is interesting or
+   trivial, then `angularRate`, `radius`, `chance` and `minRadius`. Needs a human
+   at the keyboard with the speakers on.
 2. **Campaign balance.** The command view is built and the campaign is not
    yet winnable at plausible rates — `npm run campaignlength` finds a cliff
    between five steps of ground per run (0% wins) and six (93%), with no
@@ -232,8 +247,11 @@ sits at one fixed world position however the chart is drawn).
   design, and so is one with no audio device — the first failure retires the
   whole audio layer rather than raising in the frame loop.
 - `window.__probe`, `__session`, `__player`, `__fleet`, `__stage`,
-  `__presentation`, `__sound` are exposed on localhost only, for headless
-  inspection.
+  `__presentation`, `__sound`, `__loom` are exposed on localhost only, for
+  headless inspection. **`__loom.seed()` opens a Loom on demand** — it appears
+  at a wave break with a one-in-ten chance from escalation index four, so
+  waiting for one is not a way to tune one; it deliberately has no key, because
+  the control surface is full.
   `__probe.state` is still only `clear`/`fighting`/`dead`; the title and attract
   screens are `__probe.mode`, which is the shell around a run, not a combat
   phase. **A headless run must launch itself** — the page now lands on the
