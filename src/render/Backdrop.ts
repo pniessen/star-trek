@@ -415,7 +415,7 @@ function planSky(seed: number, sector: number): SkyPlan {
     // size, and it is drawn from a different family, so one is warm and one is
     // cold. A matched pair reads as a double image.
     const warmFirst = rng.next() < 0.5;
-    const size = range(rng, 2.8, 4.2);
+    const size = range(rng, 0.75, 1.35);
     // The pair is placed as a pair: one elevation for both, with the companion
     // nudged off it, so they read as two bodies at one distance rather than as
     // two independent things that happen to be near each other.
@@ -439,7 +439,7 @@ function planSky(seed: number, sector: number): SkyPlan {
     );
     bodies.push(big, small);
   } else if (composition === "sun") {
-    const size = range(rng, 2.6, 4.0);
+    const size = range(rng, 0.7, 1.3);
     // A sun's rays reach well past its disc, so it is held lower than its own
     // radius would ask for — the spikes are part of the silhouette.
     bodies.push(sun(rng, primaryAzimuth, bandElevation(rng, size * 2.2), size, "bone"));
@@ -458,7 +458,7 @@ function planSky(seed: number, sector: number): SkyPlan {
     // rarer answer and it has to stay rare, or it becomes a dual-sun sky with
     // the wrong spacing — which is the one thing rule 2 exists to prevent.
     const secondSun = composition !== "sun" && rng.next() < 0.4;
-    const size = secondSun ? range(rng, 1.8, 2.8) : range(rng, 2.6, 4.6);
+    const size = secondSun ? range(rng, 0.5, 0.9) : range(rng, 2.6, 4.6);
     const placement = placeApart(rng, bodies, secondSun ? size * 2.2 : size);
     bodies.push(
       secondSun
@@ -619,8 +619,8 @@ function ringed(rng: Rng, azimuth: number, elevation: number, size: number): Bod
     // The ring's tilt *is* the planet's tilt — the bands bow the same way the
     // ring opens, or the body reads as two objects photographed separately.
     tilt: range(rng, 0.14, 0.5) * (rng.next() < 0.5 ? -1 : 1),
-    ringInner: range(rng, 1.28, 1.42),
-    ringOuter: range(rng, 1.85, 2.3),
+    ringInner: range(rng, 1.10, 1.22),
+    ringOuter: range(rng, 1.42, 1.70),
   };
 }
 
@@ -636,11 +636,29 @@ function sun(
     azimuth,
     elevation,
     size,
-    colour: skyColour(rng, family),
+    // Hue from the family, luminance from the fact that this one is a *source*.
+    // The families' own ranges are built for bodies in reflected light, and a
+    // slate sun drawn at slate's luminance came out a dark blue coin — a hole in
+    // the sky rather than a star. So the hue still separates a warm star from a
+    // cold one, and both of them are bright.
+    colour: starColour(skyColour(rng, family)),
     light: range(rng, 0, TAU),
     rays: 14 + Math.floor(rng.next() * 12),
     spikes: rng.next() < 0.6,
   };
+}
+
+/**
+ * Lift a family colour to a star's brightness, keeping its hue and its
+ * saturation ceiling. The one place in this file that is allowed past
+ * `SKY_COLOUR.maxLuminance`, for the reason given where suns are drawn: a star
+ * is the only thing in the sky that emits, and it is small enough that letting
+ * it through the bloom threshold costs a halo rather than a washed-out frame.
+ */
+const _hsl = { h: 0, s: 0, l: 0 };
+function starColour(base: Color): Color {
+  base.getHSL(_hsl);
+  return base.setHSL(_hsl.h, Math.min(SKY_COLOUR.maxSaturation, _hsl.s), 0.95);
 }
 
 function moon(rng: Rng, azimuth: number, elevation: number, size: number): BodyPlan {
@@ -889,7 +907,7 @@ function ringArc(
  * is seen from a fixed direction, so what is in front of what is known when it
  * is built and does not need to be worked out again sixty times a second.
  */
-function fillDisc(radius: number, colour: Color, order: number, scale = 0.05): Mesh {
+function fillDisc(radius: number, colour: Color, order: number, scale = 0.022): Mesh {
   const material = new MeshBasicMaterial({
     // A hint of the body rather than a hole in the sky, the same argument
     // `VectorObject`'s `fill` makes. A star passes a higher `scale` than a
@@ -974,13 +992,29 @@ function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
     const flatten = Math.max(0.1, Math.abs(Math.sin(plan.tilt)));
     const far = newStrokes();
     const near = newStrokes();
-    // Three concentric edges: the inner limit, a dim division, the outer limit.
-    // A single ellipse is a hoop; three is a ring system.
-    const edges: Array<[number, number]> = [
-      [plan.ringInner, 0.8],
-      [(plan.ringInner + plan.ringOuter) / 2, 0.34],
-      [plan.ringOuter, 0.62],
-    ];
+    // Not three hoops. Three evenly spaced ellipses at one stroke weight is
+    // precisely what made the first version read as a diagram of Saturn out of
+    // a schoolbook: the eye reads even spacing as notation, not as matter.
+    //
+    // A ring system is a *band* — many fine strands of uneven brightness, with
+    // divisions swept clear through it. So: a dozen strands across the span, the
+    // brightness riding an irrational period so no rhythm ever establishes
+    // itself, and two gaps punched at fixed fractions of the width where the
+    // strands are simply skipped. The gaps are what sell it. A real ring is
+    // known by its divisions, not by its edges.
+    const STRANDS = 12;
+    const edges: Array<[number, number]> = [];
+    for (let i = 0; i < STRANDS; i++) {
+      const t = i / (STRANDS - 1);
+      // Two divisions. Skipping strands leaves a true gap rather than a dim
+      // one, which is the difference between a division and a smudge.
+      if ((t > 0.34 && t < 0.44) || (t > 0.72 && t < 0.78)) continue;
+      const scale = plan.ringInner + (plan.ringOuter - plan.ringInner) * t;
+      // Brightest just outside the inner edge, as a real system is, and never
+      // uniform: the sine is what stops twelve strands reading as hatching.
+      const brightness = (0.34 + 0.46 * Math.abs(Math.sin(i * 1.911 + plan.tilt * 4))) * (1 - 0.35 * t);
+      edges.push([scale, brightness]);
+    }
     // The far half is the one the tilt lifts *behind* the planet — which side
     // that is follows the sign of the tilt, exactly as the bands' bow does.
     const farFrom = plan.tilt >= 0 ? 0 : Math.PI;
@@ -1005,46 +1039,29 @@ function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
   }
 
   if (plan.kind === "sun") {
+    /**
+     * A star is a point, and the bloom pass is what makes it a star.
+     *
+     * This used to draw fourteen to twenty-six rays and four diffraction spikes
+     * by hand, at a brightness deliberately held below the bloom threshold —
+     * a sun "by its form, not by being brighter than everything else". That was
+     * the most childish thing in the sky, and it was solving a problem the
+     * renderer had already solved: `Stage` runs an UnrealBloom pass over the
+     * whole scene, and a small enough source above its 0.5 linear threshold
+     * *becomes* a halo with no rays drawn at all.
+     *
+     * So the rays are gone and the disc goes bright instead — the one place the
+     * sky is allowed above the threshold, because a star is the only thing up
+     * there that is genuinely a light source. It stays safe for the HUD because
+     * it is tiny: a degree of sky is about a dozen pixels, so what blooms is a
+     * halo rather than a field.
+     */
     const strokes = newStrokes();
-    rim(strokes, radius, 32, plan.colour, plan.light, 0.85);
-    // Rays start clear of the rim so nothing overlaps anything — which is what
-    // keeps a sun below the bloom threshold no matter how many rays it has.
-    // A sun in this sky is a sun by its *form*, not by being brighter than
-    // everything else; brightness is a thing information colours do.
-    for (let i = 0; i < plan.rays; i++) {
-      const angle = (i / plan.rays) * TAU;
-      const long = i % 2 === 0;
-      const inner = radius * 1.16;
-      const outer = radius * (long ? 2.1 : 1.55);
-      segment(
-        strokes,
-        Math.cos(angle) * inner,
-        Math.sin(angle) * inner,
-        Math.cos(angle) * outer,
-        Math.sin(angle) * outer,
-        plan.colour,
-        0.95,
-        0.08,
-      );
-    }
-    if (plan.spikes) {
-      for (let i = 0; i < 4; i++) {
-        const angle = plan.light + (i / 4) * TAU;
-        const inner = radius * 1.1;
-        const outer = radius * 3.4;
-        segment(
-          strokes,
-          Math.cos(angle) * inner,
-          Math.sin(angle) * inner,
-          Math.cos(angle) * outer,
-          Math.sin(angle) * outer,
-          plan.colour,
-          0.78,
-          0.0,
-        );
-      }
-    }
-    group.add(fillDisc(radius, plan.colour, nextOrder(), 0.45));
+    rim(strokes, radius, 40, plan.colour, plan.light, 1.0);
+    // A second rim just outside the first, dimmer: the corona's inner edge, and
+    // the only structure a star gets.
+    rim(strokes, radius * 1.22, 40, plan.colour, plan.light, 0.22);
+    group.add(fillDisc(radius, plan.colour, nextOrder(), 1.15));
     group.add(strokeLines(strokes, nextOrder()));
     return group;
   }
