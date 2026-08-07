@@ -23,6 +23,38 @@ function alongZ(x: number, y: number, z: number): Matrix4 {
   return at(x, y, z).multiply(new Matrix4().makeRotationX(Math.PI / 2));
 }
 
+/**
+ * A tapered flat panel, built as a four-sided frustum laid along X and pressed
+ * flat in Y. Its tip points toward `side`.
+ *
+ * Every wing in this file until now was a `BoxGeometry` turned about Y, which
+ * is a *parallelogram*: tip chord equals root chord, so the trailing edge can
+ * only ever run parallel to the leading edge. That is fine for a stubby pylon
+ * and wrong for a delta, where the whole planform is the taper — the leading
+ * edge rakes aft while the trailing edge creeps forward, and the two closing on
+ * each other is what makes a wing read as swept rather than as a plank at an
+ * angle. A frustum gives that for the same one primitive.
+ *
+ * Four sides also means the section is a diamond, so the panel carries a
+ * spanwise crease along its own mid-chord top and bottom. A flat box gives the
+ * edge detector nothing but an outline; this gives it a ridge, which is what a
+ * vector renderer wants from a large flat surface.
+ */
+function taperedPanel(
+  rootChord: number,
+  tipChord: number,
+  span: number,
+  thickness: number,
+  side: number,
+): BufferGeometry {
+  const geometry = new CylinderGeometry(tipChord / 2, rootChord / 2, span, 4, 1);
+  return geometry.applyMatrix4(
+    new Matrix4()
+      .makeScale(1, thickness / rootChord, 1)
+      .multiply(new Matrix4().makeRotationZ((side * -Math.PI) / 2)),
+  );
+}
+
 /** The player: saucer, neck, engineering hull, two nacelles on pylons. */
 export function buildCruiser(): BufferGeometry {
   const parts: BufferGeometry[] = [];
@@ -181,29 +213,112 @@ export function buildLance(): BufferGeometry {
 }
 
 /**
- * Bastion — the battlecruiser. A faceted command bulb thrust forward on a long
- * neck, a heavy body behind it, wings swept back to engine pods. Wide, blunt,
- * and obviously the thing you should not let get close.
+ * Bastion — the battlecruiser: a command pod thrust a long way out in front on
+ * a thin boom, a notched delta wing box aft, and the drives level on the
+ * wingtips.
+ *
+ * This is the D7/K't'inga lineage, and it is now built to that lineage's real
+ * proportions rather than to the genre gesture. The earlier hull had the right
+ * three masses in the right order and every ratio wrong: the boom was 2.1 long
+ * and 0.38 thick, which put the pod *on* the body instead of out ahead of it;
+ * the wings were straight-swept parallelograms; and the drives hung off the
+ * body on stubs rather than sitting on the wingtips. The published figures for
+ * the type are 228 m long by 152 m across by 47 m tall — beam 0.67 of length,
+ * height 0.21 of it — and this hull is 6.31 by 4.53 by 1.20, or 0.72 and 0.19.
+ * It is therefore *narrower and longer* than what it replaces, which is the
+ * opposite of the direction a "make it more impressive" instinct pulls.
+ *
+ * What that closed off: the roster's founding rule was one outline per class,
+ * so that a contact could be named from its silhouette alone. That rule has
+ * been rescinded deliberately — fidelity to the type now outranks silhouette
+ * separation where the two disagree, and here they do. The Raider still reads
+ * as a different animal (its head is on a *short* neck between forward-swept
+ * drooping wings) but the margin is thinner than it was, and the honest reason
+ * that is acceptable is that it was traded away on purpose rather than missed.
+ *
+ * On cost, and the tiers below: this is 487 strokes against the Bastion's old
+ * 144 and the player's own 256, and the argument against it is not the GPU —
+ * a few thousand instanced quads is nothing — it is the bloom. Every crease in
+ * here glows, and past about 40 units the pod rim, the spine ribs and the
+ * nacelle caps stop being detail and start being one bright smear. Four blocks
+ * below are marked T1 to T3 and are meant to be deleted in that order if the
+ * ship reads as a lamp at range: T1 the spine ribs (-48), T2 the pod belt, the
+ * wingtip fins and the nacelle aft caps (-93 more), T3 the chin, the ventral
+ * hump and the wing root fillets, with the pod at 7 sides and the nacelles at
+ * 6 (-78 more, landing at 268). The proportions survive all three cuts, which
+ * is the point of putting the fidelity in the ratios rather than in the parts.
  */
 export function buildBastion(): BufferGeometry {
   const parts: BufferGeometry[] = [];
 
-  // Command bulb: low-poly on purpose, so its facets catch the light as edges.
-  parts.push(placed(new CylinderGeometry(0.5, 0.86, 0.7, 7), at(0, 0.05, 2.5)));
-  parts.push(placed(new CylinderGeometry(0.86, 0.4, 0.6, 7), at(0, -0.5, 2.5)));
-  parts.push(placed(new BoxGeometry(0.38, 0.34, 2.1), at(0, 0.05, 1.15)));
+  // Command pod, at z = 2.86 with nothing but boom behind it for 2.3 units.
+  // The gap is the entire read: from ahead this ship is a wide arrowhead with a
+  // dot floating in front of it, and nothing else in the game does that.
+  //
+  // The pod is a lens, not a bulb — three stacked frusta at nine sides, a
+  // shallow dome over a rim over a shallower underside. The rim is what stops
+  // it reading as two cones glued together; it is also the cheapest thing to
+  // lose, which is why it is T2.
+  parts.push(placed(new CylinderGeometry(0.3, 0.52, 0.2, 9), at(0, 0.24, 2.86)));
+  parts.push(placed(new CylinderGeometry(0.52, 0.56, 0.14, 9), at(0, 0.07, 2.86))); // T2: belt
+  parts.push(placed(new CylinderGeometry(0.56, 0.34, 0.26, 9), at(0, -0.13, 2.86)));
+  parts.push(placed(new CylinderGeometry(0.1, 0.17, 0.12, 6), at(0, 0.4, 2.86)));
+  // The forward gun. A round pod is a blister; a round pod with a barrel out of
+  // its face is a bow, and tells you which end of this thing you are looking at.
+  parts.push(placed(new CylinderGeometry(0.1, 0.13, 0.55, 6), alongZ(0, -0.02, 3.28)));
+  parts.push(placed(new BoxGeometry(0.26, 0.2, 0.36), at(0, -0.3, 3.0))); // T3: chin
 
-  parts.push(placed(new BoxGeometry(1.6, 0.72, 2.4), at(0, 0, -1.0)));
-  parts.push(placed(new CylinderGeometry(0.34, 0.5, 0.7, 6), alongZ(0, 0, -2.4)));
+  // Boom. Thin enough that it nearly disappears at range, which is the effect
+  // wanted — the pod should look unsupported.
+  parts.push(placed(new BoxGeometry(0.24, 0.26, 2.3), at(0, -0.02, 1.42)));
+  parts.push(placed(new BoxGeometry(0.12, 0.24, 2.1), at(0, 0.22, 1.4)));
+  // T1: the refit spine, segmented. Four ribs, and the first thing to go — it
+  // is 48 strokes of detail that has resolved into a single line by 15 units.
+  for (let i = 0; i < 4; i++) {
+    parts.push(placed(new BoxGeometry(0.2, 0.1, 0.14), at(0, 0.34, 2.15 - i * 0.5)));
+  }
+
+  // Where the boom enters the wing box it widens into a wedge rather than
+  // meeting it square. A four-sided cone is exactly that fairing for one part.
+  parts.push(placed(new CylinderGeometry(0.0, 0.44, 0.95, 4), alongZ(0, -0.02, 0.72)));
+  parts.push(placed(new BoxGeometry(0.52, 0.38, 0.8), at(0, -0.02, 0.3)));
+
+  // Body, and the tail that runs a full unit aft of where the wings end. That
+  // overhang is the notch: the trailing edge of this ship is a W, not a line.
+  parts.push(placed(new BoxGeometry(0.88, 0.5, 2.1), at(0, -0.02, -0.85)));
+  parts.push(placed(new BoxGeometry(0.62, 0.36, 0.62), at(0, -0.02, -2.14)));
+  parts.push(placed(new BoxGeometry(0.52, 0.2, 0.7), at(0, 0.3, -1.6)));
+  parts.push(placed(new CylinderGeometry(0.22, 0.3, 0.34, 6), alongZ(0, -0.02, -2.58)));
+  parts.push(placed(new CylinderGeometry(0.36, 0.18, 0.46, 6), at(0, -0.48, -1.0))); // T3: hump
 
   for (const side of [-1, 1]) {
+    // The delta. Root chord 2.3 tapering to 0.86 over a 1.55 half-span at 0.30
+    // of sweep, which puts the leading edge 1.13 aft over the span while the
+    // trailing edge creeps 0.21 *forward* — a genuine planform rather than a
+    // swept plank. Tips land at x = 2.21, for a beam of 4.42.
     parts.push(
       placed(
-        new BoxGeometry(1.9, 0.16, 1.0),
-        at(side * 1.5, -0.06, -1.35).multiply(new Matrix4().makeRotationY(side * 0.5)),
+        taperedPanel(2.3, 0.86, 1.55, 0.34, side),
+        at(side * 1.34, -0.02, -0.55).multiply(new Matrix4().makeRotationY(side * 0.3)),
       ),
     );
-    parts.push(placed(new CylinderGeometry(0.24, 0.24, 2.0, 6), alongZ(side * 2.25, -0.12, -1.15)));
+    // T3: root fillet, blending the wing into the body.
+    parts.push(
+      placed(
+        new BoxGeometry(0.9, 0.26, 0.5),
+        at(side * 0.62, -0.02, 0.1).multiply(new Matrix4().makeRotationY(side * 0.55)),
+      ),
+    );
+
+    // Drives on the wingtips, level, and thrown a long way forward — the
+    // intakes sit 1.1 units ahead of the wingtip's own leading edge. Level is
+    // load-bearing: the Raider's and the Shroud's wingtip pods are canted with
+    // their wings, and this one deliberately is not.
+    parts.push(placed(new CylinderGeometry(0.19, 0.19, 1.6, 7), alongZ(side * 2.08, 0.04, -0.3)));
+    parts.push(placed(new CylinderGeometry(0.13, 0.19, 0.26, 7), alongZ(side * 2.08, 0.04, 0.63)));
+    // T2: aft cap and the wingtip fin above the drive.
+    parts.push(placed(new CylinderGeometry(0.19, 0.11, 0.2, 7), alongZ(side * 2.08, 0.04, -1.2)));
+    parts.push(placed(new BoxGeometry(0.14, 0.38, 0.52), at(side * 2.08, 0.3, -0.55)));
   }
 
   return mergeGeometries(parts, false)!;
