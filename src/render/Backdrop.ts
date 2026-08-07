@@ -150,6 +150,8 @@ export const SKY = {
  */
 const SKY_COLOUR = {
   maxSaturation: 0.22,
+  /** What a `jovian` giant is allowed, and nothing else. See the family's note. */
+  maxGiantSaturation: 0.44,
   /**
    * The ceiling on a *stroke*, and it was 0.30 in the first draft, which was the
    * single mistake that made the sky read as a diagram.
@@ -225,6 +227,21 @@ const FAMILIES = {
   ash: { hue: [220, 228], saturation: [0.0, 0.04], luminance: [0.42, 0.6] },
   /** Dim warm white — what a star is made of here. */
   bone: { hue: [38, 52], saturation: [0.04, 0.12], luminance: [0.55, 0.72] },
+  /**
+   * The one hot register, and it exists for gas giants alone.
+   *
+   * Everything else up there is a body in reflected light seen from a very long
+   * way off, and dusty is the truthful answer for those. A giant is different:
+   * it is the closest thing in the sky, it fills a third of the frame, and at a
+   * tenth of anyone's saturation it was a grey arc that happened to be curved.
+   *
+   * The ceiling is still doing its job. Raider gold sits at hue 35 saturation
+   * 0.88; this tops out at 0.44 — half of it — and lives on an object that is
+   * enormous, motionless, behind everything, and never on the scanner. The two
+   * cannot be confused by anything except a colour picker. Cyan remains banned
+   * outright, and this register is not offered to any other kind of body.
+   */
+  jovian: { hue: [20, 46], saturation: [0.3, 0.44], luminance: [0.5, 0.68] },
 } as const;
 
 type FamilyName = keyof typeof FAMILIES;
@@ -341,7 +358,10 @@ function skyColour(rng: Rng, family: FamilyName): Color {
   }
   return new Color().setHSL(
     (((hue % 360) + 360) % 360) / 360,
-    Math.min(range(rng, spec.saturation[0], spec.saturation[1]), SKY_COLOUR.maxSaturation),
+    Math.min(
+      range(rng, spec.saturation[0], spec.saturation[1]),
+      family === "jovian" ? SKY_COLOUR.maxGiantSaturation : SKY_COLOUR.maxSaturation,
+    ),
     Math.min(range(rng, spec.luminance[0], spec.luminance[1]), SKY_COLOUR.maxLuminance),
     SRGBColorSpace,
   );
@@ -444,11 +464,43 @@ function planSky(seed: number, sector: number): SkyPlan {
     // radius would ask for — the spikes are part of the silhouette.
     bodies.push(sun(rng, primaryAzimuth, bandElevation(rng, size * 2.2), size, "bone"));
   } else if (composition === "ringed") {
-    const size = range(rng, 22, 38);
-    bodies.push(ringed(rng, primaryAzimuth, limbElevation(rng, size), size));
+    /**
+     * The one body that is deliberately *not* a limb.
+     *
+     * Giants became limbs because a giant's interest is its surface, and the
+     * closer you are the more of it there is. A ringed planet's interest is its
+     * outline — disc, then a gap, then an ellipse passing behind on one side and
+     * in front on the other — and an outline is the one thing that cannot
+     * survive being cropped. Built at limb scale it lost its rings entirely:
+     * they became arcs parallel to the edge, indistinguishable from the
+     * atmospheric layers a few degrees inside them.
+     *
+     * So it stays far away and stays whole. Two vocabularies, because these are
+     * two different distances rather than one rule applied badly to both.
+     */
+    const size = range(rng, 5.0, 8.5);
+    // A ring is half again as wide as its planet in both directions, and all of
+    // it has to stay in frame or the silhouette is broken anyway.
+    bodies.push(ringed(rng, primaryAzimuth, bandElevation(rng, size * 2.4), size));
   } else {
-    const size = range(rng, 24, 46);
-    bodies.push(giant(rng, primaryAzimuth, limbElevation(rng, size), size));
+    /**
+     * A whole disc, at a distance — the limb vocabulary was tried here and
+     * dropped.
+     *
+     * The argument for it was sound and the result was not: a body cropped by
+     * both frame edges reads as scale, so bring the giant close enough that you
+     * only see its edge. What actually happened is that the interesting part of
+     * a giant *is* its banding, and cropping threw most of the banding off
+     * screen — leaving a set of nested arcs that read as arcs. The ringed planet
+     * failed the same way for a related reason and is a distance body now too.
+     *
+     * What survived the experiment is the colour. Each band carries its own hue
+     * rather than the body's one hue, and that lands harder here than it ever
+     * did on a limb, because on a whole disc you see every band at once and the
+     * chromatic banding is the entire read.
+     */
+    const size = range(rng, 9, 14);
+    bodies.push(giant(rng, primaryAzimuth, bandElevation(rng, size), size));
   }
 
   // Rule 2: a pair of suns has already spent the second slot.
@@ -513,33 +565,6 @@ function bandElevation(rng: Rng, size: number): number {
 }
 
 /**
- * Where the centre of a *limb* goes, which is the opposite problem to
- * `bandElevation` and is why it needed its own function.
- *
- * `bandElevation` keeps a whole disc inside the frame. A limb is the other
- * vocabulary entirely: the body is far too large to fit, so what is composed is
- * not the disc but the **edge**, and the centre is deliberately pushed off the
- * top of the screen. You never see a whole planet from near one — you see a
- * curve, and the curve is the thing that says how big it is. A complete circle,
- * however well shaded, reads as a ball hanging in the sky; an arc that leaves
- * the frame on both sides reads as a world.
- *
- * So the near edge is what gets placed, at `nearEdge` degrees of elevation, and
- * the centre falls out of it at `size` above that. Two degrees to sixteen: below
- * two the limb tangles with the grid's horizon and the contact labels, above
- * sixteen the arc has climbed off the top and taken the composition with it.
- *
- * The cap is not cosmetic. `orient` builds its basis from world up, which
- * degenerates as a body approaches the zenith, and its own comment leaned on the
- * old band topping out at 38 degrees. A 46-degree limb sitting 16 above its own
- * radius would ask for 62, so the ceiling is set below where that argument
- * stops holding rather than trusting it to.
- */
-function limbElevation(rng: Rng, size: number): number {
-  return Math.min(64, size + range(rng, -4, 8));
-}
-
-/**
  * A placement at least `SKY.separation` from everything already planned.
  *
  * Rejection sampling with a bounded budget, then a deterministic fallback: a
@@ -567,25 +592,6 @@ function placeApart(rng: Rng, existing: readonly BodyPlan[], size: number): Plac
   };
 }
 
-/**
- * Where the sun is, for a body big enough that you only see its edge.
- *
- * A full disc can be lit from anywhere — every direction puts the terminator
- * somewhere on screen. A limb cannot. Its centre is off the top of the frame and
- * the visible sliver is the *bottom* of the circle, so a light direction drawn
- * uniformly from a full turn leaves the only part anyone can see completely dark
- * about half the time. The first limbs built here did exactly that, and read as
- * a grey sheet with no edge at all.
- *
- * So the light is aimed at the visible arc — straight down the body's local -Y,
- * give or take — and the spread is what still buys the variety: enough to swing
- * the terminator from one side of the frame to the other, never enough to put it
- * off screen entirely.
- */
-function limbLight(rng: Rng): number {
-  return -Math.PI / 2 + range(rng, -0.75, 0.75);
-}
-
 function giant(
   rng: Rng,
   azimuth: number,
@@ -598,8 +604,8 @@ function giant(
     azimuth,
     elevation,
     size,
-    colour: skyColour(rng, pick(rng, ["slate", "ochre", "ash"] as const)),
-    light: kind === "gas-giant" ? limbLight(rng) : range(rng, 0, TAU),
+    colour: skyColour(rng, kind === "gas-giant" ? "jovian" : pick(rng, ["slate", "ochre", "ash"] as const)),
+    light: range(rng, 0, TAU),
     // Three bands is the fewest that reads as banding rather than as a line
     // across a circle; seven is where a disc this size turns into hatching.
     bands: kind === "gas-giant" ? 3 + Math.floor(rng.next() * 5) : 2 + Math.floor(rng.next() * 3),
@@ -614,13 +620,13 @@ function ringed(rng: Rng, azimuth: number, elevation: number, size: number): Bod
     elevation,
     size,
     colour: skyColour(rng, pick(rng, ["ochre", "ash", "slate"] as const)),
-    light: limbLight(rng),
+    light: range(rng, 0, TAU),
     bands: 2 + Math.floor(rng.next() * 3),
     // The ring's tilt *is* the planet's tilt — the bands bow the same way the
     // ring opens, or the body reads as two objects photographed separately.
     tilt: range(rng, 0.14, 0.5) * (rng.next() < 0.5 ? -1 : 1),
-    ringInner: range(rng, 1.10, 1.22),
-    ringOuter: range(rng, 1.42, 1.70),
+    ringInner: range(rng, 1.32, 1.46),
+    ringOuter: range(rng, 1.95, 2.35),
   };
 }
 
@@ -805,40 +811,34 @@ function band(
  * and the brightness both ride an irrational-period sine: deterministic, seeded
  * by the body's own tilt, and never repeating a visible pattern.
  */
-function strata(
-  strokes: Strokes,
-  radius: number,
-  count: number,
-  light: number,
-  colour: Color,
-  phase: number,
-): void {
-  // Wide enough to cross the frame from corner to corner, no wider: a stratum
-  // continuing round the dark side is strokes nobody sees.
-  const span = 1.6;
-  const steps = 80;
-  for (let i = 1; i <= count; i++) {
-    const t = i / count;
-    const wobble = 1 + 0.38 * Math.sin(i * 2.399 + phase);
-    const inner = radius * (1 - 0.46 * t ** 1.9 * wobble);
-    // Depth alone would fade them out evenly, which is its own kind of regular.
-    const weight = (1 - t) ** 1.15 * (0.55 + 0.45 * Math.abs(Math.sin(i * 1.618 + phase)));
-    let previousX = 0;
-    let previousY = 0;
-    for (let j = 0; j <= steps; j++) {
-      const angle = light - span + (j / steps) * span * 2;
-      const x = Math.cos(angle) * inner;
-      const y = Math.sin(angle) * inner;
-      if (j > 0) {
-        // The same falloff the rim takes, so a stratum dies at the terminator
-        // rather than running on into the night side as a floating stripe.
-        const lit = (a: number): number => Math.max(0, Math.cos(a - light)) ** 0.7 * weight;
-        segment(strokes, previousX, previousY, x, y, colour, lit(angle - (span * 2) / steps), lit(angle));
-      }
-      previousX = x;
-      previousY = y;
-    }
-  }
+/**
+ * The colour of one band, and this is what a banded giant actually is.
+ *
+ * Every band shared the body's one colour before, and that is most of why a
+ * giant read as a tinted circle no matter what was done to its brightness:
+ * Jupiter is not one hue at several lightnesses, it is *cream next to tan next
+ * to rust*. The banding is chromatic before it is anything else.
+ *
+ * So each band swings its own hue, saturation and lightness off the body's base
+ * on an irrational period — never repeating, always deterministic, and still
+ * bounded by the giant ceiling so the whole thing cannot walk into an
+ * information colour. Hue swings about fourteen degrees either way, roughly the
+ * spread between Jupiter's own belts and zones.
+ *
+ * This outlived the limb experiment it was written for, and lands harder now
+ * than it did then: on a whole disc you see every band at once.
+ */
+const _stratum = new Color();
+function stratumColour(base: Color, i: number, phase: number): Color {
+  _stratum.copy(base).getHSL(_hsl);
+  const swing = Math.sin(i * 2.7 + phase);
+  const warm = Math.sin(i * 1.31 + phase * 1.7);
+  return _stratum.setHSL(
+    (((_hsl.h + swing * 0.038) % 1) + 1) % 1,
+    Math.max(0, Math.min(SKY_COLOUR.maxGiantSaturation, _hsl.s * (1 + warm * 0.45))),
+    Math.max(0, Math.min(SKY_COLOUR.maxLuminance, _hsl.l * (0.82 + 0.34 * Math.abs(swing)))),
+    SRGBColorSpace,
+  );
 }
 
 /** The lit/unlit boundary across a small body: an arc, not a chord. */
@@ -1031,8 +1031,11 @@ function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
     group.add(strokeLines(far, nextOrder()));
     group.add(fillDisc(radius, plan.colour, nextOrder()));
     const face = newStrokes();
-    rim(face, radius, 220, plan.colour, plan.light, 0.0);
-    strata(face, radius, 3 + Math.floor(plan.bands / 2), plan.light, plan.colour, plan.tilt * 5);
+    rim(face, radius, 72, plan.colour, plan.light, 0.0);
+    for (let i = 0; i < plan.bands; i++) {
+      const latitude = (-0.55 + ((i + 0.5) / plan.bands) * 1.1) * (Math.PI / 2);
+      band(face, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
+    }
     group.add(strokeLines(face, nextOrder()));
     group.add(strokeLines(near, nextOrder()));
     return group;
@@ -1076,14 +1079,15 @@ function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
   }
 
   const strokes = newStrokes();
-  rim(strokes, radius, plan.kind === "gas-giant" ? 220 : 40, plan.colour, plan.light, 0.0);
-  if (plan.kind === "gas-giant") {
-    strata(strokes, radius, 4 + Math.floor(plan.bands / 2), plan.light, plan.colour, plan.tilt * 5);
-  } else {
-    for (let i = 0; i < plan.bands; i++) {
-      const latitude = (-0.55 + ((i + 0.5) / plan.bands) * 1.1) * (Math.PI / 2);
-      band(strokes, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
-    }
+  rim(strokes, radius, plan.kind === "gas-giant" ? 84 : 40, plan.colour, plan.light, 0.0);
+  // A giant gets many bands, each its own colour; a small companion gets a few
+  // in the body's own, because at that size chromatic banding is three pixels
+  // of hue nobody can resolve.
+  const count = plan.kind === "gas-giant" ? 5 + plan.bands : plan.bands;
+  for (let i = 0; i < count; i++) {
+    const latitude = (-0.62 + ((i + 0.5) / count) * 1.24) * (Math.PI / 2);
+    const tint = plan.kind === "gas-giant" ? stratumColour(plan.colour, i, plan.tilt * 5) : plan.colour;
+    band(strokes, radius, latitude, plan.tilt, tint, plan.light, 0.7 + (i % 2) * 0.3);
   }
   group.add(fillDisc(radius, plan.colour, nextOrder()));
   group.add(strokeLines(strokes, nextOrder()));
