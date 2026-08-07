@@ -150,7 +150,42 @@ export const SKY = {
  */
 const SKY_COLOUR = {
   maxSaturation: 0.22,
-  maxLuminance: 0.3,
+  /**
+   * The ceiling on a *stroke*, and it was 0.30 in the first draft, which was the
+   * single mistake that made the sky read as a diagram.
+   *
+   * The rule above is about hue, and the first draft enforced it on brightness
+   * as well — the whole sky was squeezed into 0.15-0.30, half a stop of range
+   * with a hard floor under it. But **shading is luminance**: a terminator, a
+   * lit limb, limb darkening are all differences in brightness, and legislating
+   * the brightness differences away legislates away the sphere. The module had a
+   * `terminator()` and a limb falloff the entire time and neither could be seen,
+   * because there was nowhere for them to go.
+   *
+   * Information colour is *hue*, not brightness. A body at a fifth of any
+   * class's saturation cannot be read as a contact however bright its rim gets,
+   * so the edge is free to climb — and it must, because the edge is the only
+   * thing carrying form.
+   *
+   * 0.72 sRGB is roughly 0.48 in the linear light the bloom pass measures, which
+   * lands just under its 0.5 threshold. So the property the old number bought by
+   * accident — the sky never blooms, and never washes out stroke text drawn
+   * through the same glow — is kept deliberately instead, with 4.4x the range.
+   * Suns are the one exception and say so where they are built: a star is
+   * supposed to be a light source, and it is small enough that letting it bloom
+   * costs a halo rather than a washed-out HUD.
+   */
+  maxLuminance: 0.72,
+  /**
+   * And the ceiling on a body's *face*, which goes the other way.
+   *
+   * The fill is a mass, not a light. This is `VectorObject`'s occluded mode —
+   * the locked decision the whole game's look rests on — restated for the sky:
+   * glowing edges over near-void opaque faces. The first draft had these two
+   * numbers within a whisker of each other, so every body was a flat grey coin.
+   * Pulling them apart is what makes it a body.
+   */
+  maxFillLuminance: 0.09,
   /**
    * Cyan is *ours* and is forbidden outright — the player and the Warden both
    * wear it, and it is the one hue in this game that means "not a target".
@@ -183,13 +218,13 @@ const FAMILIES = {
    * move it several degrees. Six degrees of headroom is what makes "no cyan in
    * the sky" true of the pixels and not merely of the arithmetic.
    */
-  slate: { hue: [220, 242], saturation: [0.1, 0.2], luminance: [0.15, 0.26] },
+  slate: { hue: [220, 242], saturation: [0.1, 0.2], luminance: [0.44, 0.62] },
   /** Dusty ochre — a brown body, not a gold one. */
-  ochre: { hue: [28, 46], saturation: [0.09, 0.18], luminance: [0.16, 0.27] },
+  ochre: { hue: [28, 46], saturation: [0.09, 0.18], luminance: [0.46, 0.66] },
   /** Near-monochrome. The hue is inert at this saturation and is only here so the maths has one. */
-  ash: { hue: [220, 228], saturation: [0.0, 0.04], luminance: [0.16, 0.27] },
+  ash: { hue: [220, 228], saturation: [0.0, 0.04], luminance: [0.42, 0.6] },
   /** Dim warm white — what a star is made of here. */
-  bone: { hue: [38, 52], saturation: [0.04, 0.12], luminance: [0.2, 0.3] },
+  bone: { hue: [38, 52], saturation: [0.04, 0.12], luminance: [0.55, 0.72] },
 } as const;
 
 type FamilyName = keyof typeof FAMILIES;
@@ -409,12 +444,11 @@ function planSky(seed: number, sector: number): SkyPlan {
     // radius would ask for — the spikes are part of the silhouette.
     bodies.push(sun(rng, primaryAzimuth, bandElevation(rng, size * 2.2), size, "bone"));
   } else if (composition === "ringed") {
-    const size = range(rng, 6.0, 9.5);
-    // And a ring is wider than its planet, by `ringOuter`, in both directions.
-    bodies.push(ringed(rng, primaryAzimuth, bandElevation(rng, size * 1.5), size));
+    const size = range(rng, 22, 38);
+    bodies.push(ringed(rng, primaryAzimuth, limbElevation(rng, size), size));
   } else {
-    const size = range(rng, 7.0, 11.0);
-    bodies.push(giant(rng, primaryAzimuth, bandElevation(rng, size), size));
+    const size = range(rng, 24, 46);
+    bodies.push(giant(rng, primaryAzimuth, limbElevation(rng, size), size));
   }
 
   // Rule 2: a pair of suns has already spent the second slot.
@@ -479,6 +513,33 @@ function bandElevation(rng: Rng, size: number): number {
 }
 
 /**
+ * Where the centre of a *limb* goes, which is the opposite problem to
+ * `bandElevation` and is why it needed its own function.
+ *
+ * `bandElevation` keeps a whole disc inside the frame. A limb is the other
+ * vocabulary entirely: the body is far too large to fit, so what is composed is
+ * not the disc but the **edge**, and the centre is deliberately pushed off the
+ * top of the screen. You never see a whole planet from near one — you see a
+ * curve, and the curve is the thing that says how big it is. A complete circle,
+ * however well shaded, reads as a ball hanging in the sky; an arc that leaves
+ * the frame on both sides reads as a world.
+ *
+ * So the near edge is what gets placed, at `nearEdge` degrees of elevation, and
+ * the centre falls out of it at `size` above that. Two degrees to sixteen: below
+ * two the limb tangles with the grid's horizon and the contact labels, above
+ * sixteen the arc has climbed off the top and taken the composition with it.
+ *
+ * The cap is not cosmetic. `orient` builds its basis from world up, which
+ * degenerates as a body approaches the zenith, and its own comment leaned on the
+ * old band topping out at 38 degrees. A 46-degree limb sitting 16 above its own
+ * radius would ask for 62, so the ceiling is set below where that argument
+ * stops holding rather than trusting it to.
+ */
+function limbElevation(rng: Rng, size: number): number {
+  return Math.min(64, size + range(rng, -4, 8));
+}
+
+/**
  * A placement at least `SKY.separation` from everything already planned.
  *
  * Rejection sampling with a bounded budget, then a deterministic fallback: a
@@ -506,6 +567,25 @@ function placeApart(rng: Rng, existing: readonly BodyPlan[], size: number): Plac
   };
 }
 
+/**
+ * Where the sun is, for a body big enough that you only see its edge.
+ *
+ * A full disc can be lit from anywhere — every direction puts the terminator
+ * somewhere on screen. A limb cannot. Its centre is off the top of the frame and
+ * the visible sliver is the *bottom* of the circle, so a light direction drawn
+ * uniformly from a full turn leaves the only part anyone can see completely dark
+ * about half the time. The first limbs built here did exactly that, and read as
+ * a grey sheet with no edge at all.
+ *
+ * So the light is aimed at the visible arc — straight down the body's local -Y,
+ * give or take — and the spread is what still buys the variety: enough to swing
+ * the terminator from one side of the frame to the other, never enough to put it
+ * off screen entirely.
+ */
+function limbLight(rng: Rng): number {
+  return -Math.PI / 2 + range(rng, -0.75, 0.75);
+}
+
 function giant(
   rng: Rng,
   azimuth: number,
@@ -519,7 +599,7 @@ function giant(
     elevation,
     size,
     colour: skyColour(rng, pick(rng, ["slate", "ochre", "ash"] as const)),
-    light: range(rng, 0, TAU),
+    light: kind === "gas-giant" ? limbLight(rng) : range(rng, 0, TAU),
     // Three bands is the fewest that reads as banding rather than as a line
     // across a circle; seven is where a disc this size turns into hatching.
     bands: kind === "gas-giant" ? 3 + Math.floor(rng.next() * 5) : 2 + Math.floor(rng.next() * 3),
@@ -534,7 +614,7 @@ function ringed(rng: Rng, azimuth: number, elevation: number, size: number): Bod
     elevation,
     size,
     colour: skyColour(rng, pick(rng, ["ochre", "ash", "slate"] as const)),
-    light: range(rng, 0, TAU),
+    light: limbLight(rng),
     bands: 2 + Math.floor(rng.next() * 3),
     // The ring's tilt *is* the planet's tilt — the bands bow the same way the
     // ring opens, or the body reads as two objects photographed separately.
@@ -625,7 +705,7 @@ function segment(
  */
 function rim(strokes: Strokes, radius: number, steps: number, colour: Color, light: number, floor: number): void {
   const lit = (angle: number): number =>
-    floor + (1 - floor) * Math.max(0, Math.cos(angle - light)) ** 0.7;
+    floor + (1 - floor) * Math.max(0, Math.cos(angle - light)) ** 0.55;
   for (let i = 0; i < steps; i++) {
     const t0 = (i / steps) * TAU;
     const t1 = ((i + 1) / steps) * TAU;
@@ -675,11 +755,71 @@ function band(
       // Bands take the same limb falloff the rim does, so the lit side of the
       // body stays the lit side all the way across it.
       const shade = (px: number, py: number): number =>
-        0.55 + 0.45 * Math.max(0, Math.cos(Math.atan2(py, px) - light));
+        0.06 + 0.94 * Math.max(0, Math.cos(Math.atan2(py, px) - light)) ** 0.6;
       segment(strokes, previousX, previousY, x, y, colour, scale * shade(previousX, previousY), scale * shade(x, y));
     }
     previousX = x;
     previousY = y;
+  }
+}
+
+
+/**
+ * The layers stacked just inside a limb, which is what a limb has instead of
+ * banding.
+ *
+ * `band` draws a latitude circle across a whole disc, and that is the right
+ * answer for a body you can see all of. It is the wrong answer here: at a
+ * limb's scale the centre of the sphere is off the top of the frame, so a
+ * latitude circle is off screen for almost its entire length and what little
+ * survives is a nearly straight line in the corner.
+ *
+ * What you actually see approaching a world is the opposite — everything
+ * *crowds* toward the edge. Equal steps of latitude compress into nothing at the
+ * limb, so the visible strip is a stack of arcs parallel to the edge, dense
+ * against it and opening out inward. That is the `t ** 1.9`: depth grows
+ * non-linearly so the arcs pile up where the eye is already looking.
+ *
+ * The wobble is not decoration either. Perfectly even spacing at a single stroke
+ * weight is the one thing that reads as a technical drawing rather than a place
+ * — it is what made the first ring system look like a diagram of Saturn. Real
+ * layers are uneven and some are brighter than their neighbours, so the spacing
+ * and the brightness both ride an irrational-period sine: deterministic, seeded
+ * by the body's own tilt, and never repeating a visible pattern.
+ */
+function strata(
+  strokes: Strokes,
+  radius: number,
+  count: number,
+  light: number,
+  colour: Color,
+  phase: number,
+): void {
+  // Wide enough to cross the frame from corner to corner, no wider: a stratum
+  // continuing round the dark side is strokes nobody sees.
+  const span = 1.6;
+  const steps = 80;
+  for (let i = 1; i <= count; i++) {
+    const t = i / count;
+    const wobble = 1 + 0.38 * Math.sin(i * 2.399 + phase);
+    const inner = radius * (1 - 0.46 * t ** 1.9 * wobble);
+    // Depth alone would fade them out evenly, which is its own kind of regular.
+    const weight = (1 - t) ** 1.15 * (0.55 + 0.45 * Math.abs(Math.sin(i * 1.618 + phase)));
+    let previousX = 0;
+    let previousY = 0;
+    for (let j = 0; j <= steps; j++) {
+      const angle = light - span + (j / steps) * span * 2;
+      const x = Math.cos(angle) * inner;
+      const y = Math.sin(angle) * inner;
+      if (j > 0) {
+        // The same falloff the rim takes, so a stratum dies at the terminator
+        // rather than running on into the night side as a floating stripe.
+        const lit = (a: number): number => Math.max(0, Math.cos(a - light)) ** 0.7 * weight;
+        segment(strokes, previousX, previousY, x, y, colour, lit(angle - (span * 2) / steps), lit(angle));
+      }
+      previousX = x;
+      previousY = y;
+    }
   }
 }
 
@@ -749,7 +889,7 @@ function ringArc(
  * is seen from a fixed direction, so what is in front of what is known when it
  * is built and does not need to be worked out again sixty times a second.
  */
-function fillDisc(radius: number, colour: Color, order: number, scale = 0.18): Mesh {
+function fillDisc(radius: number, colour: Color, order: number, scale = 0.05): Mesh {
   const material = new MeshBasicMaterial({
     // A hint of the body rather than a hole in the sky, the same argument
     // `VectorObject`'s `fill` makes. A star passes a higher `scale` than a
@@ -763,7 +903,10 @@ function fillDisc(radius: number, colour: Color, order: number, scale = 0.18): M
     depthWrite: false,
     fog: false,
   });
-  const mesh = new Mesh(new CircleGeometry(radius, 40), material);
+  // 128, not the 40 this started with. A limb fills the frame edge to edge, and
+  // at that size a 40-gon's flats are plainly visible as a faceted horizon —
+  // the one artefact that would give away that a world is a polygon.
+  const mesh = new Mesh(new CircleGeometry(radius, 128), material);
   mesh.renderOrder = order;
   return mesh;
 }
@@ -854,11 +997,8 @@ function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
     group.add(strokeLines(far, nextOrder()));
     group.add(fillDisc(radius, plan.colour, nextOrder()));
     const face = newStrokes();
-    rim(face, radius, 44, plan.colour, plan.light, 0.5);
-    for (let i = 0; i < plan.bands; i++) {
-      const latitude = (-0.55 + ((i + 0.5) / plan.bands) * 1.1) * (Math.PI / 2);
-      band(face, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
-    }
+    rim(face, radius, 220, plan.colour, plan.light, 0.0);
+    strata(face, radius, 3 + Math.floor(plan.bands / 2), plan.light, plan.colour, plan.tilt * 5);
     group.add(strokeLines(face, nextOrder()));
     group.add(strokeLines(near, nextOrder()));
     return group;
@@ -919,10 +1059,14 @@ function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
   }
 
   const strokes = newStrokes();
-  rim(strokes, radius, plan.kind === "gas-giant" ? 44 : 28, plan.colour, plan.light, 0.45);
-  for (let i = 0; i < plan.bands; i++) {
-    const latitude = (-0.55 + ((i + 0.5) / plan.bands) * 1.1) * (Math.PI / 2);
-    band(strokes, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
+  rim(strokes, radius, plan.kind === "gas-giant" ? 220 : 40, plan.colour, plan.light, 0.0);
+  if (plan.kind === "gas-giant") {
+    strata(strokes, radius, 4 + Math.floor(plan.bands / 2), plan.light, plan.colour, plan.tilt * 5);
+  } else {
+    for (let i = 0; i < plan.bands; i++) {
+      const latitude = (-0.55 + ((i + 0.5) / plan.bands) * 1.1) * (Math.PI / 2);
+      band(strokes, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
+    }
   }
   group.add(fillDisc(radius, plan.colour, nextOrder()));
   group.add(strokeLines(strokes, nextOrder()));
