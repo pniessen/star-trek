@@ -117,7 +117,8 @@ alternatives deliberately.
 
 ```
 src/render/   Stage (post chain), VectorObject (the two draw modes),
-              PhosphorPass, CrtPass, TraceBuffer, palette
+              PhosphorPass, CrtPass, TraceBuffer, palette, Backdrop (the
+              per-sector sky, derived from the campaign seed, camera-pinned)
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
 src/game/     Ship, altitude (the slab, its constants and its switch), session
               (rules), docking, death, hostiles, allies (the Warden), weapons,
@@ -247,11 +248,15 @@ sits at one fixed world position however the chart is drawn).
   design, and so is one with no audio device — the first failure retires the
   whole audio layer rather than raising in the frame loop.
 - `window.__probe`, `__session`, `__player`, `__fleet`, `__stage`,
-  `__presentation`, `__sound`, `__loom` are exposed on localhost only, for
-  headless inspection. **`__loom.seed()` opens a Loom on demand** — it appears
-  at a wave break with a one-in-ten chance from escalation index four, so
-  waiting for one is not a way to tune one; it deliberately has no key, because
-  the control surface is full.
+  `__presentation`, `__sound`, `__loom`, `__sky` are exposed on localhost only,
+  for headless inspection. **`__loom.seed()` opens a Loom on demand** — it
+  appears at a wave break with a one-in-ten chance from escalation index four,
+  so waiting for one is not a way to tune one. **`__sky.next()` walks the
+  backdrop from sector to sector** without playing a war, which is the only
+  practical way to review what the generator makes. Neither has a key, for the
+  same reason: the control surface is full, and a binding spent on something
+  that appears once in fourteen waves — or that you only look at — is a binding
+  spent on nothing.
   `__probe.state` is still only `clear`/`fighting`/`dead`; the title and attract
   screens are `__probe.mode`, which is the shell around a run, not a combat
   phase. **A headless run must launch itself** — the page now lands on the

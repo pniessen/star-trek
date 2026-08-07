@@ -2,6 +2,7 @@ import { MathUtils, Vector3 } from "three";
 import { Stage } from "./render/Stage.js";
 import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
+import { Backdrop, backdrop } from "./render/Backdrop.js";
 import { PALETTE } from "./render/palette.js";
 import {
   buildBastion,
@@ -55,7 +56,11 @@ try {
 const grid = createGrid();
 const trace = new TraceBuffer();
 const starfield = createStarfield();
-stage.scene.add(grid.object, starfield.object, trace.object);
+// The sky of whichever sector the run is in. Added once and then only ever
+// rebuilt in place; it draws between the starfield and the grid and is pinned
+// to the camera's position every frame. See `render/Backdrop.ts`.
+const sky = new Backdrop();
+stage.scene.add(grid.object, starfield.object, trace.object, sky.object);
 
 /**
  * How stretched the sky is, 0-1, eased rather than snapped.
@@ -796,6 +801,17 @@ function frame(now: number): void {
   else if (session.death.phase !== "none") placeWreckCamera(session.death, time);
   else placeCamera(settings.camera, time);
 
+  // The sector's sky. `show` is a key comparison on all but the two frames a
+  // war can change sector on — a run beginning and a jump arriving — and
+  // `follow` has to come after the camera has been placed or the sky trails it
+  // by a frame. It reads the player's own campaign even while the demonstration
+  // is flying the throwaway one, exactly as the HUD's chart already does:
+  // nothing here writes, so the locked "attract mode never touches the player's
+  // campaign" rule is untouched, and the cabinet showing the sky of the sector
+  // you would actually launch into is the better of the two readings anyway.
+  sky.show(campaign.seed, campaign.current);
+  sky.follow(stage.camera);
+
   drawHud(stage.hud, {
     player,
     session,
@@ -821,6 +837,7 @@ function frame(now: number): void {
   });
 
   if (DEBUG_PROBE) {
+    const skyReport = sky.describe();
     (window as unknown as Record<string, unknown>).__probe = {
       state: session.state,
       // The shell around the run — "title" / "attract" / "run". `state` still
@@ -916,6 +933,11 @@ function frame(now: number): void {
       patrols: campaign.sectors.filter((s) => s.patrol).length,
       ours: campaign.sectors.filter((s) => s.control === "ours").length,
       commandSelection,
+      // The sky, as one word and one number. Enough for a harness to prove the
+      // two things that actually matter about it: that the same sector always
+      // draws the same sky, and that a different one does not.
+      sky: skyReport?.composition ?? null,
+      skyBodies: skyReport?.bodies.length ?? 0,
     };
   }
 
@@ -977,6 +999,31 @@ if (DEBUG_PROBE) {
       model: session.loom,
       weave: encounters,
       constants: LOOM,
+    },
+    /**
+     * The sky, and a way to flip through many of them without playing a war.
+     *
+     * There is deliberately no key for this — the control surface is full, and
+     * a binding for something you only look at is a bad trade — so reviewing
+     * sixty-four generated skies is otherwise a matter of jumping sixty-four
+     * times. `pin` holds one up, `next`/`prev` walk the sectors, `unpin` hands
+     * the sky back to the campaign, and each returns what it built so the
+     * palette rule can be read off the console rather than guessed at.
+     *
+     *   __sky.pin(1, 0); __sky.next(); __sky.enabled = false; __sky.unpin();
+     */
+    __sky: {
+      get enabled(): boolean {
+        return backdrop.enabled;
+      },
+      set enabled(on: boolean) {
+        backdrop.enabled = on;
+      },
+      pin: (seed: number, sector: number) => sky.pin(seed, sector),
+      next: () => sky.cycle(1),
+      prev: () => sky.cycle(-1),
+      unpin: () => sky.unpin(),
+      describe: () => sky.describe(),
     },
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.
