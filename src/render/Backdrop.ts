@@ -1161,6 +1161,9 @@ function buildStarBand(plan: BandPlan, order: number): Points {
   return stars;
 }
 
+/** Name on the child group whose Y scale is the body's aspect. See `buildBody`. */
+const TILTED = "tilted";
+
 /** Clamp without importing MathUtils for one call. */
 function MathClamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -1268,16 +1271,43 @@ function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
     // an opaque near-void disc that eats the middle of it, then the planet's own
     // glowing rim and bands, then the near ring over the top. Three draw orders
     // and no sorting.
-    group.add(strokeLines(far, nextOrder()));
+    /**
+     * Everything whose shape depends on the viewing angle goes in one child, so
+     * one Y scale can open and close the whole body's aspect together.
+     *
+     * A ringed planet was the one body here that read as a decal: instantly
+     * recognisable and completely inert, because how far its rings are open —
+     * the thing that actually identifies it — was baked in at build time. What
+     * moves is not the planet, it is *us*, and the honest expression of that is
+     * the ring opening and closing.
+     *
+     * Only the ring and the latitude bands belong in here. The rim does not: a
+     * planet's silhouette is a circle from every angle, and squashing it would
+     * turn the world into an egg. The fill stays out for the same reason.
+     *
+     * Bands share the scale because they must. The comment on `ringed`'s tilt
+     * says it already — the bands bow the way the ring opens, or the body reads
+     * as two things photographed separately. Flattening the ring toward edge-on
+     * while the equator stayed bowed would be exactly that.
+     */
+    const tilted = new Group();
+    tilted.name = TILTED;
+
+    tilted.add(strokeLines(far, nextOrder()));
     group.add(fillDisc(radius, plan.colour, nextOrder()));
-    const face = newStrokes();
-    rim(face, radius, 72, plan.colour, plan.light, 0.0);
+
+    const bands = newStrokes();
     for (let i = 0; i < plan.bands; i++) {
       const latitude = (-0.55 + ((i + 0.5) / plan.bands) * 1.1) * (Math.PI / 2);
-      band(face, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
+      band(bands, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
     }
-    group.add(strokeLines(face, nextOrder()));
-    group.add(strokeLines(near, nextOrder()));
+    tilted.add(strokeLines(bands, nextOrder()));
+    tilted.add(strokeLines(near, nextOrder()));
+
+    const silhouette = newStrokes();
+    rim(silhouette, radius, 72, plan.colour, plan.light, 0.0);
+    group.add(strokeLines(silhouette, nextOrder()));
+    group.add(tilted);
     return group;
   }
 
@@ -1354,6 +1384,13 @@ export class Backdrop {
   private pinned: { seed: number; sector: number } | null = null;
   /** Radians wheeled about the galactic pole since this sky was built. */
   private drift = 0;
+  /** Seconds since this sky was built. Drives the aspect and the breath. */
+  private elapsed = 0;
+  /**
+   * Bodies whose aspect is animated — in practice the ringed ones, which are the
+   * only bodies whose identity is a 3D relationship rather than a shape.
+   */
+  private tilting: Array<{ group: Group; tilted: Object3D; rate: number; phase: number; breath: number }> = [];
   /** 0 at rest, 1 at the top of a hyperwarp charge. Set by `warp`. */
   private warpIntensity = 0;
   private readonly axis = new Vector3(0, 1, 0);
@@ -1374,6 +1411,7 @@ export class Backdrop {
     const key = backdrop.enabled ? `${seed}:${sector}` : "";
     if (key === this.key) return;
     this.clear();
+    this.tilting = [];
     this.key = key;
     if (!key) return;
 
@@ -1385,8 +1423,25 @@ export class Backdrop {
     // then the nebula, then the bodies.
     this.object.add(buildStarBand(this.plan.band, nextOrder()));
     if (this.plan.nebula) this.object.add(buildNebula(this.plan.nebula, nextOrder()));
-    for (const body of this.plan.bodies) this.object.add(buildBody(body, nextOrder));
+    for (const body of this.plan.bodies) {
+      const group = buildBody(body, nextOrder);
+      this.object.add(group);
+      const tilted = group.getObjectByName(TILTED);
+      if (tilted) {
+        // Rates come off the plan rather than a clock or a fresh random, so the
+        // same sector always breathes at the same speed — the sky is still a
+        // fact about the sector, it is just a moving one now.
+        this.tilting.push({
+          group,
+          tilted,
+          rate: TAU / (52 + ((body.size * 7) % 1) * 46),
+          phase: body.azimuth * DEG,
+          breath: 0.1 + ((body.elevation * 3) % 1) * 0.12,
+        });
+      }
+    }
     this.drift = 0;
+    this.elapsed = 0;
     this.object.quaternion.identity();
   }
 
@@ -1427,6 +1482,26 @@ export class Backdrop {
     this.axis.copy(this.plan.band.pole);
     this.drift += (SKY.driftRate * DEG) * (1 + this.warpIntensity * SKY.warpSpin) * dt;
     this.object.quaternion.setFromAxisAngle(this.axis, this.drift);
+
+    this.elapsed += dt * (1 + this.warpIntensity * 8);
+    for (const t of this.tilting) {
+      const a = t.phase + this.elapsed * t.rate;
+      /**
+       * The aspect, and the floor on it is load-bearing rather than taste.
+       *
+       * This scales toward edge-on but never through it. The far and near halves
+       * of the ring were assigned their draw order when the body was built —
+       * which is the whole reason this sky needs no depth buffer — and passing
+       * through zero would swap which is which while the order stayed put,
+       * drawing the far arc over the planet it is meant to be behind. 0.16 is
+       * close enough to edge-on to read as a razor and far enough from it that
+       * the ordering can never invert.
+       */
+      t.tilted.scale.y = 0.16 + 0.84 * (0.5 + 0.5 * Math.sin(a));
+      // And the size, on a slower period than the aspect so the two never lock
+      // into one obvious rhythm.
+      t.group.scale.setScalar(1 + t.breath * Math.sin(a * 0.43 + 1.1));
+    }
   }
 
   /**
