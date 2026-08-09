@@ -135,6 +135,61 @@ export const ERAS: readonly EraSpec[] = [
   },
 ];
 
+/**
+ * One line of a hull's spec sheet.
+ *
+ * `percent` is always relative to the Constitution, which is what makes the
+ * block comparative rather than a list of facts: cycling ships changes the same
+ * eight numbers, so the shape of a hull is legible as a *pattern* of departures
+ * from the reference instead of prose you have to hold in your head.
+ */
+export interface Trait {
+  readonly label: string;
+  /** Percent of the baseline hull. 100 is the reference. */
+  readonly percent: number;
+  /** True when the departure helps the player. Drives the colour, not the sign. */
+  readonly favourable: boolean;
+}
+
+/**
+ * The eight numbers a hull can move, in a fixed order.
+ *
+ * Fixed on purpose, and shown even at 100%. A block that listed only what an era
+ * changed would put different rows in different places for each ship, which is
+ * the one thing that makes two spec sheets hard to compare — and it would leave
+ * the baseline with nothing to say, when what the baseline has to say is exactly
+ * that every figure is at reference.
+ *
+ * `lowerIsBetter` is the whole reason this is derived rather than written by hand.
+ * Three of these are costs when they rise — the beam's draw, the hull's exposure,
+ * the damage that reaches it — so the arithmetic sign and the colour disagree, and
+ * a hand-written table would eventually get one of them backwards. Deriving both
+ * from the same source means the panel cannot contradict the flight model.
+ */
+const TRAIT_FIELDS: readonly { key: keyof EraMods; label: string; lowerIsBetter?: boolean }[] = [
+  { key: "shieldCapacity", label: "SHIELDS" },
+  { key: "hullArmour", label: "DAMAGE TAKEN", lowerIsBetter: true },
+  { key: "energyReserve", label: "RESERVE" },
+  { key: "reserveRegen", label: "RECHARGE" },
+  { key: "turnRate", label: "HELM" },
+  { key: "acceleration", label: "IMPULSE" },
+  { key: "phaserCost", label: "BEAM DRAW", lowerIsBetter: true },
+  { key: "hullRadius", label: "TARGET PROFILE", lowerIsBetter: true },
+];
+
+/** A hull's spec sheet, every figure as a percentage of the baseline. */
+export function traitsOf(id: EraId): readonly Trait[] {
+  const mods = eraSpec(id).mods as Partial<Record<keyof EraMods, number>>;
+  return TRAIT_FIELDS.map(({ key, label, lowerIsBetter }) => {
+    const value = mods[key] ?? 1;
+    return {
+      label,
+      percent: Math.round(value * 100),
+      favourable: lowerIsBetter ? value < 1 : value > 1,
+    };
+  });
+}
+
 export function eraSpec(id: EraId): EraSpec {
   return ERAS.find((spec) => spec.id === id) ?? ERAS[0];
 }

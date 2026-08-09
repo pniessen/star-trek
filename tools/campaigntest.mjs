@@ -830,7 +830,7 @@ check("the drop point is offered at every sector, held or not",
   "64 sectors");
 
 // ── the eras are tradeoffs, not tiers ───────────────────────────────────────
-const { ERAS, eraSpec, DEFAULT_ERA } = await import("../.campaign-build/chart/eras.js");
+const { ERAS, eraSpec, DEFAULT_ERA, traitsOf } = await import("../.campaign-build/chart/eras.js");
 
 check("four eras exist and are described",
   ERAS.length === 4 && ERAS.every((e) => e.label && e.era && e.gain && e.price),
@@ -880,6 +880,29 @@ check("era and refits multiply together",
   `${loadoutOf(["capacitor-bank"], "galaxy").energyReserve}`);
 
 // An unknown or absent era must not throw and must not silently modify the ship.
+// The spec sheet the title draws. Derived from `mods` rather than written out,
+// so the panel cannot contradict the flight model — and asserted here because the
+// one thing that *could* silently invert is the polarity: three of these figures
+// are costs when they rise, so the arithmetic sign and the colour disagree, and a
+// panel that painted a 135% target profile as good news would be worse than no
+// panel at all.
+check("every era reports the same eight figures",
+  ERAS.every((e) => traitsOf(e.id).length === 8),
+  ERAS.map((e) => traitsOf(e.id).length).join(","));
+
+check("the baseline reads as reference throughout",
+  traitsOf("constitution").every((t) => t.percent === 100 && !t.favourable),
+  traitsOf("constitution").map((t) => t.percent).join(","));
+
+const trait = (era, label) => traitsOf(era).find((t) => t.label === label);
+check("a bigger target reads as a cost",
+  trait("galaxy", "TARGET PROFILE").percent === 135 && !trait("galaxy", "TARGET PROFILE").favourable,
+  `${trait("galaxy", "TARGET PROFILE").percent}% favourable=${trait("galaxy", "TARGET PROFILE").favourable}`);
+
+check("a cheaper beam and a tougher skin read as gains",
+  trait("defiant", "BEAM DRAW").favourable && trait("nx", "DAMAGE TAKEN").favourable,
+  `beam ${trait("defiant", "BEAM DRAW").percent}%  damage ${trait("nx", "DAMAGE TAKEN").percent}%`);
+
 check("an unrecorded era flies the baseline",
   loadoutOf([]).energyReserve === 1 && eraSpec(undefined).id === "constitution",
   "undefined -> constitution");

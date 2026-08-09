@@ -15,7 +15,7 @@ import { HYPERWARP } from "../game/hyperwarp.js";
 import { jumpCharge, jumpEnergy, jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode } from "../chart/naming.js";
 import { canDock, type Campaign } from "../chart/campaign.js";
-import { DEFAULT_ERA, eraSpec } from "../chart/eras.js";
+import { DEFAULT_ERA, eraSpec, traitsOf } from "../chart/eras.js";
 
 export interface HudView {
   readonly player: Ship;
@@ -305,10 +305,42 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
    * because "NO SPECIALISATION" is a real thing to know about a hull and an
    * empty row would read as missing text.
    */
-  const hull = eraSpec(view.campaign.era ?? DEFAULT_ERA);
-  centred(hud, `${hull.label}   ${hull.era}`, cx, 548, 2.5, PALETTE.trace);
-  centred(hud, hull.gain, cx, 522, 1.8, dim);
-  centred(hud, hull.price, cx, 500, 1.8, PALETTE.amber);
+  const era = view.campaign.era ?? DEFAULT_ERA;
+  const hull = eraSpec(era);
+  centred(hud, `${hull.label}   ${hull.era}`, cx, 558, 2.4, PALETTE.trace);
+
+  /**
+   * The spec sheet: eight figures, always the same eight, always as a percentage
+   * of the Constitution.
+   *
+   * Two columns of four rather than a list, for room — but the ordering is the
+   * point. Every hull puts the same figure in the same cell, so cycling ships
+   * changes numbers in place and a hull becomes legible as a *pattern* of
+   * departures rather than a paragraph. Figures at 100 are drawn dim rather than
+   * omitted: a blank would move every row below it and destroy the comparison,
+   * and "at reference" is itself worth knowing.
+   *
+   * Colour carries the polarity, which is why it cannot be inferred from the
+   * sign. Three of these are costs when they rise — damage taken, beam draw,
+   * target profile — so 82% is good news for one row and bad news for another.
+   * `traitsOf` decides; this only paints what it is told.
+   */
+  const traits = traitsOf(era);
+  const half = Math.ceil(traits.length / 2);
+  traits.forEach((trait, index) => {
+    const column = index < half ? 0 : 1;
+    const row = index % half;
+    const x = cx + (column === 0 ? -34 : 176);
+    const y = 530 - row * 20;
+    hud.textRight(trait.label, x, y, 1.5, PALETTE.traceDim);
+    hud.text(
+      `${trait.percent}%`,
+      x + 8,
+      y,
+      1.5,
+      trait.percent === 100 ? PALETTE.traceDim : trait.favourable ? dim : PALETTE.amber,
+    );
+  });
 
   // The controls as a readout, not as a legend: dim label, bright value, the
   // same two columns the diagnostics block uses.
