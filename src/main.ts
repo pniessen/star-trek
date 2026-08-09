@@ -14,8 +14,10 @@ import {
   buildSpinner,
   buildStarbase,
   buildWarden,
+  buildPlayerHull,
 } from "./geometry/hulls.js";
 import { createGrid, createStarfield } from "./scene/environment.js";
+import { DEFAULT_ERA, ERAS, eraSpec } from "./chart/eras.js";
 import { Ship } from "./game/Ship.js";
 import { ALTITUDE, flight } from "./game/altitude.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
@@ -83,7 +85,10 @@ const HULLS = {
 };
 
 const player = new Ship();
-const playerHull = new VectorObject(HULLS.cruiser, {
+// Built at the baseline and corrected once the campaign has loaded, because the
+// campaign is read below this line and the hull has to exist before `Session` is
+// constructed with it. See the `swapPlayerHull()` call after that.
+let playerHull = new VectorObject(buildPlayerHull(DEFAULT_ERA), {
   color: PALETTE.trace,
   linewidth: 1.8,
 }).addTo(stage.scene);
@@ -146,6 +151,12 @@ const campaign = load(window.localStorage, Date.now());
 const persist = (state: Campaign): void => save(state, window.localStorage);
 
 const session = new Session(fleet, wing, loom, STARBASE_POSITION, playerHull, campaign);
+
+// A saved war may be flying something other than the baseline. The hull above is
+// built before the campaign is read — `Session` needs one to exist — so this is
+// where a loaded era is honoured. No-op for a new campaign.
+if ((campaign.era ?? DEFAULT_ERA) !== DEFAULT_ERA) swapPlayerHull();
+
 const presentation = new Presentation(
   session,
   player,
@@ -219,7 +230,7 @@ const pressed = new Set<string>();
  * cabinet convention — but you should still be able to turn the CRT glass off
  * while admiring the title screen.
  */
-const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "l", "m", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "l", "m", "n", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
 
 /**
  * The command view's keys that only move a highlight — the two idioms of
@@ -280,6 +291,29 @@ function handleCommandKey(key: string): void {
     // closed mid-chart should have kept whatever was already bought.
     persist(campaign);
   }
+}
+
+/**
+ * Rebuild the player's hull for the campaign's era.
+ *
+ * The geometry is baked at construction — `VectorObject` builds its edge list
+ * from the merged mesh — so changing ship means a new object rather than a new
+ * attribute. Disposed and replaced rather than kept around: four hulls held in
+ * memory to save an allocation on a keypress nobody makes twice a minute is the
+ * wrong trade, and `Session` holds the reference it was given, so it is told.
+ */
+function swapPlayerHull(): void {
+  const previous = playerHull;
+  playerHull = new VectorObject(buildPlayerHull(campaign.era ?? DEFAULT_ERA), {
+    color: PALETTE.trace,
+    linewidth: 1.8,
+  });
+  playerHull.setMode(settings.shape);
+  playerHull.group.rotation.order = "YXZ";
+  stage.scene.remove(previous.group);
+  stage.scene.add(playerHull.group);
+  session.setPlayerHull(playerHull);
+  previous.dispose();
 }
 
 /** Applied to every VectorObject in the scene, including ones spawned later. */
@@ -347,6 +381,28 @@ window.addEventListener("keydown", (event) => {
       // to play. Nobody has flown either, which is why it is a switch.
       flight.threeD = !flight.threeD;
       break;
+    case "n": {
+      /**
+       * Cycle the hull. In `DISPLAY_KEYS` so pressing it on the title changes
+       * the ship instead of launching a run — the trick `Y` and `L` already use.
+       *
+       * **Refused during a run**, which is the one guard this needs: an era is a
+       * set of stat multipliers as well as an outline, and swapping shields and
+       * reserve out from under a fight would be a cheat rather than a choice. It
+       * is picked between wars, which is also when it means something.
+       *
+       * Persisted, because it rides on the campaign — `kobayashi.campaign` is
+       * already the only thing this game writes to storage, so this needed no
+       * second decision about what persists.
+       */
+      if (presentation.mode === "run") break;
+      const order = ERAS.map((spec) => spec.id);
+      const at = order.indexOf(campaign.era ?? DEFAULT_ERA);
+      campaign.era = order[(at + 1) % order.length];
+      persist(campaign);
+      swapPlayerHull();
+      break;
+    }
     case "r":
       // Not while the log is up. `R` means "run again, now", and during the
       // opening log there is no run yet to repeat — so it falls through to the
@@ -888,6 +944,7 @@ function frame(now: number): void {
       altitude: +player.position.y.toFixed(2),
       climbing: player.climbing,
       diving: player.diving,
+      era: eraSpec(campaign.era ?? DEFAULT_ERA).label,
       hostileAltitude: +fleet.hostiles
         .reduce((highest, h) => Math.max(highest, h.position.y), 0)
         .toFixed(2),

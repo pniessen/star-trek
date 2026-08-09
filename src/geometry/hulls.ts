@@ -93,6 +93,151 @@ export function buildCruiser(): BufferGeometry {
   return mergeGeometries(parts, false)!;
 }
 
+
+/**
+ * NX Pathfinder — the oldest hull, and the one that barely has a neck.
+ *
+ * Its proportions are the read: a *small* saucer sitting almost directly on a
+ * stub of a secondary hull, with the nacelles carried high and wide on short
+ * struts rather than slung below and behind. Against the Constitution's long
+ * thin neck and deep engineering hull, the difference survives at two units on
+ * screen, which is the only test that matters here.
+ */
+function buildPathfinder(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  // Saucer: smaller and flatter than the Constitution's, and set further back —
+  // there is no neck to hold it out in front.
+  parts.push(placed(new CylinderGeometry(1.02, 0.9, 0.22, 12, 1), at(0, 0.04, 0.72)));
+  parts.push(placed(new CylinderGeometry(0.3, 0.62, 0.2, 12, 1), at(0, 0.24, 0.72)));
+
+  // Secondary hull: a stub directly under the saucer, not a hull on a stalk.
+  parts.push(placed(new CylinderGeometry(0.34, 0.28, 1.25, 8, 1), alongZ(0, -0.3, -0.2)));
+  parts.push(placed(new BoxGeometry(0.3, 0.4, 0.5), at(0, -0.16, 0.42)));
+
+  for (const side of [-1, 1]) {
+    // Nacelles high and wide — the feature that separates this from everything
+    // later, where they migrate down and back.
+    parts.push(placed(new CylinderGeometry(0.17, 0.17, 1.7, 8, 1), alongZ(side * 1.24, 0.5, -0.05)));
+    parts.push(placed(new CylinderGeometry(0.11, 0.17, 0.24, 8, 1), alongZ(side * 1.24, 0.5, 0.97)));
+    // Short strut, near level: they are held out, not swept.
+    parts.push(
+      placed(
+        new BoxGeometry(0.62, 0.11, 0.34),
+        at(side * 0.78, 0.36, 0.1).multiply(new Matrix4().makeRotationZ(side * -0.16)),
+      ),
+    );
+  }
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
+ * Galaxy Explorer — the big one, and the saucer is the whole silhouette.
+ *
+ * Everything is subordinate to the primary hull: it is wide, it is *oval* rather
+ * than round, and the secondary hull and nacelles tuck in close behind it
+ * instead of trailing. That is also why this era pays for its reserve and
+ * shields with `hullRadius` in `chart/eras.ts` — the ship is visibly the biggest
+ * thing the player flies, and the physics agrees with the picture.
+ */
+function buildExplorer(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  // Oval, not round: scaled 1.18 across and 0.9 fore-aft, which is what stops it
+  // reading as a Constitution saucer that someone enlarged.
+  const oval = new Matrix4().makeScale(1.18, 1, 0.9);
+  parts.push(placed(new CylinderGeometry(1.72, 1.5, 0.3, 16, 1), at(0, 0, 0.78).multiply(oval)));
+  parts.push(placed(new CylinderGeometry(0.62, 1.02, 0.3, 16, 1), at(0, 0.3, 0.86).multiply(oval)));
+
+  // Neck: short, thick and swept, connecting two large masses rather than
+  // holding a small one out front.
+  parts.push(
+    placed(
+      new BoxGeometry(0.42, 0.78, 0.6),
+      at(0, -0.34, -0.1).multiply(new Matrix4().makeRotationX(-0.3)),
+    ),
+  );
+
+  // Secondary hull, broad and short.
+  parts.push(placed(new CylinderGeometry(0.5, 0.42, 1.5, 12, 1), alongZ(0, -0.66, -0.95)));
+
+  for (const side of [-1, 1]) {
+    // Nacelles tucked in close and set low, swept back with the pylon.
+    parts.push(placed(new CylinderGeometry(0.21, 0.19, 1.9, 8, 1), alongZ(side * 1.0, -0.2, -1.1)));
+    parts.push(placed(new CylinderGeometry(0.13, 0.21, 0.26, 8, 1), alongZ(side * 1.0, -0.2, -0.08)));
+    parts.push(
+      placed(
+        new BoxGeometry(0.11, 0.9, 0.5),
+        at(side * 0.7, -0.44, -1.0).multiply(new Matrix4().makeRotationZ(side * -0.5)),
+      ),
+    );
+  }
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
+ * Defiant Escort — no saucer at all, which makes it the most distinct outline
+ * available.
+ *
+ * Every other hull the player can fly is a disc plus a body plus two separated
+ * nacelles. This one is a single flattened wedge with the drives buried in its
+ * flanks, so it reads instantly and from any angle — and it is small, which the
+ * hit sphere honours.
+ */
+function buildEscort(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+
+  // One body: a wedge, wide at the stern and pointed at the bow. Six sides so
+  // the crease lines run along it rather than around it.
+  parts.push(placed(new CylinderGeometry(0.94, 0.34, 2.4, 6, 1), alongZ(0, 0, 0.1)));
+  // A flattening pass on the whole thing is what makes it a wedge rather than a
+  // cone: 1.25 across, 0.5 tall.
+  parts.push(
+    placed(
+      new BoxGeometry(1.5, 0.34, 1.5),
+      at(0, -0.02, -0.15).multiply(new Matrix4().makeRotationY(0.78)),
+    ),
+  );
+  // Bridge: a low hump, the only thing above the deck line.
+  parts.push(placed(new CylinderGeometry(0.34, 0.44, 0.2, 8, 1), at(0, 0.24, 0.15)));
+  // Torpedo mouth at the bow.
+  parts.push(placed(new BoxGeometry(0.44, 0.16, 0.3), at(0, 0.0, 1.28)));
+
+  for (const side of [-1, 1]) {
+    // Drives *in* the flanks — no pylons anywhere, which is the silhouette.
+    parts.push(placed(new CylinderGeometry(0.24, 0.2, 1.7, 7, 1), alongZ(side * 0.74, -0.04, -0.2)));
+    parts.push(placed(new CylinderGeometry(0.14, 0.24, 0.22, 7, 1), alongZ(side * 0.74, -0.04, 0.74)));
+    // A stubby wing to widen the stern.
+    parts.push(
+      placed(
+        new BoxGeometry(0.7, 0.14, 0.8),
+        at(side * 0.92, -0.06, -0.5).multiply(new Matrix4().makeRotationZ(side * -0.1)),
+      ),
+    );
+  }
+
+  return mergeGeometries(parts, false)!;
+}
+
+/**
+ * The player's hull for an era. Keyed by the same ids as `chart/eras.ts`, which
+ * owns what each one does — this file only decides what they look like.
+ */
+export function buildPlayerHull(era: string): BufferGeometry {
+  switch (era) {
+    case "nx":
+      return buildPathfinder();
+    case "galaxy":
+      return buildExplorer();
+    case "defiant":
+      return buildEscort();
+    default:
+      return buildCruiser();
+  }
+}
+
 /**
  * Warden — the ally, and the only hull in the game that is neither you nor
  * something trying to kill you.

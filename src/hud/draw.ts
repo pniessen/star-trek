@@ -291,7 +291,8 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
   const rows: [string, string][] = [
     ["LAUNCH", "ANY KEY"],
     ["FLY", "ARROWS / WASD"],
-    ["CLIMB", "HOLD Q"],
+    ["CLIMB / DIVE", "HOLD Q / E"],
+    ["SHIP", "N"],
     ["PHASERS", "SPACE"],
     ["TORPEDOES", "X"],
     ["BANK SALVAGE", "FLY THE CORRIDOR"],
@@ -1222,7 +1223,7 @@ function drawDiagnostics(hud: Hud, view: HudView, width: number, height: number)
   hud.textRight(`${pad(view.fps, 3)} FPS`, width - 34, height - 48, 1.5, PALETTE.traceDim);
   hud.textRight("SPACE FIRE   X TORPEDO", width - 34, height - 68, 1.5, PALETTE.traceDim);
   hud.textRight(
-    flight.threeD ? "ARROWS / WASD  FLY   Q  CLIMB" : "ARROWS / WASD  FLY",
+    flight.threeD ? "ARROWS / WASD  FLY   Q / E  CLIMB / DIVE" : "ARROWS / WASD  FLY",
     width - 34,
     height - 86,
     1.5,

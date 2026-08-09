@@ -1,3 +1,4 @@
+import { type EraId } from "./eras.js";
 import { GRID, SECTOR_COUNT, indexOf, rowOf } from "./sectors.js";
 import { feedbackOn, RESERVE } from "./feedback.js";
 
@@ -63,6 +64,12 @@ export interface Campaign {
    */
   sectorsLost: number;
   refits: string[];
+  /**
+   * The hull this war is being fought in. Optional so every save written before
+   * eras existed still loads — `eraSpec` falls back to the baseline, which is
+   * exactly the ship those campaigns were flown in.
+   */
+  era?: EraId;
   sectors: Sector[];
   /** Index of the sector the next run drops into. */
   front: number;

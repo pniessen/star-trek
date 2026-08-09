@@ -305,7 +305,11 @@ export class Ship {
     this.shields[facing] -= absorbed / capacity;
     this.impact = 1;
 
-    const throughput = amount - absorbed;
+    // The era's skin. A hull multiplier below one is the NX's whole character:
+    // its facings are barely worth the name, so what gets past them has to hurt
+    // less or the ship is simply worse rather than different. Applied after the
+    // shields rather than before, so it is armour and not a second shield.
+    const throughput = (amount - absorbed) * this.loadout.hullArmour;
     if (throughput <= 0) return false;
 
     // Ablative plating spends itself on the first hit that would have reached
