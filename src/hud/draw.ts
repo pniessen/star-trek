@@ -540,14 +540,64 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     );
   };
 
-  // Starbase: the thing you are gambling against reaching.
+  /**
+   * Starbase: the thing you are gambling against reaching, and the one contact
+   * that must never be hard to find.
+   *
+   * It used to lose its cross the moment it clamped to the rim, and it was drawn
+   * in the dimmest colour on the tube unless you were already moored. So at
+   * exactly the moment a player needs it — out past scanner range with a fat
+   * multiplier and nowhere to bank it — it became a small dim ring among the
+   * other small dim rings, indistinguishable from an unresolved return. That is
+   * backwards: an unresolved contact is *supposed* to be ambiguous, and the bank
+   * is supposed to be the one certainty on the board.
+   *
+   * Three changes, none of them a new system.
+   *
+   *  - **The cross survives the clamp.** It is the station's glyph and it is what
+   *    separates it from a return that has not resolved. Smaller on the rim, but
+   *    there.
+   *  - **A course line.** A dim radial from the centre out to the mark, so the
+   *    bearing is readable without measuring an angle by eye. It is drawn under
+   *    everything else and dimmer than the sweep, so it reads as a rule on the
+   *    instrument rather than as traffic.
+   *  - **It brightens with distance.** Nearly invisible when the station is
+   *    comfortably inside the tube and clearest when it is pinned to the rim,
+   *    which is the inverse of how everything else on this display works and is
+   *    the entire point: the guide appears when it is needed and gets out of the
+   *    way when it is not.
+   *
+   * Deliberately not a refit. Knowing where your own bank is is legibility, not
+   * a power, and charging salvage for it would be a tax on the greed loop the
+   * whole game is built around.
+   */
   const base = project(starbase);
-  const baseMark: number[] = [];
-  arc(baseMark, base.x, base.y, base.clamped ? 4 : 6, 0, Math.PI * 2, 8);
-  if (!base.clamped) {
-    baseMark.push(base.x - 9, base.y, base.x + 9, base.y, base.x, base.y - 9, base.x, base.y + 9);
+  const baseRange = Math.hypot(starbase.x - player.position.x, starbase.z - player.position.z);
+  // 0 while the station is well inside the tube, 1 once it is off the edge.
+  const lost = MathUtils.clamp(baseRange / SCANNER.range, 0, 1) ** 1.6;
+
+  if (lost > 0.02) {
+    const dx = base.x - cx;
+    const dy = base.y - cy;
+    const length = Math.hypot(dx, dy) || 1;
+    // Stops short of the mark so the line never appears to pass through it.
+    const to = Math.max(0, length - 11) / length;
+    scratch.copy(PALETTE.traceDim).multiplyScalar(0.22 + 0.5 * lost);
+    hud.segments([cx + dx * 0.3, cy + dy * 0.3, cx + dx * to, cy + dy * to], scratch);
   }
-  hud.segments(baseMark, session.docked ? PALETTE.trace : PALETTE.traceDim);
+
+  const baseMark: number[] = [];
+  const baseSize = base.clamped ? 4.5 : 6;
+  arc(baseMark, base.x, base.y, baseSize, 0, Math.PI * 2, 8);
+  // The cross, at both scales. Shorter arms on the rim so the mark stays compact
+  // where the tube is already crowded, but never absent.
+  const arm = base.clamped ? 7 : 9;
+  baseMark.push(
+    base.x - arm, base.y, base.x + arm, base.y,
+    base.x, base.y - arm, base.x, base.y + arm,
+  );
+  scratch.copy(PALETTE.trace).multiplyScalar(session.docked ? 1 : 0.42 + 0.5 * lost);
+  hud.segments(baseMark, scratch);
 
   // Mines: small violet diamonds, the same glyph as the Harrow that laid them
   // at a third the size. They never move, so there is nothing to be uncertain
@@ -745,6 +795,31 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
 
   hud.text("SCANNER", cx - radius, cy + radius + 16, 1.5, PALETTE.traceDim);
   hud.textRight(`${pad(SCANNER.range, 3)} KM`, cx + radius, cy + radius + 16, 1.5, PALETTE.traceDim);
+
+  /**
+   * The bank's range, above the tube beside its own range figure, and only once
+   * it is worth saying. (Above: this HUD's y grows upward, so `+ radius` is away
+   * from the centre and up the screen. Pairing the station's distance with the
+   * scanner's own reach is the useful adjacency anyway — one is how far you can
+   * see, the other how far you have to go.)
+   *
+   * Held back while the station is close because a figure that is always there
+   * stops being read, and this one exists for the case where the mark has clamped
+   * to the rim and the line alone cannot tell you whether that is eighty units
+   * away or four hundred. Named rather than labelled "BASE": the sector's station
+   * has a name, `chart/naming.ts` went to some trouble to give it one, and the
+   * docking sequence already uses it.
+   */
+  if (!session.docked && baseRange > SCANNER.range * 0.55) {
+    scratch.copy(PALETTE.trace).multiplyScalar(0.3 + 0.45 * lost);
+    hud.textRight(
+      `${session.docking.stationName}  ${pad(Math.round(baseRange), 3)} KM`,
+      cx + radius,
+      cy + radius + 32,
+      1.4,
+      scratch,
+    );
+  }
 
   // An annunciator rather than a count: reporting how many cloaked hulls exist
   // would be telling you something the scanner cannot know. This only says that

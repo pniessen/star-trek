@@ -18,6 +18,7 @@ import {
   Vector3,
 } from "three";
 import { makeRng, type Rng } from "../chart/rng.js";
+import { ASTERISMS, brightnessOf } from "./constellations.js";
 
 /**
  * The sky a sector is fought under.
@@ -374,6 +375,17 @@ interface BandPlan {
   seed: number;
 }
 
+interface AsterismPlan {
+  /** Index into `ASTERISMS`. */
+  which: number;
+  azimuth: number;
+  elevation: number;
+  /** Radians the whole shape is turned in its own plane. */
+  roll: number;
+  /** Scales the catalogued separations. Slightly under or over life size. */
+  spread: number;
+}
+
 interface NebulaPlan {
   azimuth: number;
   elevation: number;
@@ -390,6 +402,7 @@ interface SkyPlan {
   bodies: BodyPlan[];
   band: BandPlan;
   nebula: NebulaPlan | null;
+  asterisms: AsterismPlan[];
 }
 
 /**
@@ -657,7 +670,35 @@ function planSky(seed: number, sector: number): SkyPlan {
         }
       : null;
 
-  return { composition, bodies, band, nebula };
+  /**
+   * One or two of Earth's asterisms, hidden in the field. See
+   * `constellations.ts` for why they are unjoined and why the geometry is real.
+   *
+   * Placed inside `SKY`'s own elevation band, and the first attempt was not — it
+   * put them between twelve and thirty-four degrees on the reasoning that high is
+   * where the sky is emptiest. Most of them were then invisible. **You cannot look
+   * up in this game**: the cameras pitch about nine degrees down against a
+   * thirty-one degree half-frame, so the sky runs out somewhere near twenty
+   * degrees of elevation, which is precisely the number `SKY.maxElevation` already
+   * records and the reason it is 20 rather than 38. Third feature this has caught,
+   * after the backdrop's own bodies and a decal nobody could have seen.
+   *
+   * So: inside the band, and off its floor, where a body would go. Low enough to
+   * be looked at, high enough to clear the grid's horizon and the contact labels.
+   */
+  const asterismCount = rng.next() < 0.55 ? 1 : rng.next() < 0.75 ? 2 : 0;
+  const asterisms: AsterismPlan[] = [];
+  for (let i = 0; i < asterismCount; i++) {
+    asterisms.push({
+      which: Math.floor(rng.next() * ASTERISMS.length),
+      azimuth: range(rng, 0, 360),
+      elevation: range(rng, SKY.minElevation + 2, SKY.maxElevation - 1),
+      roll: range(rng, 0, TAU),
+      spread: range(rng, 0.85, 1.25),
+    });
+  }
+
+  return { composition, bodies, band, nebula, asterisms };
 }
 
 function clampElevation(elevation: number): number {
@@ -1164,6 +1205,72 @@ function buildStarBand(plan: BandPlan, order: number): Points {
 /** Name on the child group whose Y scale is the body's aspect. See `buildBody`. */
 const TILTED = "tilted";
 
+
+/**
+ * An asterism, as points in the field rather than as a diagram.
+ *
+ * The offsets are angular separations in the shape's own tangent plane, so they
+ * are turned into directions through a basis built at the placement — right and
+ * up at that bearing — and then normalised. Small-angle territory: the widest
+ * star here is twenty-four degrees out, where treating the plane as flat costs
+ * less than a pixel, and paying for exact spherical placement would buy nothing
+ * anybody could see.
+ *
+ * `roll` turns the shape in that plane before projection, which is what stops the
+ * Plough always lying the same way up and is the reason a familiar shape reads as
+ * a discovery rather than as wallpaper.
+ */
+function buildAsterism(plan: AsterismPlan, order: number): Points {
+  const shape = ASTERISMS[plan.which];
+  const points: number[] = [];
+  const colours: number[] = [];
+  const tint = new Color();
+
+  const centre = direction(plan.azimuth, plan.elevation, new Vector3());
+  const right = new Vector3(0, 1, 0).cross(centre).normalize();
+  const up = new Vector3().copy(centre).cross(right).normalize();
+  const at = new Vector3();
+
+  const cos = Math.cos(plan.roll);
+  const sin = Math.sin(plan.roll);
+
+  for (const star of shape.stars) {
+    const dx = (star.dx * cos - star.dy * sin) * plan.spread * DEG;
+    const dy = (star.dx * sin + star.dy * cos) * plan.spread * DEG;
+    at.copy(centre)
+      .addScaledVector(right, Math.tan(dx))
+      .addScaledVector(up, Math.tan(dy))
+      .normalize()
+      .multiplyScalar(SKY.radius);
+    points.push(at.x, at.y, at.z);
+
+    // Warm white, and the only thing separating one star from the next is how
+    // bright it is — which is the whole mechanism by which the shape is legible.
+    tint.setHSL(44 / 360, 0.05, brightnessOf(star.mag), SRGBColorSpace);
+    colours.push(tint.r, tint.g, tint.b);
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
+  geometry.setAttribute("color", new BufferAttribute(new Float32Array(colours), 3));
+  const stars = new Points(
+    geometry,
+    new PointsMaterial({
+      // A shade larger than the field's 1.7, which is the other half of "brighter
+      // than its neighbours" and is how a named star has always been drawn.
+      size: 2.3,
+      sizeAttenuation: false,
+      vertexColors: true,
+      blending: AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  stars.renderOrder = order;
+  return stars;
+}
+
 /** Clamp without importing MathUtils for one call. */
 function MathClamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -1423,6 +1530,9 @@ export class Backdrop {
     // then the nebula, then the bodies.
     this.object.add(buildStarBand(this.plan.band, nextOrder()));
     if (this.plan.nebula) this.object.add(buildNebula(this.plan.nebula, nextOrder()));
+    // After the field so a named star is never dimmed by a plain one drawn over
+    // it, and before the bodies, which are nearer than any star.
+    for (const shape of this.plan.asterisms) this.object.add(buildAsterism(shape, nextOrder()));
     for (const body of this.plan.bodies) {
       const group = buildBody(body, nextOrder);
       this.object.add(group);
