@@ -153,11 +153,6 @@ const persist = (state: Campaign): void => save(state, window.localStorage);
 
 const session = new Session(fleet, wing, loom, STARBASE_POSITION, playerHull, campaign);
 
-// A saved war may be flying something other than the baseline. The hull above is
-// built before the campaign is read — `Session` needs one to exist — so this is
-// where a loaded era is honoured. No-op for a new campaign.
-if ((campaign.era ?? DEFAULT_ERA) !== DEFAULT_ERA) swapPlayerHull();
-
 const presentation = new Presentation(
   session,
   player,
@@ -203,6 +198,26 @@ let commandMessage = "";
 
 const CAMERA_MODES = ["cockpit", "chase", "orbit"] as const;
 type CameraMode = (typeof CAMERA_MODES)[number];
+
+/**
+ * Honour a saved era, once everything `swapPlayerHull` touches actually exists.
+ *
+ * This used to sit immediately after `Session` was constructed, which looked like
+ * the right place — the hull has to exist before the session is handed one, so
+ * correcting it just after seemed natural. It threw. `swapPlayerHull` reads
+ * `settings`, declared below this line, and a `const` in its temporal dead zone
+ * is a `ReferenceError` rather than an `undefined`: module evaluation stopped, the
+ * screen stayed black, and no renderer fault was shown because the throw happened
+ * before anything was in place to catch it.
+ *
+ * It only fired for a save carrying a non-default era, which is why nothing
+ * caught it — every automated run starts from empty storage and takes the other
+ * branch. `tools/playtest.mjs` now seeds one into storage and reloads for exactly
+ * that reason.
+ */
+function adoptSavedEra(): void {
+  if ((campaign.era ?? DEFAULT_ERA) !== DEFAULT_ERA) swapPlayerHull();
+}
 
 const settings = {
   shape: "occluded" as ShapeMode,
@@ -316,6 +331,11 @@ function swapPlayerHull(): void {
   session.setPlayerHull(playerHull);
   previous.dispose();
 }
+
+// Everything `adoptSavedEra` needs exists by here: the campaign, the session, the
+// hull and `settings`. See its own comment for why the obvious earlier placement
+// was a black screen.
+adoptSavedEra();
 
 /** Applied to every VectorObject in the scene, including ones spawned later. */
 function applyShapeMode(): void {

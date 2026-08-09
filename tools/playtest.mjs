@@ -752,6 +752,41 @@ await page.keyboard.down(" ");
 await page.waitForTimeout(3000);
 await page.screenshot({ path: `${OUT}/hero-cockpit.png` });
 await page.keyboard.up(" ");
+
+// ── a saved era has to survive a reload ─────────────────────────────────────
+// The regression this exists for: honouring a saved era at boot was placed
+// before `settings` was initialised, so a campaign with a non-default hull threw
+// a ReferenceError out of module evaluation and the screen went black with no
+// renderer fault to show for it. Typecheck cannot see it — TypeScript does not
+// trace use-before-declaration through a call — and nothing else here caught it,
+// because every other assertion in this file starts from empty storage and takes
+// the other branch. So: pick a different ship, reload, and require the game to
+// come back up.
+// Written straight into storage rather than pressed in: `N` is refused during a
+// run, and by this point in the file a run is exactly what is on screen. What
+// matters is the *saved* state at the next boot, which is what this sets.
+const chosen = await page.evaluate(() => {
+  const raw = localStorage.getItem("kobayashi.campaign");
+  if (!raw) return null;
+  const saved = JSON.parse(raw);
+  saved.era = "defiant";
+  localStorage.setItem("kobayashi.campaign", JSON.stringify(saved));
+  return "DEFIANT ESCORT";
+});
+await page.reload({ waitUntil: "networkidle" });
+await page.waitForTimeout(2200);
+const rebooted = await page.evaluate(() => ({
+  alive: !!window.__probe,
+  era: window.__probe?.era ?? null,
+  fault: (() => { const f = document.getElementById("fault");
+    return f ? getComputedStyle(f).display !== "none" : null; })(),
+}));
+check(
+  "a saved hull still boots",
+  rebooted.alive && !rebooted.fault && rebooted.era === chosen,
+  `saved ${chosen} -> ${rebooted.era}${rebooted.fault ? " FAULT" : ""}`,
+);
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 await browser.close();
 process.exit(problems.length ? 1 : 0);
