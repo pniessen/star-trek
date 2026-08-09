@@ -15,6 +15,7 @@ import { HYPERWARP } from "../game/hyperwarp.js";
 import { jumpCharge, jumpEnergy, jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode } from "../chart/naming.js";
 import { canDock, type Campaign } from "../chart/campaign.js";
+import { DEFAULT_ERA, eraSpec } from "../chart/eras.js";
 
 export interface HudView {
   readonly player: Ship;
@@ -286,19 +287,46 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
   rule(hud, cx, 616, 210, PALETTE.traceDim);
   centred(hud, "NO-WIN SCENARIO   VECTOR COMBAT TRIALS", cx, 584, 1.9, PALETTE.traceDim);
 
+  /**
+   * The hull plate: what you are about to fly, and what it costs you.
+   *
+   * Placed *above* the ship rather than below it, in the band between the
+   * subtitle and the top of the hull, because the legend already owns everything
+   * under the ship and the camera is orbiting the thing this text describes —
+   * name and object want to be adjacent.
+   *
+   * Two lines and two colours, and the colours are the information. Cyan is ours
+   * and reads as the ship's own statement of capability; amber is the HUD's
+   * attention colour everywhere else in this game — the alert condition, the
+   * launch prompt — so the price line arrives already meaning "and here is the
+   * catch". Nothing new was introduced to say it.
+   *
+   * The baseline gets the same two lines as the others rather than a blank,
+   * because "NO SPECIALISATION" is a real thing to know about a hull and an
+   * empty row would read as missing text.
+   */
+  const hull = eraSpec(view.campaign.era ?? DEFAULT_ERA);
+  centred(hud, `${hull.label}   ${hull.era}`, cx, 548, 2.5, PALETTE.trace);
+  centred(hud, hull.gain, cx, 522, 1.8, dim);
+  centred(hud, hull.price, cx, 500, 1.8, PALETTE.amber);
+
   // The controls as a readout, not as a legend: dim label, bright value, the
   // same two columns the diagnostics block uses.
+  //
+  // Spacing came down from 26 to 24 and the block moved up when `SHIP` was
+  // added: at seven rows the old figures put the last one exactly on top of the
+  // launch prompt.
   const rows: [string, string][] = [
     ["LAUNCH", "ANY KEY"],
     ["FLY", "ARROWS / WASD"],
     ["CLIMB / DIVE", "HOLD Q / E"],
-    ["SHIP", "N"],
+    ["SHIP", "N  TO CYCLE"],
     ["PHASERS", "SPACE"],
     ["TORPEDOES", "X"],
     ["BANK SALVAGE", "FLY THE CORRIDOR"],
   ];
   rows.forEach(([label, value], index) => {
-    const y = 288 - index * 26;
+    const y = 296 - index * 24;
     hud.textRight(label, cx - 20, y, 1.7, PALETTE.traceDim);
     hud.text(value, cx + 20, y, 1.7, dim);
   });

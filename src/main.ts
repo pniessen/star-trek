@@ -20,6 +20,7 @@ import { createGrid, createStarfield } from "./scene/environment.js";
 import { DEFAULT_ERA, ERAS, eraSpec } from "./chart/eras.js";
 import { Ship } from "./game/Ship.js";
 import { ALTITUDE, flight } from "./game/altitude.js";
+import { drawBeacons } from "./game/beacons.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
 import { LOOM, Loom, encounters } from "./game/loom.js";
@@ -841,7 +842,8 @@ function frame(now: number): void {
       (presentation.mode !== "command" &&
         settings.camera !== "cockpit" &&
         !session.death.hidesHull));
-  starbase.group.rotation.y = time * 0.06;
+  const stationSpin = time * 0.06;
+  starbase.group.rotation.y = stationSpin;
 
   trace.begin();
   session.ordnance.draw(trace);
@@ -853,6 +855,16 @@ function frame(now: number): void {
   session.debris.draw(trace);
   session.death.draw(trace);
   session.docking.draw(trace, player);
+  // The station's approach lights. Given the hull's own rotation so they turn
+  // with the ring they sit on, and raised while the player is actually close
+  // enough to dock — which is what makes them a guide rather than a garnish.
+  drawBeacons(
+    trace,
+    STARBASE_POSITION,
+    time,
+    stationSpin,
+    MathUtils.clamp(1 - player.position.distanceTo(STARBASE_POSITION) / 90, 0, 1),
+  );
   trace.end();
 
   grid.follow(player.position.x, player.position.z);
