@@ -76,17 +76,19 @@ alternatives deliberately.
   or "under" would be a pure escape rather than a trade. Elite settles the
   scanner question — it put its plane in the middle of the tube and drew stalks
   both ways in 1984 — so the old claim that one-way stalks were "worth more than
-  symmetry" was citing the wrong half of its own source. Nothing ever goes below the
-  floor, so every scanner stalk points the same way. Climbing draws on the one
-  energy pool, and holding altitude keeps drawing on it. The ceiling is ~14
-  units against engagement ranges of 14–78, which is what keeps it an evasive
-  option rather than a 3D search problem — and what lets **the guns train in
-  elevation while the hull does not**, since there is no pitch input and never
-  will be. The hostiles get the slab too, at a per-class fraction, or altitude
-  would be a pure escape. All of it is behind `flight.threeD` in
-  `game/altitude.ts`, defaulting on; off, the game is exactly what it was.
+  symmetry" was citing the wrong half of its own source. **Leaving the plane
+  draws on the one energy pool in either direction, and holding off it keeps
+  drawing** — the drain was never gravity, it was the price of not being where
+  everything else is, so free down would be free evasion. The ceiling is ~14
+  units each way against engagement ranges of 14–78, which is what keeps it an
+  evasive option rather than a 3D search problem — and what lets **the guns train
+  in elevation while the hull does not**, since there is no pitch input and never
+  will be. All of it is behind `flight.threeD` in `game/altitude.ts`, defaulting
+  on; off, the game is exactly what it was.
   What is still true: the scanner is still trustworthy — now because of the
-  stalk — and the facings are still four and still a ring.
+  stalk — and the facings are still four and still a ring. **Automatic elevation
+  has now been flown and reads as the ship helping**, which is the answer that
+  lets a shallow slab work with no pitch input; do not revisit it.
 - **Occluded geometry, not pure wireframe.** Glowing edges over near-void opaque
   faces. Pure wireframe is unreadable the moment two ships overlap.
 - **One energy pool** feeds thrust, shields and weapons.
@@ -184,7 +186,8 @@ to an sRGB display and every dim trace is crushed to black.
 
 Built: the renderer, combat (five hostile classes, waves, shield facings,
 debris that is the ship's own edge segments), **a shallow third dimension —
-one key, a floor at `y = 0`, a ~14-unit ceiling, hostiles that use it too, and
+two keys, a rest plane at `y = 0`, ~14 units of ceiling each way, hostiles that
+use both halves, and
 Elite's stalks on the scanner** — a persistent minefield you can now fly over,
 the overhead scanner with sweep-painted unresolved returns, a full docking
 sequence — corridor, tractor capture, staged resupply, itemised tally,
