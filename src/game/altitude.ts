@@ -20,13 +20,41 @@
  * to the arrows. A second held axis has no fingers available. So there is no
  * second axis:
  *
- * **One key. Hold to rise, release to sink.** The plane is the *floor*, not the
- * middle. Rest is `y = 0`; holding `Q` climbs; letting go falls back. Descent is
- * not an input — it is what happens when you stop, which is the whole reason
- * this costs one binding instead of two. Nothing ever goes below the floor, so
- * a scanner stalk always points the same way, which is worth more than symmetry.
+ * **Two keys. Hold `Q` to rise, `E` to fall, release either to return.** The
+ * plane is a *rest position*, not a floor.
  *
- * Climbing draws on the one energy pool, exactly as thrust does. One pool is
+ * It was a floor, reached with one key, and the reasoning was that descent
+ * should not be an input — it is what happens when you stop asking, which is why
+ * it cost one binding instead of two. That held up for a while and then failed on
+ * a specific complaint: **the floor was the one thing you could be pinned
+ * against.** Caught between something above and the deck below, there was no
+ * downward answer, and "under" is a tactical verb no amount of extra ceiling can
+ * supply. A taller lid buys room; it does not buy passing beneath a Bastion.
+ *
+ * The thing that had to survive the change is the **free neutral**, and it is
+ * the whole reason this is worth a second binding rather than a worse design.
+ * Release everything and the ship returns to `y = 0` from either side, unpowered
+ * and uncommanded. That property is what made one key work, and a naive signed
+ * slab destroys it: put neutral in the middle of a range you can only leave *and*
+ * re-enter under power and holding level costs constant input, which plays worse
+ * than the floor it replaced. Springing back from both sides keeps it and spends
+ * only a key.
+ *
+ * The scanner survives too, and the argument that said it would not was citing
+ * the wrong half of its own source. This file used to claim one-way stalks as a
+ * benefit of the floor. But Elite — the 1984 authority the stalk idea comes from,
+ * and it is in `prior-art.md` — put its plane in the *middle* of the tube and
+ * drew stalks both ways. Direction is one extra bit and the eye takes it for
+ * free. The stalk is still measured off the plane rather than off the player,
+ * which is the part that was actually load-bearing.
+ *
+ * What did not change: the hostiles get the negative half at the same per-class
+ * fraction, for exactly the reason they got the slab at all — if only the player
+ * could go under, "under" would be a pure escape instead of a trade.
+ *
+ * Leaving the plane draws on the one energy pool, exactly as thrust does, and
+ * costs the same in either direction — the drain was never gravity, it was the
+ * price of not being where everything else is. Free down would be free evasion. One pool is
  * locked and this must never become a second resource: altitude competing with
  * shields and with the next phaser shot *is* the mechanic. A dry reserve cannot
  * hold you up at all — run out and you sink, straight back onto the minefield

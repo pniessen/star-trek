@@ -692,14 +692,23 @@ function frame(now: number): void {
     // the map does not make the ship sound like it is still burning.
     burn = Math.max(0, thrust);
 
-    // Altitude, on one key. `Q` because it is free, because it sits directly
-    // above `A` for a WASD flyer's little finger, and because an arrows flyer's
-    // left hand is already parked one row down on Z/X/C. Deliberately *not*
-    // remapped while the chart is up, exactly as the arrows are not: it is a
-    // flight control, and pulling the chart up over a minefield is precisely
-    // when you want to still be able to climb. The demo pilot never asks for
-    // it — see `Presentation.fly`.
+    // Altitude, on two keys now. `Q` and `E` flank `W`, which is the whole
+    // argument for the pair: a WASD flyer reaches both without moving a hand,
+    // and up-left / down-right is a mapping nobody has to be told. `Q` was
+    // already chosen for sitting above `A`, and `E` is the mirror of it.
+    //
+    // The second binding was spent to buy the verb "under" — see the header of
+    // `game/altitude.ts` for what a floor cost and what had to be preserved to
+    // replace it. Holding both cancels, which `Ship.updateAltitude` handles
+    // rather than this: the flight model should decide what conflicting input
+    // means, not the reader of the keyboard.
+    //
+    // Deliberately *not* remapped while the chart is up, exactly as the arrows
+    // are not: these are flight controls, and pulling the chart up over a
+    // minefield is precisely when you want to still be able to move. The demo
+    // pilot never asks for either — see `Presentation.fly`.
     const climb = demo ? false : held.has("q");
+    const dive = demo ? false : held.has("e");
 
     // Hyperwarp: holding Shift commits to a jump at the chart cursor, wherever
     // it was last pointed. Releasing early is a refund of nothing — Session
@@ -717,7 +726,7 @@ function frame(now: number): void {
     if (alive && !dock.controlsLocked) {
       const departing = dock.clearing ? Math.min(thrust, 0) : thrust;
       player.update(
-        { turn, thrust: dock.held ? 0 : departing, climb, held: dock.held },
+        { turn, thrust: dock.held ? 0 : departing, climb, dive, held: dock.held },
         gameDt,
       );
     }
@@ -878,6 +887,7 @@ function frame(now: number): void {
       // off nothing leaves the plane at all.
       altitude: +player.position.y.toFixed(2),
       climbing: player.climbing,
+      diving: player.diving,
       hostileAltitude: +fleet.hostiles
         .reduce((highest, h) => Math.max(highest, h.position.y), 0)
         .toFixed(2),

@@ -442,10 +442,14 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       px = (px / length) * radius;
       py = (py / length) * radius;
     }
-    // Height above the *floor*, not above the player. Nothing in the game ever
-    // goes below `y = 0`, so every stalk on the tube points the same way and a
-    // glance reads as a bar chart rather than as a set of signed offsets — which
-    // is worth more than the symmetry a player-relative measure would buy.
+    // Height off the *plane*, not off the player, and now signed — the ship can
+    // be under the plane as well as over it. This paragraph used to argue that
+    // one-way stalks were worth more than symmetry, and cited Elite for the
+    // stalk. Elite in fact put its plane in the middle of the tube and drew
+    // stalks both ways, which is the version that shipped in 1984 and read fine:
+    // direction is one more bit and the eye takes it for free. Still measured off
+    // the plane rather than off the player, which is the part that actually
+    // matters — a player-relative stalk moves every mark whenever *you* climb.
     // Own ship gets one too, at the centre, so "am I above that Raider" is a
     // comparison of two lengths sitting next to each other.
     //
@@ -785,11 +789,17 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number, view?: HudV
  */
 function drawAltitude(hud: Hud, player: Ship, x: number, cy: number): void {
   const half = 34;
-  const fraction = Math.max(0, Math.min(1, player.position.y / ALTITUDE.ceiling));
+  // Signed, and mapped so the rail's midpoint is the plane rather than half the
+  // climb. -1 is the underside of the slab, +1 the lid, 0 the deck everything
+  // else lives on.
+  const signed = Math.max(-1, Math.min(1, player.position.y / ALTITUDE.ceiling));
+  const fraction = (signed + 1) / 2;
   const falling = player.starved;
   const rail: number[] = [x, cy - half, x, cy + half];
-  // Floor, midpoint and ceiling. Three ticks, because the two that matter are
-  // "on the deck" and "at the lid" and a third stops the middle being a guess.
+  // Underside, plane and lid. The middle tick stopped being decoration when the
+  // slab went signed: it is the plane now, the one height the starbase, the
+  // mines and the corridor all sit at, so it is the tick a player actually aims
+  // for rather than a guide against guessing.
   for (const [t, len] of [[0, 7], [0.5, 4], [1, 7]] as const) {
     const y = cy - half + t * half * 2;
     rail.push(x, y, x + len, y);

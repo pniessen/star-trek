@@ -31,7 +31,8 @@ from the frame it appears, which any key skips and `L` switches off. The first
 run of a war teaches the rules with it; every run after that is the situation
 alone. It never plays for the demo.
 
-Controls: arrows/WASD fly, **`Q` held climbs and released sinks**, Space
+Controls: arrows/WASD fly, **`Q` held climbs and `E` held dives; release
+either and the ship returns to the plane**, Space
 phasers, X torpedoes, `C` cracks a warhead for its charge when the reserve is
 under half, `Z` pours the reserve into the thinnest facing, R restart. `G`
 toggles wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
@@ -61,10 +62,21 @@ alternatives deliberately.
   hit the same quarter a level one did. A cylinder was always the model.
   The old reasoning is kept because a decision that changed is worth more with
   its history attached.
-- **The play space is a shallow slab, floored at `y = 0`, reached with one
-  key.** This is what replaced it. `Q` held climbs, released sinks; descent is
-  not an input, which is the whole reason it costs one binding rather than two —
-  and there were no fingers for a second held axis. Nothing ever goes below the
+- **The play space is a shallow slab centred on `y = 0`, reached with two
+  keys.** This is what replaced it, and it has itself been revised once: it was
+  *floored* at `y = 0` and reached with one key, on the reasoning that descent
+  should not be an input because it is what happens when you stop asking.
+  That failed on a specific complaint — **the floor was the one thing you could
+  be pinned against**, and "under" is a tactical verb no amount of extra ceiling
+  supplies. `Q` climbs, `E` dives, and **releasing either returns the ship to the
+  plane for free**: that free neutral is what made one key work and it is the
+  only reason a second key is worth spending, because a signed slab you must
+  power back to the middle makes holding level cost constant input. Both keys at
+  once cancel. The hostiles get the negative half at the same per-class fraction,
+  or "under" would be a pure escape rather than a trade. Elite settles the
+  scanner question — it put its plane in the middle of the tube and drew stalks
+  both ways in 1984 — so the old claim that one-way stalks were "worth more than
+  symmetry" was citing the wrong half of its own source. Nothing ever goes below the
   floor, so every scanner stalk points the same way. Climbing draws on the one
   energy pool, and holding altitude keeps drawing on it. The ceiling is ~14
   units against engagement ranges of 14–78, which is what keeps it an evasive

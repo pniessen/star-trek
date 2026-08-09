@@ -352,10 +352,15 @@ export class Hostile {
   /**
    * A preferred altitude that varies slowly, and nothing cleverer.
    *
-   * `0.5 + 0.5 * sin` keeps the target inside `[0, slab * ceiling]` by
-   * construction, so nothing ever goes under the floor and no class ever leaves
-   * the shallow slab the player is flying in. The approach is exponential and
-   * `dt`-driven so the wander is the same speed on any machine.
+   * A plain `sin` keeps the target inside `[-slab * ceiling, +slab * ceiling]` by
+   * construction, so no class ever leaves the shallow slab the player is flying
+   * in. It used to be `0.5 + 0.5 * sin`, which pinned the range to the positive
+   * side because the plane was a floor. The plane is a rest position now, and
+   * **the hostiles get the negative half for the same reason they got the slab at
+   * all**: if only the player could go under, "under" would be a pure escape
+   * rather than a trade, which is exactly the failure the per-class fractions
+   * exist to prevent. The approach is exponential and `dt`-driven so the wander
+   * is the same speed on any machine.
    */
   private updateAltitude(dt: number): void {
     if (!flight.threeD) {
@@ -364,9 +369,7 @@ export class Hostile {
     }
     this.slabTime += dt;
     const target =
-      this.spec.slab *
-      ALTITUDE.ceiling *
-      (0.5 + 0.5 * Math.sin(this.slabPhase + this.slabTime * this.slabRate));
+      this.spec.slab * ALTITUDE.ceiling * Math.sin(this.slabPhase + this.slabTime * this.slabRate);
     this.position.y += (target - this.position.y) * (1 - Math.exp(-1.6 * dt));
   }
 
