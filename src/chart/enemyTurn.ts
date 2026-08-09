@@ -108,11 +108,34 @@ export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
   // and from the board as it stands after last turn's pushes landed, so ground
   // taken during the run is ground that does not pay for this turn's attack.
   if (feedbackOn("reserve")) {
+    /**
+     * Exhaustion is measured on *arrival*, before the resupply lands, and it has
+     * to be — measured after, it is unreachable arithmetic.
+     *
+     * The first version counted an empty reserve at the end of the turn, after
+     * regen and after the spend. That can never happen. Regen puts at least
+     * `regenFlat` in the pot before anything is spent, and `commit` caps a turn's
+     * spending at a fraction of what is held, so the closing balance has a hard
+     * floor of about half the resupply. The counter never incremented, `isWon`
+     * never fired, and every measured campaign under this term ran to the turn
+     * cap unresolved — the exact "removes the defeat, supplies no victory"
+     * failure the term was written to avoid, arrived at by an off-by-one-phase
+     * rather than by the design being wrong.
+     *
+     * The player's fighting *was* draining it to nothing all along, in
+     * `economy.ts` as ground is taken. What was missing is that the drain was
+     * only ever observed one instant after being refilled.
+     *
+     * Arrival is also the reading that means something. "The invasion began this
+     * turn with nothing left" is what broken looks like from the board; "it spent
+     * down to nothing and was immediately resupplied" is just a busy turn.
+     */
+    const arrived = reserveOf(campaign);
+    campaign.exhausted = arrived < 1 ? (campaign.exhausted ?? 0) + 1 : 0;
+
     campaign.reserve = Math.min(
       RESERVE.max,
-      reserveOf(campaign) +
-        RESERVE.regenFlat +
-        RESERVE.regenPerSector * countControl(campaign, "theirs"),
+      arrived + RESERVE.regenFlat + RESERVE.regenPerSector * countControl(campaign, "theirs"),
     );
   }
 
@@ -161,8 +184,10 @@ export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
   // invasion bank for one hard counter-attack instead of evaporating.
   if (feedbackOn("reserve")) {
     campaign.reserve = reserveOf(campaign) - (spendable - budget);
-    // Empty, and staying empty, is what being broken looks like from here.
-    campaign.exhausted = campaign.reserve < 1 ? (campaign.exhausted ?? 0) + 1 : 0;
+    // The exhaustion counter is *not* touched here. It is measured on arrival,
+    // at the top of this function, for the reason given there: a closing balance
+    // has a floor built into it by regen and `commit`, so counting it here can
+    // never see zero and the victory can never fire.
   }
 
   return actions;
