@@ -183,7 +183,7 @@ export class Ship {
     if (this.climbing || this.diving) {
       this.energy -= (ALTITUDE.drain * dt) / fit.energyReserve;
     }
-    let regen = Ship.RESERVE_REGEN * dt;
+    let regen = Ship.RESERVE_REGEN * fit.reserveRegen * dt;
 
     // Ablative plating's price: once something has actually reached the hull,
     // the facings stop coming back until a starbase repairs it.

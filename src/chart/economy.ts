@@ -84,7 +84,8 @@ export type RefitId =
   | "capacitor-bank"
   | "focusing-coils"
   | "ablative-plating"
-  | "impulse-tuning";
+  | "impulse-tuning"
+  | "dilithium-matrix";
 
 export interface RefitSpec {
   readonly id: RefitId;
@@ -138,6 +139,13 @@ export const REFITS: readonly RefitSpec[] = [
     price: "NO SHIELD REGEN WHEN HULLED",
   },
   {
+    id: "dilithium-matrix",
+    label: "DILITHIUM MATRIX",
+    cost: 1200,
+    gain: "+60% ENERGY RESERVE",
+    price: "-35% RESERVE REGEN",
+  },
+  {
     id: "impulse-tuning",
     label: "IMPULSE TUNING",
     cost: 450,
@@ -156,6 +164,8 @@ export function refitSpec(id: RefitId): RefitSpec {
  * that `Ship` and `Session` read numbers rather than re-deriving the table.
  */
 export interface Loadout {
+  /** Scales the trickle that refills the reserve. Below one is a bigger tank filling slower. */
+  reserveRegen: number;
   /** Scales what a full facing absorbs. Shields stay 0-1 so the gauge stays honest. */
   shieldCapacity: number;
   shieldRegen: number;
@@ -179,6 +189,7 @@ export const NO_REFITS: Loadout = {
   torpedoCapacity: 0,
   turnRate: 1,
   energyReserve: 1,
+  reserveRegen: 1,
   phaserRange: 1,
   phaserFlat: false,
   phaserCost: 1,
@@ -222,6 +233,21 @@ export function loadoutOf(refits: readonly string[]): Loadout {
       case "ablative-plating":
         loadout.ablative = true;
         loadout.regenStopsWhenHulled = true;
+        break;
+      /**
+       * The capacitor bank's bigger sibling, and its price is the honest one for
+       * a bigger store: it takes longer to fill.
+       *
+       * Every refit here is a tradeoff and not an upgrade, because a ship that
+       * simply got better would make early runs a tax for having started. So
+       * this is not "more energy" — it is *more energy at once, less energy over
+       * time*, which is a real choice against the bank rather than a strictly
+       * better version of it. Take the bank to keep your rhythm; take the matrix
+       * to buy one long engagement and accept the lull after it.
+       */
+      case "dilithium-matrix":
+        loadout.energyReserve *= 1.6;
+        loadout.reserveRegen *= 0.65;
         break;
       case "impulse-tuning":
         loadout.acceleration *= 1.2;

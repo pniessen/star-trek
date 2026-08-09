@@ -89,7 +89,16 @@ export const ALTITUDE = {
    * staying up costs more than going fast, and a full reserve buys about
    * eighteen seconds of it.
    */
-  drain: 0.055,
+  /**
+   * Lowered from 0.055 when the second key landed. The old figure was set
+   * against a mechanic you could only use in one direction, and the doc's "a
+   * full reserve buys about eighteen seconds upstairs" was computed with no
+   * thrust and no shooting. Adding dive roughly doubles how much of a run is
+   * spent off the plane, so the same number per second is close to twice the
+   * total cost — a rate chosen for the old mechanic quietly became a much
+   * steeper one for the new.
+   */
+  drain: 0.04,
 } as const;
 
 /**

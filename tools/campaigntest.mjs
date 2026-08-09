@@ -319,15 +319,15 @@ check("the price list is strategy-layer.md's",
   STRUCTURES.map((s) => s.cost).join() === "250,600,1600,2400" &&
   STRUCTURES.map((s) => s.runs).join() === "1,2,4,5",
   STRUCTURES.map((s) => `${s.cost}/${s.runs}`).join(" "));
-check("all six refits exist and are priced",
-  REFITS.length === 6 && REFITS.every((r) => r.cost > 0 && r.gain && r.price),
+check("all seven refits exist and are priced",
+  REFITS.length === 7 && REFITS.every((r) => r.cost > 0 && r.gain && r.price),
   `${REFITS.length} refits`);
 // Four decisions, one screen, no submenus: the list is flat and it is four
 // kinds. A nested option would show up here as a fifth kind or a missing one.
 check("there are exactly four kinds of decision",
   new Set(DECISIONS.map((d) => d.kind)).size === 4 &&
     DECISIONS.map((d) => d.kind).join(",") ===
-      "build,build,build,build,refit,refit,refit,refit,refit,refit,deploy,front",
+      "build,build,build,build,refit,refit,refit,refit,refit,refit,refit,deploy,front",
   DECISIONS.map((d) => d.kind).join(","));
 
 // ── construction takes runs, not salvage ────────────────────────────────────
@@ -410,7 +410,11 @@ const worse = REFITS.filter((spec) => {
   const fit = loadoutOf([spec.id]);
   return (
     fit.shieldCapacity < 1 || fit.shieldRegen < 1 || fit.turnRate < 1 ||
-    fit.phaserRange < 1 || fit.phaserCost > 1 || fit.regenStopsWhenHulled
+    fit.phaserRange < 1 || fit.phaserCost > 1 || fit.regenStopsWhenHulled ||
+    // The dilithium matrix's price. A bigger store that fills slower is the
+    // honest tradeoff for capacity, and this clause is what the comment above
+    // predicted would be needed the day a seventh refit landed.
+    fit.reserveRegen < 1
   );
 });
 check("every refit costs the ship something", worse.length === REFITS.length, `${worse.length} of ${REFITS.length}`);

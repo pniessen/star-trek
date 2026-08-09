@@ -19,7 +19,23 @@ import type { TraceBuffer } from "../render/TraceBuffer.js";
 
 export const PHASER = {
   /** Energy drawn per shot from the single reserve. */
-  cost: 0.022,
+  /**
+   * Energy per shot, and at a held 6.25 shots a second this is the largest
+   * drain in the game by a factor of four — 0.0875 a second against thrust's
+   * 0.035 and the slab's 0.055.
+   *
+   * It was 0.022, which emptied a full reserve in eight seconds of held fire and
+   * in under five while burning and off the plane. That is not a tradeoff
+   * against the torpedo, it is a weapon you cannot use. The first person to fly
+   * it said power went "very very quickly" and the arithmetic agrees: the
+   * complaint reads as an altitude or capacity problem and is neither, it is
+   * this number.
+   *
+   * 0.014 buys about thirteen seconds of continuous fire, which leaves the
+   * phaser expensive — it should still be the reason you learn to lead a
+   * torpedo — without making it unusable.
+   */
+  cost: 0.014,
   cooldown: 0.16,
   damage: 0.34,
   /** Full damage inside this range, tailing to zero at `falloffEnd`. */
