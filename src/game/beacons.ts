@@ -38,17 +38,30 @@ export const BEACON = {
   radius: 4.6,
   /** How many run around the ring. Four, to sit on the four spokes. */
   count: 4,
-  /** Half-length of a light, in world units. Short: this is a point, drawn as a stroke. */
-  size: 0.42,
+  /**
+   * Half-length of a light, in world units. Raised from 0.42 after test play —
+   * "barely noticeable" — because at a hundred and eighteen units the old figure
+   * was under a pixel of stroke, which is a light you have to already know about
+   * in order to see.
+   */
+  size: 1.15,
   /** Seconds for the sequence to travel once around the ring. */
   period: 2.2,
   /**
    * How sharply a light peaks as the sequence passes it. Higher is a shorter,
    * harder flash; at 1 it is a sine and the ring merely breathes.
+   *
+   * Softened from 7. A sharp exponent spends most of the cycle near the floor, so
+   * the lights were dark far more often than lit — the sequence was technically
+   * running and visually absent. Lower keeps each one *up* for longer, which is
+   * what makes a chase read as a chase rather than as an occasional twinkle.
    */
-  sharpness: 7,
-  /** The dim level a light rests at between flashes, so the ring is never dark. */
-  floor: 0.12,
+  sharpness: 3,
+  /**
+   * The level a light rests at between flashes. Raised from 0.12: the ring should
+   * read as lit even at the bottom of the cycle.
+   */
+  floor: 0.34,
   /** The two caps on the drum's axis, which pulse together and slower. */
   capHeight: 2.9,
   capPeriod: 3.7,
@@ -89,7 +102,10 @@ export function drawBeacons(
 
     const x = centre.x + Math.cos(angle) * BEACON.radius;
     const z = centre.z + Math.sin(angle) * BEACON.radius;
-    const intensity = lit * (0.7 + 0.5 * emphasis);
+    // 1.35 at rest rather than 0.7. These are lights on the one friendly
+    // structure in the sector; letting them bloom is correct, and the bloom is
+    // most of what makes them visible at range.
+    const intensity = lit * (1.35 + 0.6 * emphasis);
     // A vertical tick rather than a dot: a single segment has to have length to
     // exist at all, and upright is the one orientation that reads the same from
     // every bearing — which matters when the thing it marks is approached from
@@ -110,7 +126,7 @@ export function drawBeacons(
   // approach, so they deliberately do not join the sequence — two rhythms is how
   // the ring reads as "come in this way" and the drum as "and this is the thing".
   const capWave = 0.5 + 0.5 * Math.sin((time / BEACON.capPeriod) * Math.PI * 2);
-  const capLit = (0.08 + 0.92 * capWave ** 4) * (0.5 + 0.5 * emphasis);
+  const capLit = (0.22 + 0.9 * capWave ** 3) * (1.1 + 0.5 * emphasis);
   for (const side of [-1, 1]) {
     const y = centre.y + side * BEACON.capHeight;
     trace.push(

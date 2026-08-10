@@ -104,9 +104,33 @@ export class Ship {
   private static readonly MAX_SPEED = 62;
 
   /** Energy per second at full burn. */
-  private static readonly THRUST_DRAIN = 0.035;
+  /**
+   * Halved-ish, twice, and this is the second pass.
+   *
+   * Test play: docking was happening for *fuel* rather than to bank, which is
+   * backwards — the corridor exists to realise a multiplier, and a station you
+   * visit because the tank is empty turns the greed loop's one deliberate
+   * decision into an errand. Every drain came down together and the trickle came
+   * up, so the reserve lasts roughly twice as long as it did.
+   */
+  private static readonly THRUST_DRAIN = 0.024;
   private static readonly SHIELD_REGEN = 0.06;
-  private static readonly RESERVE_REGEN = 0.012;
+  /**
+   * The trickle, and it is the floor every other cost is measured against — which
+   * is the mistake worth recording here rather than in a commit nobody re-reads.
+   *
+   * Doubling the ship's endurance by *raising this* looked equivalent to halving
+   * the drains and is not. At 0.022 it had climbed above the thrust drain and to
+   * within a whisker of the slab's, so cruising paid for itself and holding
+   * altitude was free — the one-pool economy, which is a locked decision, quietly
+   * stopped existing. `playtest` caught it on the one assertion that only asks
+   * whether the reserve falls while the climb key is held.
+   *
+   * Endurance belongs in the drains. This moves a little, because a slightly
+   * faster refill is part of not having to dock, but it stays well under every
+   * cost it is competing with.
+   */
+  private static readonly RESERVE_REGEN = 0.016;
   /** Reserve at or below which the drive falls back to impulse. */
   private static readonly IMPULSE_FLOOR = 0.02;
   /** Fraction of full thrust available with nothing in the reserve. */

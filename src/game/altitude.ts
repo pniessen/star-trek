@@ -98,7 +98,7 @@ export const ALTITUDE = {
    * total cost — a rate chosen for the old mechanic quietly became a much
    * steeper one for the new.
    */
-  drain: 0.04,
+  drain: 0.038,
 } as const;
 
 /**

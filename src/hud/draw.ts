@@ -278,36 +278,29 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
 
   hud.brackets(18, 18, width - 36, height - 36, 22, PALETTE.traceDim);
 
-  // The ship itself owns the middle of the frame — the camera is orbiting it —
-  // so the panel is composed around that band rather than over it.
-  // The title block sits above the grid's horizon and the legend below the
-  // ship, so the two dense bands of the scene — the plane and the hull — each
-  // land in a gap rather than under type.
-  centred(hud, "KOBAYASHI", cx, 640, 9, PALETTE.trace);
-  rule(hud, cx, 616, 210, PALETTE.traceDim);
-  centred(hud, "NO-WIN SCENARIO   VECTOR COMBAT TRIALS", cx, 584, 1.9, PALETTE.traceDim);
-
   /**
-   * The hull plate: what you are about to fly, and what it costs you.
+   * Composed around the hull, not above it.
    *
-   * Placed *above* the ship rather than below it, in the band between the
-   * subtitle and the top of the hull, because the legend already owns everything
-   * under the ship and the camera is orbiting the thing this text describes —
-   * name and object want to be adjacent.
+   * Test play: the ship and its figures "get lost on the page". Two causes, and
+   * the layout could only fix one — the camera sat 21 units out, which makes a
+   * thumbnail of anything, and that is fixed in `placeTitleCamera`. The other was
+   * here: the game's own name held the largest type on the screen whose job is
+   * choosing what you fly. So the title shrinks and moves up, and **the hull's
+   * name is now the biggest thing on the page**. The game is called Kobayashi on
+   * every other frame; this screen has one subject and it is the ship.
    *
-   * Two lines and two colours, and the colours are the information. Cyan is ours
-   * and reads as the ship's own statement of capability; amber is the HUD's
-   * attention colour everywhere else in this game — the alert condition, the
-   * launch prompt — so the price line arrives already meaning "and here is the
-   * catch". Nothing new was introduced to say it.
-   *
-   * The baseline gets the same two lines as the others rather than a blank,
-   * because "NO SPECIALISATION" is a real thing to know about a hull and an
-   * empty row would read as missing text.
+   * Everything that is not the hull is pushed to the margins — identity above,
+   * bindings below — leaving the whole middle band to the object the camera is
+   * orbiting.
    */
+  centred(hud, "KOBAYASHI", cx, 762, 5.2, PALETTE.traceDim);
+  centred(hud, "NO-WIN SCENARIO   VECTOR COMBAT TRIALS", cx, 740, 1.6, PALETTE.traceDim);
+  rule(hud, cx, 722, 250, PALETTE.traceDim);
+
   const era = view.campaign.era ?? DEFAULT_ERA;
   const hull = eraSpec(era);
-  centred(hud, `${hull.label}   ${hull.era}`, cx, 558, 2.4, PALETTE.trace);
+  centred(hud, hull.label, cx, 682, 4.0, PALETTE.trace);
+  centred(hud, `COMMISSIONED ${hull.era}     N  TO CHANGE SHIP`, cx, 654, 1.5, PALETTE.traceDim);
 
   /**
    * The spec sheet: eight figures, always the same eight, always as a percentage
@@ -322,16 +315,14 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
    *
    * Colour carries the polarity, which is why it cannot be inferred from the
    * sign. Three of these are costs when they rise — damage taken, beam draw,
-   * target profile — so 82% is good news for one row and bad news for another.
+   * target profile — so 82% is good news in one row and bad news in another.
    * `traitsOf` decides; this only paints what it is told.
    */
   const traits = traitsOf(era);
-  const half = Math.ceil(traits.length / 2);
+  const halfSpec = Math.ceil(traits.length / 2);
   traits.forEach((trait, index) => {
-    const column = index < half ? 0 : 1;
-    const row = index % half;
-    const x = cx + (column === 0 ? -34 : 176);
-    const y = 530 - row * 20;
+    const x = cx + (index < halfSpec ? -34 : 176);
+    const y = 626 - (index % halfSpec) * 20;
     hud.textRight(trait.label, x, y, 1.5, PALETTE.traceDim);
     hud.text(
       `${trait.percent}%`,
@@ -342,33 +333,57 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
     );
   });
 
-  // The controls as a readout, not as a legend: dim label, bright value, the
-  // same two columns the diagnostics block uses.
-  //
-  // Spacing came down from 26 to 24 and the block moved up when `SHIP` was
-  // added: at seven rows the old figures put the last one exactly on top of the
-  // launch prompt.
-  const rows: [string, string][] = [
-    ["LAUNCH", "ANY KEY"],
+  /**
+   * Every binding, on the screen, in two columns.
+   *
+   * The old legend listed seven of eighteen and left the rest to be discovered or
+   * not. An arcade cabinet can do that because it has a bezel with the controls
+   * printed on it. This has no bezel, so the panel is the bezel.
+   *
+   * Split by kind rather than by keyboard order, and the split is the useful one:
+   * the left column is everything that changes what happens in the sector, the
+   * right is everything that only changes what you can see. Someone looking for
+   * "how do I fire" and someone looking for "how do I turn the glass off" are
+   * asking different questions and neither should have to read the other's list.
+   */
+  const flightKeys: [string, string][] = [
     ["FLY", "ARROWS / WASD"],
-    ["CLIMB / DIVE", "HOLD Q / E"],
-    ["SHIP", "N  TO CYCLE"],
+    ["CLIMB / DIVE", "Q / E"],
     ["PHASERS", "SPACE"],
     ["TORPEDOES", "X"],
-    ["BANK SALVAGE", "FLY THE CORRIDOR"],
+    ["SHIELD", "Z"],
+    ["WARHEAD", "C"],
+    ["CHART", "HOLD TAB"],
+    ["JUMP", "HOLD SHIFT"],
   ];
-  rows.forEach(([label, value], index) => {
-    const y = 296 - index * 24;
-    hud.textRight(label, cx - 20, y, 1.7, PALETTE.traceDim);
-    hud.text(value, cx + 20, y, 1.7, dim);
-  });
+  const displayKeys: [string, string][] = [
+    ["SHIP", "N"],
+    ["RESTART", "R"],
+    ["DECK LOG", "L"],
+    ["SLAB", "Y"],
+    ["WIREFRAME", "G"],
+    ["GLOW", "B  F  V"],
+    ["CAMERA", "1  2  3"],
+    ["MUTE / INFO", "M / H"],
+  ];
+  const keyColumn = (rows: [string, string][], anchor: number): void => {
+    rows.forEach(([label, value], index) => {
+      const y = 214 - index * 20;
+      // A wide gutter, not a space. At eight units the label and its key ran
+      // together into one string and the two columns stopped being columns.
+      hud.textRight(label, anchor, y, 1.45, PALETTE.traceDim);
+      hud.text(value, anchor + 18, y, 1.45, dim);
+    });
+  };
+  keyColumn(flightKeys, cx - 150);
+  keyColumn(displayKeys, cx + 132);
 
   if (blink(view.time)) {
-    centred(hud, "PRESS ANY KEY TO LAUNCH", cx, 132, 2.6, PALETTE.amber);
+    centred(hud, "PRESS ANY KEY TO LAUNCH", cx, 38, 2.4, PALETTE.amber);
   }
 
   if (presentation.best > 0) {
-    centred(hud, `BEST THIS SITTING   ${pad(presentation.best, 6)}`, cx, 88, 1.7, PALETTE.traceDim);
+    centred(hud, `BEST THIS SITTING   ${pad(presentation.best, 6)}`, cx, 12, 1.4, PALETTE.traceDim);
   }
 }
 

@@ -35,7 +35,7 @@ export const PHASER = {
    * phaser expensive — it should still be the reason you learn to lead a
    * torpedo — without making it unusable.
    */
-  cost: 0.014,
+  cost: 0.010,
   cooldown: 0.16,
   damage: 0.34,
   /** Full damage inside this range, tailing to zero at `falloffEnd`. */

@@ -579,12 +579,17 @@ function placeTitleCamera(time: number): void {
   const camera = stage.camera;
   const angle = time * 0.16;
 
+  // Pulled in from 21 units to 12. Test play said the ship and its figures "get
+  // lost on the page", and the ship was the half of that a layout change could
+  // not fix: at 21 units a hull is a thumbnail whatever the type around it does.
+  // This is the screen where you choose what you are flying, so the thing you are
+  // choosing should be the largest object on it.
   eye.set(
-    player.position.x + Math.sin(angle) * 21,
-    5.6 + Math.sin(time * 0.23) * 1.8,
-    player.position.z + Math.cos(angle) * 21,
+    player.position.x + Math.sin(angle) * 9.4,
+    2.8 + Math.sin(time * 0.23) * 0.9,
+    player.position.z + Math.cos(angle) * 9.4,
   );
-  focus.copy(player.position).setY(0.6);
+  focus.copy(player.position).setY(0.35);
 
   camera.position.copy(eye);
   camera.up.set(0, 1, 0);
