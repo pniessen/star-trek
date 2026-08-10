@@ -15,6 +15,7 @@ import { HYPERWARP } from "../game/hyperwarp.js";
 import { jumpCharge, jumpEnergy, jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode } from "../chart/naming.js";
 import { canDock, type Campaign } from "../chart/campaign.js";
+import { DEFAULT_ERA, eraSpec, traitsOf } from "../chart/eras.js";
 
 export interface HudView {
   readonly player: Ship;
@@ -277,37 +278,112 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
 
   hud.brackets(18, 18, width - 36, height - 36, 22, PALETTE.traceDim);
 
-  // The ship itself owns the middle of the frame — the camera is orbiting it —
-  // so the panel is composed around that band rather than over it.
-  // The title block sits above the grid's horizon and the legend below the
-  // ship, so the two dense bands of the scene — the plane and the hull — each
-  // land in a gap rather than under type.
-  centred(hud, "KOBAYASHI", cx, 640, 9, PALETTE.trace);
-  rule(hud, cx, 616, 210, PALETTE.traceDim);
-  centred(hud, "NO-WIN SCENARIO   VECTOR COMBAT TRIALS", cx, 584, 1.9, PALETTE.traceDim);
+  /**
+   * Composed around the hull, not above it.
+   *
+   * Test play: the ship and its figures "get lost on the page". Two causes, and
+   * the layout could only fix one — the camera sat 21 units out, which makes a
+   * thumbnail of anything, and that is fixed in `placeTitleCamera`. The other was
+   * here: the game's own name held the largest type on the screen whose job is
+   * choosing what you fly. So the title shrinks and moves up, and **the hull's
+   * name is now the biggest thing on the page**. The game is called Kobayashi on
+   * every other frame; this screen has one subject and it is the ship.
+   *
+   * Everything that is not the hull is pushed to the margins — identity above,
+   * bindings below — leaving the whole middle band to the object the camera is
+   * orbiting.
+   */
+  centred(hud, "KOBAYASHI", cx, 762, 5.2, PALETTE.traceDim);
+  centred(hud, "NO-WIN SCENARIO   VECTOR COMBAT TRIALS", cx, 740, 1.6, PALETTE.traceDim);
+  rule(hud, cx, 722, 250, PALETTE.traceDim);
 
-  // The controls as a readout, not as a legend: dim label, bright value, the
-  // same two columns the diagnostics block uses.
-  const rows: [string, string][] = [
-    ["LAUNCH", "ANY KEY"],
-    ["FLY", "ARROWS / WASD"],
-    ["CLIMB", "HOLD Q"],
-    ["PHASERS", "SPACE"],
-    ["TORPEDOES", "X"],
-    ["BANK SALVAGE", "FLY THE CORRIDOR"],
-  ];
-  rows.forEach(([label, value], index) => {
-    const y = 288 - index * 26;
-    hud.textRight(label, cx - 20, y, 1.7, PALETTE.traceDim);
-    hud.text(value, cx + 20, y, 1.7, dim);
+  const era = view.campaign.era ?? DEFAULT_ERA;
+  const hull = eraSpec(era);
+  centred(hud, hull.label, cx, 682, 4.0, PALETTE.trace);
+  centred(hud, `COMMISSIONED ${hull.era}     N  TO CHANGE SHIP`, cx, 654, 1.5, PALETTE.traceDim);
+
+  /**
+   * The spec sheet: eight figures, always the same eight, always as a percentage
+   * of the Constitution.
+   *
+   * Two columns of four rather than a list, for room — but the ordering is the
+   * point. Every hull puts the same figure in the same cell, so cycling ships
+   * changes numbers in place and a hull becomes legible as a *pattern* of
+   * departures rather than a paragraph. Figures at 100 are drawn dim rather than
+   * omitted: a blank would move every row below it and destroy the comparison,
+   * and "at reference" is itself worth knowing.
+   *
+   * Colour carries the polarity, which is why it cannot be inferred from the
+   * sign. Three of these are costs when they rise — damage taken, beam draw,
+   * target profile — so 82% is good news in one row and bad news in another.
+   * `traitsOf` decides; this only paints what it is told.
+   */
+  const traits = traitsOf(era);
+  const halfSpec = Math.ceil(traits.length / 2);
+  traits.forEach((trait, index) => {
+    const x = cx + (index < halfSpec ? -34 : 176);
+    const y = 626 - (index % halfSpec) * 20;
+    hud.textRight(trait.label, x, y, 1.5, PALETTE.traceDim);
+    hud.text(
+      `${trait.percent}%`,
+      x + 8,
+      y,
+      1.5,
+      trait.percent === 100 ? PALETTE.traceDim : trait.favourable ? dim : PALETTE.amber,
+    );
   });
 
+  /**
+   * Every binding, on the screen, in two columns.
+   *
+   * The old legend listed seven of eighteen and left the rest to be discovered or
+   * not. An arcade cabinet can do that because it has a bezel with the controls
+   * printed on it. This has no bezel, so the panel is the bezel.
+   *
+   * Split by kind rather than by keyboard order, and the split is the useful one:
+   * the left column is everything that changes what happens in the sector, the
+   * right is everything that only changes what you can see. Someone looking for
+   * "how do I fire" and someone looking for "how do I turn the glass off" are
+   * asking different questions and neither should have to read the other's list.
+   */
+  const flightKeys: [string, string][] = [
+    ["FLY", "ARROWS / WASD"],
+    ["CLIMB / DIVE", "Q / E"],
+    ["PHASERS", "SPACE"],
+    ["TORPEDOES", "X"],
+    ["SHIELD", "Z"],
+    ["WARHEAD", "C"],
+    ["CHART", "HOLD TAB"],
+    ["JUMP", "HOLD SHIFT"],
+  ];
+  const displayKeys: [string, string][] = [
+    ["SHIP", "N"],
+    ["RESTART", "R"],
+    ["DECK LOG", "L"],
+    ["SLAB", "Y"],
+    ["WIREFRAME", "G"],
+    ["GLOW", "B  F  V"],
+    ["CAMERA", "1  2  3"],
+    ["MUTE / INFO", "M / H"],
+  ];
+  const keyColumn = (rows: [string, string][], anchor: number): void => {
+    rows.forEach(([label, value], index) => {
+      const y = 214 - index * 20;
+      // A wide gutter, not a space. At eight units the label and its key ran
+      // together into one string and the two columns stopped being columns.
+      hud.textRight(label, anchor, y, 1.45, PALETTE.traceDim);
+      hud.text(value, anchor + 18, y, 1.45, dim);
+    });
+  };
+  keyColumn(flightKeys, cx - 150);
+  keyColumn(displayKeys, cx + 132);
+
   if (blink(view.time)) {
-    centred(hud, "PRESS ANY KEY TO LAUNCH", cx, 132, 2.6, PALETTE.amber);
+    centred(hud, "PRESS ANY KEY TO LAUNCH", cx, 38, 2.4, PALETTE.amber);
   }
 
   if (presentation.best > 0) {
-    centred(hud, `BEST THIS SITTING   ${pad(presentation.best, 6)}`, cx, 88, 1.7, PALETTE.traceDim);
+    centred(hud, `BEST THIS SITTING   ${pad(presentation.best, 6)}`, cx, 12, 1.4, PALETTE.traceDim);
   }
 }
 
@@ -442,10 +518,14 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       px = (px / length) * radius;
       py = (py / length) * radius;
     }
-    // Height above the *floor*, not above the player. Nothing in the game ever
-    // goes below `y = 0`, so every stalk on the tube points the same way and a
-    // glance reads as a bar chart rather than as a set of signed offsets — which
-    // is worth more than the symmetry a player-relative measure would buy.
+    // Height off the *plane*, not off the player, and now signed — the ship can
+    // be under the plane as well as over it. This paragraph used to argue that
+    // one-way stalks were worth more than symmetry, and cited Elite for the
+    // stalk. Elite in fact put its plane in the middle of the tube and drew
+    // stalks both ways, which is the version that shipped in 1984 and read fine:
+    // direction is one more bit and the eye takes it for free. Still measured off
+    // the plane rather than off the player, which is the part that actually
+    // matters — a player-relative stalk moves every mark whenever *you* climb.
     // Own ship gets one too, at the centre, so "am I above that Raider" is a
     // comparison of two lengths sitting next to each other.
     //
@@ -475,14 +555,64 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     );
   };
 
-  // Starbase: the thing you are gambling against reaching.
+  /**
+   * Starbase: the thing you are gambling against reaching, and the one contact
+   * that must never be hard to find.
+   *
+   * It used to lose its cross the moment it clamped to the rim, and it was drawn
+   * in the dimmest colour on the tube unless you were already moored. So at
+   * exactly the moment a player needs it — out past scanner range with a fat
+   * multiplier and nowhere to bank it — it became a small dim ring among the
+   * other small dim rings, indistinguishable from an unresolved return. That is
+   * backwards: an unresolved contact is *supposed* to be ambiguous, and the bank
+   * is supposed to be the one certainty on the board.
+   *
+   * Three changes, none of them a new system.
+   *
+   *  - **The cross survives the clamp.** It is the station's glyph and it is what
+   *    separates it from a return that has not resolved. Smaller on the rim, but
+   *    there.
+   *  - **A course line.** A dim radial from the centre out to the mark, so the
+   *    bearing is readable without measuring an angle by eye. It is drawn under
+   *    everything else and dimmer than the sweep, so it reads as a rule on the
+   *    instrument rather than as traffic.
+   *  - **It brightens with distance.** Nearly invisible when the station is
+   *    comfortably inside the tube and clearest when it is pinned to the rim,
+   *    which is the inverse of how everything else on this display works and is
+   *    the entire point: the guide appears when it is needed and gets out of the
+   *    way when it is not.
+   *
+   * Deliberately not a refit. Knowing where your own bank is is legibility, not
+   * a power, and charging salvage for it would be a tax on the greed loop the
+   * whole game is built around.
+   */
   const base = project(starbase);
-  const baseMark: number[] = [];
-  arc(baseMark, base.x, base.y, base.clamped ? 4 : 6, 0, Math.PI * 2, 8);
-  if (!base.clamped) {
-    baseMark.push(base.x - 9, base.y, base.x + 9, base.y, base.x, base.y - 9, base.x, base.y + 9);
+  const baseRange = Math.hypot(starbase.x - player.position.x, starbase.z - player.position.z);
+  // 0 while the station is well inside the tube, 1 once it is off the edge.
+  const lost = MathUtils.clamp(baseRange / SCANNER.range, 0, 1) ** 1.6;
+
+  if (lost > 0.02) {
+    const dx = base.x - cx;
+    const dy = base.y - cy;
+    const length = Math.hypot(dx, dy) || 1;
+    // Stops short of the mark so the line never appears to pass through it.
+    const to = Math.max(0, length - 11) / length;
+    scratch.copy(PALETTE.traceDim).multiplyScalar(0.22 + 0.5 * lost);
+    hud.segments([cx + dx * 0.3, cy + dy * 0.3, cx + dx * to, cy + dy * to], scratch);
   }
-  hud.segments(baseMark, session.docked ? PALETTE.trace : PALETTE.traceDim);
+
+  const baseMark: number[] = [];
+  const baseSize = base.clamped ? 4.5 : 6;
+  arc(baseMark, base.x, base.y, baseSize, 0, Math.PI * 2, 8);
+  // The cross, at both scales. Shorter arms on the rim so the mark stays compact
+  // where the tube is already crowded, but never absent.
+  const arm = base.clamped ? 7 : 9;
+  baseMark.push(
+    base.x - arm, base.y, base.x + arm, base.y,
+    base.x, base.y - arm, base.x, base.y + arm,
+  );
+  scratch.copy(PALETTE.trace).multiplyScalar(session.docked ? 1 : 0.42 + 0.5 * lost);
+  hud.segments(baseMark, scratch);
 
   // Mines: small violet diamonds, the same glyph as the Harrow that laid them
   // at a third the size. They never move, so there is nothing to be uncertain
@@ -681,6 +811,31 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   hud.text("SCANNER", cx - radius, cy + radius + 16, 1.5, PALETTE.traceDim);
   hud.textRight(`${pad(SCANNER.range, 3)} KM`, cx + radius, cy + radius + 16, 1.5, PALETTE.traceDim);
 
+  /**
+   * The bank's range, above the tube beside its own range figure, and only once
+   * it is worth saying. (Above: this HUD's y grows upward, so `+ radius` is away
+   * from the centre and up the screen. Pairing the station's distance with the
+   * scanner's own reach is the useful adjacency anyway — one is how far you can
+   * see, the other how far you have to go.)
+   *
+   * Held back while the station is close because a figure that is always there
+   * stops being read, and this one exists for the case where the mark has clamped
+   * to the rim and the line alone cannot tell you whether that is eighty units
+   * away or four hundred. Named rather than labelled "BASE": the sector's station
+   * has a name, `chart/naming.ts` went to some trouble to give it one, and the
+   * docking sequence already uses it.
+   */
+  if (!session.docked && baseRange > SCANNER.range * 0.55) {
+    scratch.copy(PALETTE.trace).multiplyScalar(0.3 + 0.45 * lost);
+    hud.textRight(
+      `${session.docking.stationName}  ${pad(Math.round(baseRange), 3)} KM`,
+      cx + radius,
+      cy + radius + 32,
+      1.4,
+      scratch,
+    );
+  }
+
   // An annunciator rather than a count: reporting how many cloaked hulls exist
   // would be telling you something the scanner cannot know. This only says that
   // something out there is returning and will not resolve.
@@ -785,11 +940,17 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number, view?: HudV
  */
 function drawAltitude(hud: Hud, player: Ship, x: number, cy: number): void {
   const half = 34;
-  const fraction = Math.max(0, Math.min(1, player.position.y / ALTITUDE.ceiling));
+  // Signed, and mapped so the rail's midpoint is the plane rather than half the
+  // climb. -1 is the underside of the slab, +1 the lid, 0 the deck everything
+  // else lives on.
+  const signed = Math.max(-1, Math.min(1, player.position.y / ALTITUDE.ceiling));
+  const fraction = (signed + 1) / 2;
   const falling = player.starved;
   const rail: number[] = [x, cy - half, x, cy + half];
-  // Floor, midpoint and ceiling. Three ticks, because the two that matter are
-  // "on the deck" and "at the lid" and a third stops the middle being a guess.
+  // Underside, plane and lid. The middle tick stopped being decoration when the
+  // slab went signed: it is the plane now, the one height the starbase, the
+  // mines and the corridor all sit at, so it is the tick a player actually aims
+  // for rather than a guide against guessing.
   for (const [t, len] of [[0, 7], [0.5, 4], [1, 7]] as const) {
     const y = cy - half + t * half * 2;
     rail.push(x, y, x + len, y);
@@ -1212,7 +1373,7 @@ function drawDiagnostics(hud: Hud, view: HudView, width: number, height: number)
   hud.textRight(`${pad(view.fps, 3)} FPS`, width - 34, height - 48, 1.5, PALETTE.traceDim);
   hud.textRight("SPACE FIRE   X TORPEDO", width - 34, height - 68, 1.5, PALETTE.traceDim);
   hud.textRight(
-    flight.threeD ? "ARROWS / WASD  FLY   Q  CLIMB" : "ARROWS / WASD  FLY",
+    flight.threeD ? "ARROWS / WASD  FLY   Q / E  CLIMB / DIVE" : "ARROWS / WASD  FLY",
     width - 34,
     height - 86,
     1.5,

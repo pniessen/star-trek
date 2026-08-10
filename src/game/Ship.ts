@@ -7,10 +7,17 @@ export interface ShipInput {
   turn: number; // -1 left … +1 right
   thrust: number; // -1 reverse … +1 forward
   /**
-   * The one altitude key, held. There is deliberately no matching "descend":
-   * the floor is where you end up when you stop asking. See `altitude.ts`.
+   * The altitude keys, held. `dive` used not to exist: the plane was a floor and
+   * "down" was what happened when you stopped asking.
+   *
+   * It exists now because the floor was the one thing you could be pinned
+   * against — trapped between something above and the deck below, with no
+   * downward answer — and because "under" is a tactical verb a taller ceiling
+   * cannot supply. See `altitude.ts` for why this costs a second binding and
+   * what had to be preserved to make it worth one.
    */
   climb?: boolean;
+  dive?: boolean;
   /** Moored: the ship may turn but cannot translate. */
   held?: boolean;
 }
@@ -84,8 +91,10 @@ export class Ship {
   pitch = 0;
   /** Units per second of climb or fall this frame. Drives `pitch` and the tape. */
   verticalRate = 0;
-  /** True while the key is held *and* the reserve can still pay for it. */
+  /** True while the climb key is held *and* the reserve can still pay for it. */
   climbing = false;
+  /** The same, for the dive key. Never true at the same time as `climbing`. */
+  diving = false;
 
   private static readonly TURN_ACCEL = 5.4;
   private static readonly TURN_DAMP = 3.6;
@@ -95,9 +104,33 @@ export class Ship {
   private static readonly MAX_SPEED = 62;
 
   /** Energy per second at full burn. */
-  private static readonly THRUST_DRAIN = 0.035;
+  /**
+   * Halved-ish, twice, and this is the second pass.
+   *
+   * Test play: docking was happening for *fuel* rather than to bank, which is
+   * backwards — the corridor exists to realise a multiplier, and a station you
+   * visit because the tank is empty turns the greed loop's one deliberate
+   * decision into an errand. Every drain came down together and the trickle came
+   * up, so the reserve lasts roughly twice as long as it did.
+   */
+  private static readonly THRUST_DRAIN = 0.024;
   private static readonly SHIELD_REGEN = 0.06;
-  private static readonly RESERVE_REGEN = 0.012;
+  /**
+   * The trickle, and it is the floor every other cost is measured against — which
+   * is the mistake worth recording here rather than in a commit nobody re-reads.
+   *
+   * Doubling the ship's endurance by *raising this* looked equivalent to halving
+   * the drains and is not. At 0.022 it had climbed above the thrust drain and to
+   * within a whisker of the slab's, so cruising paid for itself and holding
+   * altitude was free — the one-pool economy, which is a locked decision, quietly
+   * stopped existing. `playtest` caught it on the one assertion that only asks
+   * whether the reserve falls while the climb key is held.
+   *
+   * Endurance belongs in the drains. This moves a little, because a slightly
+   * faster refill is part of not having to dock, but it stays well under every
+   * cost it is competing with.
+   */
+  private static readonly RESERVE_REGEN = 0.016;
   /** Reserve at or below which the drive falls back to impulse. */
   private static readonly IMPULSE_FLOOR = 0.02;
   /** Fraction of full thrust available with nothing in the reserve. */
@@ -167,10 +200,14 @@ export class Ship {
     // as shots. Charged for as long as the key is held, not only while the
     // number is going up: the ceiling is somewhere you hold, not somewhere you
     // arrive.
-    if (this.climbing) {
+    // Charged for leaving the plane, not for going up. Diving is work against
+    // nothing in the same way climbing is — the drain was never gravity, it was
+    // the price of not being where everything else is — so it costs the same. If
+    // it did not, down would be free evasion and nobody would ever climb.
+    if (this.climbing || this.diving) {
       this.energy -= (ALTITUDE.drain * dt) / fit.energyReserve;
     }
-    let regen = Ship.RESERVE_REGEN * dt;
+    let regen = Ship.RESERVE_REGEN * fit.reserveRegen * dt;
 
     // Ablative plating's price: once something has actually reached the hull,
     // the facings stop coming back until a starbase repairs it.
@@ -189,31 +226,62 @@ export class Ship {
   }
 
   /**
-   * The slab, and the one key that reaches it.
+   * The slab, and the two keys that reach it.
    *
-   * Two rules do all the work. Nothing goes below the floor, so the scanner's
-   * stalks only ever point one way. And a starved reserve cannot hold you up —
-   * the same shape as the impulse rule above, and legible for the same reason:
-   * running the pool dry costs you the fight, and now it costs you the height
-   * too. You sink back onto whatever you were flying over.
+   * **The plane is a rest position, not a floor.** That is the change, and the
+   * thing it had to preserve is the *free neutral*: hold nothing and the ship
+   * returns to `y = 0` from either side, at no cost, with no input. That is what
+   * made one key work in the first place — "down" was free because it was what
+   * happened when you stopped asking — and a naive signed slab throws it away.
+   * Put neutral in the middle of a range you can only leave *and* re-enter under
+   * power, and holding level costs constant input, which plays worse than the
+   * floor it replaced. Springing back from both sides keeps the property and
+   * spends only a binding.
    *
-   * Moored is not a state that can climb. `held` means the clamps have you, and
-   * the docking sequence owns `y` for the whole of it.
+   * Three rules do all the work now.
+   *
+   *  - **Either key held moves you away from the plane**; neither held returns
+   *    you to it. Away costs energy, back is free.
+   *  - **A starved reserve cannot hold you off the plane** — the same shape as
+   *    the impulse rule above and legible for the same reason. Run the pool dry
+   *    and you drift back to the deck, whichever side you were on.
+   *  - **Both keys at once cancel.** Not an error state and not a third
+   *    behaviour: it is the same thing as holding neither, which is what a
+   *    player mashing both already expects.
+   *
+   * The scanner survives this, and its own cited precedent is why. `altitude.ts`
+   * claimed one-way stalks as a benefit of the floor, but Elite — the authority
+   * that argument rests on — put the plane in the middle of its scanner and drew
+   * stalks both ways in 1984. Direction is one more bit to read and it reads
+   * instantly.
+   *
+   * Moored is not a state that can leave the plane. `held` means the clamps have
+   * you, and the docking sequence owns `y` for the whole of it.
    */
   private updateAltitude(input: ShipInput, dt: number): void {
     if (!flight.threeD) {
       this.position.y = 0;
       this.verticalRate = 0;
       this.climbing = false;
+      this.diving = false;
       this.pitch = 0;
       return;
     }
 
-    this.climbing = Boolean(input.climb) && !this.starved && !input.held;
+    // Both at once is neither: cancelling is what a player mashing both expects,
+    // and it costs no reserve, because nothing is being asked for.
+    const wants = (Boolean(input.climb) ? 1 : 0) - (Boolean(input.dive) ? 1 : 0);
+    const powered = wants !== 0 && !this.starved && !input.held;
+    this.climbing = powered && wants > 0;
+    this.diving = powered && wants < 0;
+
     const before = this.position.y;
     if (!input.held) {
-      const target = this.climbing ? ALTITUDE.ceiling : 0;
-      const step = (this.climbing ? ALTITUDE.climbRate : ALTITUDE.fallRate) * dt;
+      const target = powered ? ALTITUDE.ceiling * wants : 0;
+      // Away from the plane is a climb rate whichever way it points; back toward
+      // it is the fall rate. The asymmetry is the point — letting go should feel
+      // like letting go, and it should feel that way going up as well as down.
+      const step = (powered ? ALTITUDE.climbRate : ALTITUDE.fallRate) * dt;
       this.position.y =
         target > before ? Math.min(target, before + step) : Math.max(target, before - step);
     }
@@ -225,7 +293,7 @@ export class Ship {
     this.pitch += (target - this.pitch) * Math.min(1, dt * 6);
   }
 
-  /** Height above the floor. Zero is the plane everything else still lives on. */
+  /** Signed height off the plane. Zero is where everything else still lives. */
   get altitude(): number {
     return this.position.y;
   }
@@ -261,7 +329,11 @@ export class Ship {
     this.shields[facing] -= absorbed / capacity;
     this.impact = 1;
 
-    const throughput = amount - absorbed;
+    // The era's skin. A hull multiplier below one is the NX's whole character:
+    // its facings are barely worth the name, so what gets past them has to hurt
+    // less or the ship is simply worse rather than different. Applied after the
+    // shields rather than before, so it is armour and not a second shield.
+    const throughput = (amount - absorbed) * this.loadout.hullArmour;
     if (throughput <= 0) return false;
 
     // Ablative plating spends itself on the first hit that would have reached

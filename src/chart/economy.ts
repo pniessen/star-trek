@@ -1,3 +1,4 @@
+import { DEFAULT_ERA, type EraId, eraSpec } from "./eras.js";
 import {
   hasStructure,
   newCampaign,
@@ -84,7 +85,8 @@ export type RefitId =
   | "capacitor-bank"
   | "focusing-coils"
   | "ablative-plating"
-  | "impulse-tuning";
+  | "impulse-tuning"
+  | "dilithium-matrix";
 
 export interface RefitSpec {
   readonly id: RefitId;
@@ -138,6 +140,13 @@ export const REFITS: readonly RefitSpec[] = [
     price: "NO SHIELD REGEN WHEN HULLED",
   },
   {
+    id: "dilithium-matrix",
+    label: "DILITHIUM MATRIX",
+    cost: 1200,
+    gain: "+60% ENERGY RESERVE",
+    price: "-35% RESERVE REGEN",
+  },
+  {
     id: "impulse-tuning",
     label: "IMPULSE TUNING",
     cost: 450,
@@ -156,6 +165,12 @@ export function refitSpec(id: RefitId): RefitSpec {
  * that `Ship` and `Session` read numbers rather than re-deriving the table.
  */
 export interface Loadout {
+  /** Scales the trickle that refills the reserve. Below one is a bigger tank filling slower. */
+  reserveRegen: number;
+  /** Scales the sphere projectiles test against. The era sets it; refits do not. */
+  hullRadius: number;
+  /** Scales damage that gets past the shields. Below one is a tougher skin. */
+  hullArmour: number;
   /** Scales what a full facing absorbs. Shields stay 0-1 so the gauge stays honest. */
   shieldCapacity: number;
   shieldRegen: number;
@@ -179,6 +194,9 @@ export const NO_REFITS: Loadout = {
   torpedoCapacity: 0,
   turnRate: 1,
   energyReserve: 1,
+  reserveRegen: 1,
+  hullRadius: 1,
+  hullArmour: 1,
   phaserRange: 1,
   phaserFlat: false,
   phaserCost: 1,
@@ -199,8 +217,20 @@ export const NO_REFITS: Loadout = {
  * being erased by them, which is what would have turned the pair into a pure
  * upgrade.
  */
-export function loadoutOf(refits: readonly string[]): Loadout {
+export function loadoutOf(refits: readonly string[], era: EraId = DEFAULT_ERA): Loadout {
   const loadout: Loadout = { ...NO_REFITS };
+  /**
+   * The era goes on first, and the refits multiply on top of it.
+   *
+   * Order does not matter arithmetically — these are all products — but it
+   * matters for reading: the hull is what you are flying and the refits are what
+   * you bolted to it, so a loadout is "a Defiant with focusing coils" rather than
+   * "coils, on a Defiant". Every era key is optional and absent means one, so the
+   * baseline hull is genuinely a no-op rather than a table of 1.0s.
+   */
+  for (const [key, value] of Object.entries(eraSpec(era).mods)) {
+    (loadout as unknown as Record<string, number>)[key] *= value as number;
+  }
   for (const id of refits) {
     switch (id as RefitId) {
       case "reinforced-facings":
@@ -222,6 +252,21 @@ export function loadoutOf(refits: readonly string[]): Loadout {
       case "ablative-plating":
         loadout.ablative = true;
         loadout.regenStopsWhenHulled = true;
+        break;
+      /**
+       * The capacitor bank's bigger sibling, and its price is the honest one for
+       * a bigger store: it takes longer to fill.
+       *
+       * Every refit here is a tradeoff and not an upgrade, because a ship that
+       * simply got better would make early runs a tax for having started. So
+       * this is not "more energy" — it is *more energy at once, less energy over
+       * time*, which is a real choice against the bank rather than a strictly
+       * better version of it. Take the bank to keep your rhythm; take the matrix
+       * to buy one long engagement and accept the lull after it.
+       */
+      case "dilithium-matrix":
+        loadout.energyReserve *= 1.6;
+        loadout.reserveRegen *= 0.65;
         break;
       case "impulse-tuning":
         loadout.acceleration *= 1.2;

@@ -101,6 +101,22 @@ The two questions no constant answers, both for the same sitting: does one key
 with no descent actually read as flying, and does the automatic elevation feel
 like the ship helping or like the ship aiming?
 
+**Flown, 2026-08-07. One of the two is answered.** The slab "makes a
+difference" and the game is "getting fun" — the first human evidence for
+unlocking "the play space is a plane", which until now was an argument on paper.
+
+- **Automatic elevation reads as the ship helping.** This is the load-bearing
+  answer: it is what lets a shallow slab work with no pitch input, so
+  `TUBE_WINDOW = 0.7` and the guns solving elevation while the hull does not are
+  both confirmed rather than merely defensible. Do not revisit.
+- **Whether one key with no descent reads as flying is still open** — not
+  contradicted, just not yet decidable at the keyboard. `climbRate = 9` against
+  `fallRate = 11` is the pair to A/B when it is, and `Y` makes that free.
+
+Still entirely unflown: the five `slab` fractions, `SCANNER.altitudeScale`, and
+every number in `LOOM` — see the gotcha below about why the Loom in particular
+cannot be tuned on a deployed build.
+
 **The mix** — `BUS_LEVELS`, the phaser's cadence and pitch pair, the alert's
 `FULL_THREAT`. Three to sit with first:
 
@@ -207,6 +223,25 @@ already; these remain:
 ---
 
 ## 6. Housekeeping
+
+### 6.1 The debug hooks are localhost-only, and it has cost real time twice
+
+`DEBUG_PROBE` is `location.hostname === "127.0.0.1" || "localhost"`, so on the
+deployed build `__probe`, `__player`, `__loom` and `__sky` do not exist at all.
+Two consequences, both already paid for:
+
+- **A live bug cannot be inspected.** When the keyboard appeared dead on the
+  deployed build there was no way for either side to read the state, and the
+  session was reconstructed from three local approximations instead.
+- **The Loom cannot be summoned on the build being played.** It appears at a
+  wave break with a one-in-ten chance from escalation index four, and
+  `__loom.seed()` — the only way to see one on demand — is not there. A feature
+  that rare, on a build where it cannot be forced, will never be tuned.
+
+Two candidate answers, and this wants a decision rather than a workaround:
+expose a deliberately narrow probe on the deployed build, or make the Loom a
+scheduled event at a known escalation index so a run that gets far enough is
+guaranteed to meet one.
 
 - `npm run typecheck` before every commit. There is no lint step.
 - `npm run playtest` needs a Playwright browser and a **fresh** dev server — a

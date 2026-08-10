@@ -145,8 +145,24 @@ export const RESERVE = {
    * when the player is killing faster than they are being reinforced.
    */
   commit: 0.5,
-  /** What one step of ground taken costs the invasion. */
-  costPerStep: 2,
+  /**
+   * What one step of ground taken costs the invasion, and it is the number the
+   * whole candidate turns on.
+   *
+   * Measured, not chosen. The reserve has a hard floor built into it by the two
+   * mechanisms above: resupply lands before the spend, and `commit` stops the
+   * enemy spending more than a fraction of what it holds, so a turn closes with
+   * at least about half of `regenFlat` in the pot. A run therefore has to destroy
+   * roughly eleven to arrive at an empty reserve, which at three a step is four
+   * steps and at two a step is unreachable — 2 was the first draft and the term
+   * measured as a pure deadlock generator at it, for that reason and no other.
+   *
+   * At 3, against a player whose reach varies run to run, reach 3 comes out
+   * 62/38 won to lost with the war still resolving, reach 2 is nearly always
+   * lost and reach 4 nearly always won. That is the first contested band this
+   * campaign has ever produced.
+   */
+  costPerStep: 3,
   /**
    * Turns at nothing left before the invasion counts as broken.
    *

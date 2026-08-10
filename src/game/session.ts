@@ -56,6 +56,12 @@ export interface CombatInput {
 }
 
 const WAVE_BREAK = 2.6;
+/**
+ * The base sphere projectiles test the player against, before the hull's own
+ * scaling. A Galaxy is a genuinely bigger target and a Defiant a smaller one —
+ * see `chart/eras.ts`, where that is the price of the Galaxy's reserve and part
+ * of what the Defiant buys with its paper shields.
+ */
 const PLAYER_RADIUS = 2.6;
 
 /**
@@ -235,6 +241,19 @@ export class Session {
    * @param playerShape  the player's hull, held only so that dying can fling
    *   the actual strokes that drew it — the same treatment every hostile gets.
    */
+  /**
+   * Point the death sequence at a different hull.
+   *
+   * The player's ship is rebuilt rather than re-skinned when the era changes —
+   * `VectorObject` bakes its edge list at construction — so the reference this
+   * class holds would otherwise go on describing the ship the player used to
+   * fly, and the death sequence would break up the wrong silhouette. Only
+   * callable between runs, which is the only time the era can change.
+   */
+  setPlayerHull(shape: VectorObject): void {
+    this.playerShape = shape;
+  }
+
   constructor(
     private readonly fleet: Fleet,
     private readonly wing: Wing,
@@ -246,7 +265,7 @@ export class Session {
      */
     readonly loom: Loom,
     starbase: Vector3,
-    private readonly playerShape: VectorObject,
+    private playerShape: VectorObject,
     private campaign: Campaign,
   ) {
     this.docking = new Docking(starbase);
@@ -744,7 +763,7 @@ export class Session {
           projectile.dead = true;
           if (this.mines.strike(mine, projectile.damage)) this.pending += MINE.value * this.salvageScale;
         }
-      } else if (sweepHits(projectile, player.position, PLAYER_RADIUS)) {
+      } else if (sweepHits(projectile, player.position, PLAYER_RADIUS * player.loadout.hullRadius)) {
         projectile.dead = true;
         // A facing eating a bolt and a bolt reaching the hull are different
         // events and have to sound like it — that distinction is the whole
@@ -1191,7 +1210,7 @@ export class Session {
     // Refits persist through death, so they are read here rather than banked
     // anywhere: the loadout is whatever the chart last agreed to, applied
     // before `reset()` so torpedo racks are already fitted when the tubes fill.
-    player.loadout = loadoutOf(this.campaign.refits);
+    player.loadout = loadoutOf(this.campaign.refits, this.campaign.era);
     player.reset();
     // After `campaign.current` has been set back to the front, because which
     // sector you are dropping into is what decides whether anyone meets you.

@@ -319,15 +319,15 @@ check("the price list is strategy-layer.md's",
   STRUCTURES.map((s) => s.cost).join() === "250,600,1600,2400" &&
   STRUCTURES.map((s) => s.runs).join() === "1,2,4,5",
   STRUCTURES.map((s) => `${s.cost}/${s.runs}`).join(" "));
-check("all six refits exist and are priced",
-  REFITS.length === 6 && REFITS.every((r) => r.cost > 0 && r.gain && r.price),
+check("all seven refits exist and are priced",
+  REFITS.length === 7 && REFITS.every((r) => r.cost > 0 && r.gain && r.price),
   `${REFITS.length} refits`);
 // Four decisions, one screen, no submenus: the list is flat and it is four
 // kinds. A nested option would show up here as a fifth kind or a missing one.
 check("there are exactly four kinds of decision",
   new Set(DECISIONS.map((d) => d.kind)).size === 4 &&
     DECISIONS.map((d) => d.kind).join(",") ===
-      "build,build,build,build,refit,refit,refit,refit,refit,refit,deploy,front",
+      "build,build,build,build,refit,refit,refit,refit,refit,refit,refit,deploy,front",
   DECISIONS.map((d) => d.kind).join(","));
 
 // ── construction takes runs, not salvage ────────────────────────────────────
@@ -410,7 +410,11 @@ const worse = REFITS.filter((spec) => {
   const fit = loadoutOf([spec.id]);
   return (
     fit.shieldCapacity < 1 || fit.shieldRegen < 1 || fit.turnRate < 1 ||
-    fit.phaserRange < 1 || fit.phaserCost > 1 || fit.regenStopsWhenHulled
+    fit.phaserRange < 1 || fit.phaserCost > 1 || fit.regenStopsWhenHulled ||
+    // The dilithium matrix's price. A bigger store that fills slower is the
+    // honest tradeoff for capacity, and this clause is what the comment above
+    // predicted would be needed the day a seventh refit landed.
+    fit.reserveRegen < 1
   );
 });
 check("every refit costs the ship something", worse.length === REFITS.length, `${worse.length} of ${REFITS.length}`);
@@ -824,6 +828,84 @@ const dropping = DECISIONS.find((d) => d.kind === "front");
 check("the drop point is offered at every sector, held or not",
   speaking.sectors.every((_, i) => intent(speaking, dropping, i).refused === null),
   "64 sectors");
+
+// ── the eras are tradeoffs, not tiers ───────────────────────────────────────
+const { ERAS, eraSpec, DEFAULT_ERA, traitsOf } = await import("../.campaign-build/chart/eras.js");
+
+check("four eras exist and are described",
+  ERAS.length === 4 && ERAS.every((e) => e.label && e.era && e.gain && e.price),
+  ERAS.map((e) => e.label).join(", "));
+
+// The baseline has to be genuinely unmodified, not a table of 1.0s that could
+// drift: it is the ship every other number in the game was tuned against.
+check("the baseline hull is unmodified",
+  DEFAULT_ERA === "constitution" && Object.keys(eraSpec("constitution").mods).length === 0,
+  `${DEFAULT_ERA} mods=${JSON.stringify(eraSpec("constitution").mods)}`);
+
+// The same rule the refits are held to, for the same reason, and asserted the
+// same mechanical way: a hull is picked once and flown for a whole war, so an
+// era that was strictly better would not be a choice, it would be the answer.
+// A fifth era added later is exactly when this stops being true quietly.
+const worseHull = ERAS.filter((spec) => {
+  if (spec.id === DEFAULT_ERA) return true;
+  const fit = loadoutOf([], spec.id);
+  return (
+    fit.shieldCapacity < 1 || fit.energyReserve < 1 || fit.reserveRegen < 1 ||
+    fit.turnRate < 1 || fit.acceleration < 1 || fit.phaserCost > 1 ||
+    fit.hullRadius > 1 || fit.hullArmour > 1
+  );
+});
+check("every era costs the ship something", worseHull.length === ERAS.length,
+  `${worseHull.length} of ${ERAS.length}`);
+
+// And each one has to actually *give* something, or it is a handicap.
+const betterHull = ERAS.filter((spec) => {
+  if (spec.id === DEFAULT_ERA) return true;
+  const fit = loadoutOf([], spec.id);
+  return (
+    fit.shieldCapacity > 1 || fit.energyReserve > 1 || fit.turnRate > 1 ||
+    fit.acceleration > 1 || fit.phaserCost < 1 || fit.hullRadius < 1 || fit.hullArmour < 1
+  );
+});
+check("every era gives the ship something", betterHull.length === ERAS.length,
+  `${betterHull.length} of ${ERAS.length}`);
+
+check("the era reaches the loadout",
+  loadoutOf([], "galaxy").energyReserve === 1.4 && loadoutOf([], "defiant").hullRadius === 0.82,
+  `galaxy reserve=${loadoutOf([], "galaxy").energyReserve} defiant radius=${loadoutOf([], "defiant").hullRadius}`);
+
+// Hull first, refits on top, and they compose rather than one winning.
+check("era and refits multiply together",
+  Math.abs(loadoutOf(["capacitor-bank"], "galaxy").energyReserve - 1.4 * 1.25) < 1e-9,
+  `${loadoutOf(["capacitor-bank"], "galaxy").energyReserve}`);
+
+// An unknown or absent era must not throw and must not silently modify the ship.
+// The spec sheet the title draws. Derived from `mods` rather than written out,
+// so the panel cannot contradict the flight model — and asserted here because the
+// one thing that *could* silently invert is the polarity: three of these figures
+// are costs when they rise, so the arithmetic sign and the colour disagree, and a
+// panel that painted a 135% target profile as good news would be worse than no
+// panel at all.
+check("every era reports the same eight figures",
+  ERAS.every((e) => traitsOf(e.id).length === 8),
+  ERAS.map((e) => traitsOf(e.id).length).join(","));
+
+check("the baseline reads as reference throughout",
+  traitsOf("constitution").every((t) => t.percent === 100 && !t.favourable),
+  traitsOf("constitution").map((t) => t.percent).join(","));
+
+const trait = (era, label) => traitsOf(era).find((t) => t.label === label);
+check("a bigger target reads as a cost",
+  trait("galaxy", "TARGET PROFILE").percent === 135 && !trait("galaxy", "TARGET PROFILE").favourable,
+  `${trait("galaxy", "TARGET PROFILE").percent}% favourable=${trait("galaxy", "TARGET PROFILE").favourable}`);
+
+check("a cheaper beam and a tougher skin read as gains",
+  trait("defiant", "BEAM DRAW").favourable && trait("nx", "DAMAGE TAKEN").favourable,
+  `beam ${trait("defiant", "BEAM DRAW").percent}%  damage ${trait("nx", "DAMAGE TAKEN").percent}%`);
+
+check("an unrecorded era flies the baseline",
+  loadoutOf([]).energyReserve === 1 && eraSpec(undefined).id === "constitution",
+  "undefined -> constitution");
 
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 process.exit(problems.length ? 1 : 0);

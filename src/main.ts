@@ -3,6 +3,7 @@ import { Stage } from "./render/Stage.js";
 import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { Backdrop, backdrop } from "./render/Backdrop.js";
+import { Planet } from "./render/Planet.js";
 import { PALETTE } from "./render/palette.js";
 import {
   buildBastion,
@@ -14,10 +15,13 @@ import {
   buildSpinner,
   buildStarbase,
   buildWarden,
+  buildPlayerHull,
 } from "./geometry/hulls.js";
 import { createGrid, createStarfield } from "./scene/environment.js";
+import { DEFAULT_ERA, ERAS, eraSpec } from "./chart/eras.js";
 import { Ship } from "./game/Ship.js";
 import { ALTITUDE, flight } from "./game/altitude.js";
+import { drawBeacons } from "./game/beacons.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
 import { LOOM, Loom, encounters } from "./game/loom.js";
@@ -60,7 +64,14 @@ const starfield = createStarfield();
 // rebuilt in place; it draws between the starfield and the grid and is pinned
 // to the camera's position every frame. See `render/Backdrop.ts`.
 const sky = new Backdrop();
-stage.scene.add(grid.object, starfield.object, trace.object, sky.object);
+/**
+ * The sector's ringed planet, and the one piece of scenery that is *not* on the
+ * backdrop. It lives in world space so its parallax and its ring's aspect are
+ * real rather than animated — see `render/Planet.ts` for why the previous two
+ * attempts at this read as fake.
+ */
+const planet = new Planet();
+stage.scene.add(grid.object, starfield.object, trace.object, sky.object, planet.object);
 
 /**
  * How stretched the sky is, 0-1, eased rather than snapped.
@@ -83,7 +94,10 @@ const HULLS = {
 };
 
 const player = new Ship();
-const playerHull = new VectorObject(HULLS.cruiser, {
+// Built at the baseline and corrected once the campaign has loaded, because the
+// campaign is read below this line and the hull has to exist before `Session` is
+// constructed with it. See the `swapPlayerHull()` call after that.
+let playerHull = new VectorObject(buildPlayerHull(DEFAULT_ERA), {
   color: PALETTE.trace,
   linewidth: 1.8,
 }).addTo(stage.scene);
@@ -146,6 +160,7 @@ const campaign = load(window.localStorage, Date.now());
 const persist = (state: Campaign): void => save(state, window.localStorage);
 
 const session = new Session(fleet, wing, loom, STARBASE_POSITION, playerHull, campaign);
+
 const presentation = new Presentation(
   session,
   player,
@@ -192,6 +207,26 @@ let commandMessage = "";
 const CAMERA_MODES = ["cockpit", "chase", "orbit"] as const;
 type CameraMode = (typeof CAMERA_MODES)[number];
 
+/**
+ * Honour a saved era, once everything `swapPlayerHull` touches actually exists.
+ *
+ * This used to sit immediately after `Session` was constructed, which looked like
+ * the right place — the hull has to exist before the session is handed one, so
+ * correcting it just after seemed natural. It threw. `swapPlayerHull` reads
+ * `settings`, declared below this line, and a `const` in its temporal dead zone
+ * is a `ReferenceError` rather than an `undefined`: module evaluation stopped, the
+ * screen stayed black, and no renderer fault was shown because the throw happened
+ * before anything was in place to catch it.
+ *
+ * It only fired for a save carrying a non-default era, which is why nothing
+ * caught it — every automated run starts from empty storage and takes the other
+ * branch. `tools/playtest.mjs` now seeds one into storage and reloads for exactly
+ * that reason.
+ */
+function adoptSavedEra(): void {
+  if ((campaign.era ?? DEFAULT_ERA) !== DEFAULT_ERA) swapPlayerHull();
+}
+
 const settings = {
   shape: "occluded" as ShapeMode,
   camera: "chase" as CameraMode,
@@ -219,7 +254,7 @@ const pressed = new Set<string>();
  * cabinet convention — but you should still be able to turn the CRT glass off
  * while admiring the title screen.
  */
-const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "l", "m", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "l", "m", "n", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
 
 /**
  * The command view's keys that only move a highlight — the two idioms of
@@ -282,10 +317,39 @@ function handleCommandKey(key: string): void {
   }
 }
 
+/**
+ * Rebuild the player's hull for the campaign's era.
+ *
+ * The geometry is baked at construction — `VectorObject` builds its edge list
+ * from the merged mesh — so changing ship means a new object rather than a new
+ * attribute. Disposed and replaced rather than kept around: four hulls held in
+ * memory to save an allocation on a keypress nobody makes twice a minute is the
+ * wrong trade, and `Session` holds the reference it was given, so it is told.
+ */
+function swapPlayerHull(): void {
+  const previous = playerHull;
+  playerHull = new VectorObject(buildPlayerHull(campaign.era ?? DEFAULT_ERA), {
+    color: PALETTE.trace,
+    linewidth: 1.8,
+  });
+  playerHull.setMode(settings.shape);
+  playerHull.group.rotation.order = "YXZ";
+  stage.scene.remove(previous.group);
+  stage.scene.add(playerHull.group);
+  session.setPlayerHull(playerHull);
+  previous.dispose();
+}
+
+// Everything `adoptSavedEra` needs exists by here: the campaign, the session, the
+// hull and `settings`. See its own comment for why the obvious earlier placement
+// was a black screen.
+adoptSavedEra();
+
 /** Applied to every VectorObject in the scene, including ones spawned later. */
 function applyShapeMode(): void {
   playerHull.setMode(settings.shape);
   starbase.setMode(settings.shape);
+  planet.setMode(settings.shape);
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
@@ -347,6 +411,28 @@ window.addEventListener("keydown", (event) => {
       // to play. Nobody has flown either, which is why it is a switch.
       flight.threeD = !flight.threeD;
       break;
+    case "n": {
+      /**
+       * Cycle the hull. In `DISPLAY_KEYS` so pressing it on the title changes
+       * the ship instead of launching a run — the trick `Y` and `L` already use.
+       *
+       * **Refused during a run**, which is the one guard this needs: an era is a
+       * set of stat multipliers as well as an outline, and swapping shields and
+       * reserve out from under a fight would be a cheat rather than a choice. It
+       * is picked between wars, which is also when it means something.
+       *
+       * Persisted, because it rides on the campaign — `kobayashi.campaign` is
+       * already the only thing this game writes to storage, so this needed no
+       * second decision about what persists.
+       */
+      if (presentation.mode === "run") break;
+      const order = ERAS.map((spec) => spec.id);
+      const at = order.indexOf(campaign.era ?? DEFAULT_ERA);
+      campaign.era = order[(at + 1) % order.length];
+      persist(campaign);
+      swapPlayerHull();
+      break;
+    }
     case "r":
       // Not while the log is up. `R` means "run again, now", and during the
       // opening log there is no run yet to repeat — so it falls through to the
@@ -502,12 +588,17 @@ function placeTitleCamera(time: number): void {
   const camera = stage.camera;
   const angle = time * 0.16;
 
+  // Pulled in from 21 units to 12. Test play said the ship and its figures "get
+  // lost on the page", and the ship was the half of that a layout change could
+  // not fix: at 21 units a hull is a thumbnail whatever the type around it does.
+  // This is the screen where you choose what you are flying, so the thing you are
+  // choosing should be the largest object on it.
   eye.set(
-    player.position.x + Math.sin(angle) * 21,
-    5.6 + Math.sin(time * 0.23) * 1.8,
-    player.position.z + Math.cos(angle) * 21,
+    player.position.x + Math.sin(angle) * 9.4,
+    2.8 + Math.sin(time * 0.23) * 0.9,
+    player.position.z + Math.cos(angle) * 9.4,
   );
-  focus.copy(player.position).setY(0.6);
+  focus.copy(player.position).setY(0.35);
 
   camera.position.copy(eye);
   camera.up.set(0, 1, 0);
@@ -650,10 +741,22 @@ function frame(now: number): void {
     // One sector per press, not per frame: `pressed` only latches the first
     // keydown of a hold, so parking a finger on `D` does not sweep the cursor
     // across the whole grid in one held breath.
-    if (pressed.has("w")) nextRow -= 1;
-    else if (pressed.has("s")) nextRow += 1;
-    else if (pressed.has("a")) nextCol -= 1;
-    else if (pressed.has("d")) nextCol += 1;
+    // Both schemes drive the cursor. The arrows used to be exempt so that an
+    // arrows-flyer could keep manoeuvring with the chart up — but that split the
+    // controls by which hand you happened to have learned, and a WASD-flyer got
+    // the manoeuvring while an arrows-flyer got it taken away. Accepting both is
+    // the version nobody has to be told.
+    //
+    // It costs the ship's helm for as long as the chart is up, and that is a
+    // *sharpening* of the locked decision rather than a breach of it. "The chart
+    // does not pause the game" is still true: waves keep arriving, ordnance keeps
+    // flying, the hull keeps taking it. What is gone is your ability to steer
+    // through any of that — so raising the chart in a firefight now costs more
+    // than it did, which is exactly what that decision says the chart is for.
+    if (pressed.has("w") || pressed.has("arrowup")) nextRow -= 1;
+    else if (pressed.has("s") || pressed.has("arrowdown")) nextRow += 1;
+    else if (pressed.has("a") || pressed.has("arrowleft")) nextCol -= 1;
+    else if (pressed.has("d") || pressed.has("arrowright")) nextCol += 1;
     if (inBounds(nextCol, nextRow)) chartCursor = indexOf(nextCol, nextRow);
   }
 
@@ -677,29 +780,39 @@ function frame(now: number): void {
     // watched for the keypress that takes it away again.
     const demo = presentation.mode === "attract" ? presentation.fly(dt) : null;
 
-    // WASD flies the ship, except while the chart is up, where the same keys
-    // step the cursor instead — see above. The arrows are never reassigned,
-    // so a player who wants to keep manoeuvring while reading the chart can.
+    // Both schemes fly the ship, and both stop flying it while the chart is up,
+    // where they step the cursor instead — see above. The arrows used to be
+    // exempt; they are not any more, because an exemption that only helps the
+    // hand you happened to learn is not a feature.
     const turn = demo
       ? demo.turn
-      : (held.has("arrowright") || (!chartActive && held.has("d")) ? 1 : 0) -
-        (held.has("arrowleft") || (!chartActive && held.has("a")) ? 1 : 0);
+      : (!chartActive && (held.has("arrowright") || held.has("d")) ? 1 : 0) -
+        (!chartActive && (held.has("arrowleft") || held.has("a")) ? 1 : 0);
     const thrust = demo
       ? demo.thrust
-      : (held.has("arrowup") || (!chartActive && held.has("w")) ? 1 : 0) -
-        (held.has("arrowdown") || (!chartActive && held.has("s")) ? 1 : 0);
+      : (!chartActive && (held.has("arrowup") || held.has("w")) ? 1 : 0) -
+        (!chartActive && (held.has("arrowdown") || held.has("s")) ? 1 : 0);
     // The engine bed reads the same thrust the flight model does, so reading
     // the map does not make the ship sound like it is still burning.
     burn = Math.max(0, thrust);
 
-    // Altitude, on one key. `Q` because it is free, because it sits directly
-    // above `A` for a WASD flyer's little finger, and because an arrows flyer's
-    // left hand is already parked one row down on Z/X/C. Deliberately *not*
-    // remapped while the chart is up, exactly as the arrows are not: it is a
-    // flight control, and pulling the chart up over a minefield is precisely
-    // when you want to still be able to climb. The demo pilot never asks for
-    // it — see `Presentation.fly`.
+    // Altitude, on two keys now. `Q` and `E` flank `W`, which is the whole
+    // argument for the pair: a WASD flyer reaches both without moving a hand,
+    // and up-left / down-right is a mapping nobody has to be told. `Q` was
+    // already chosen for sitting above `A`, and `E` is the mirror of it.
+    //
+    // The second binding was spent to buy the verb "under" — see the header of
+    // `game/altitude.ts` for what a floor cost and what had to be preserved to
+    // replace it. Holding both cancels, which `Ship.updateAltitude` handles
+    // rather than this: the flight model should decide what conflicting input
+    // means, not the reader of the keyboard.
+    //
+    // Deliberately *not* remapped while the chart is up, exactly as the arrows
+    // are not: these are flight controls, and pulling the chart up over a
+    // minefield is precisely when you want to still be able to move. The demo
+    // pilot never asks for either — see `Presentation.fly`.
     const climb = demo ? false : held.has("q");
+    const dive = demo ? false : held.has("e");
 
     // Hyperwarp: holding Shift commits to a jump at the chart cursor, wherever
     // it was last pointed. Releasing early is a refund of nothing — Session
@@ -717,7 +830,7 @@ function frame(now: number): void {
     if (alive && !dock.controlsLocked) {
       const departing = dock.clearing ? Math.min(thrust, 0) : thrust;
       player.update(
-        { turn, thrust: dock.held ? 0 : departing, climb, held: dock.held },
+        { turn, thrust: dock.held ? 0 : departing, climb, dive, held: dock.held },
         gameDt,
       );
     }
@@ -776,7 +889,8 @@ function frame(now: number): void {
       (presentation.mode !== "command" &&
         settings.camera !== "cockpit" &&
         !session.death.hidesHull));
-  starbase.group.rotation.y = time * 0.06;
+  const stationSpin = time * 0.06;
+  starbase.group.rotation.y = stationSpin;
 
   trace.begin();
   session.ordnance.draw(trace);
@@ -788,6 +902,16 @@ function frame(now: number): void {
   session.debris.draw(trace);
   session.death.draw(trace);
   session.docking.draw(trace, player);
+  // The station's approach lights. Given the hull's own rotation so they turn
+  // with the ring they sit on, and raised while the player is actually close
+  // enough to dock — which is what makes them a guide rather than a garnish.
+  drawBeacons(
+    trace,
+    STARBASE_POSITION,
+    time,
+    stationSpin,
+    MathUtils.clamp(1 - player.position.distanceTo(STARBASE_POSITION) / 90, 0, 1),
+  );
   trace.end();
 
   grid.follow(player.position.x, player.position.z);
@@ -810,6 +934,14 @@ function frame(now: number): void {
   // campaign" rule is untouched, and the cabinet showing the sky of the sector
   // you would actually launch into is the better of the two readings anyway.
   sky.show(campaign.seed, campaign.current);
+  // World-space, so it is told the sector and then left alone apart from the
+  // leash that stops the player flying into it.
+  planet.show(campaign.seed, campaign.current);
+  planet.follow(player.position);
+  // The jump's own charge drives the tear, so the sky winds up with the drive
+  // and stops the instant it lets go — no second clock to keep in step.
+  sky.warp(session.hyperwarp.phase === "charging" ? session.hyperwarp.progress : 0);
+  sky.update(dt);
   sky.follow(stage.camera);
 
   drawHud(stage.hud, {
@@ -874,6 +1006,8 @@ function frame(now: number): void {
       // off nothing leaves the plane at all.
       altitude: +player.position.y.toFixed(2),
       climbing: player.climbing,
+      diving: player.diving,
+      era: eraSpec(campaign.era ?? DEFAULT_ERA).label,
       hostileAltitude: +fleet.hostiles
         .reduce((highest, h) => Math.max(highest, h.position.y), 0)
         .toFixed(2),
