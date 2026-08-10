@@ -732,10 +732,22 @@ function frame(now: number): void {
     // One sector per press, not per frame: `pressed` only latches the first
     // keydown of a hold, so parking a finger on `D` does not sweep the cursor
     // across the whole grid in one held breath.
-    if (pressed.has("w")) nextRow -= 1;
-    else if (pressed.has("s")) nextRow += 1;
-    else if (pressed.has("a")) nextCol -= 1;
-    else if (pressed.has("d")) nextCol += 1;
+    // Both schemes drive the cursor. The arrows used to be exempt so that an
+    // arrows-flyer could keep manoeuvring with the chart up — but that split the
+    // controls by which hand you happened to have learned, and a WASD-flyer got
+    // the manoeuvring while an arrows-flyer got it taken away. Accepting both is
+    // the version nobody has to be told.
+    //
+    // It costs the ship's helm for as long as the chart is up, and that is a
+    // *sharpening* of the locked decision rather than a breach of it. "The chart
+    // does not pause the game" is still true: waves keep arriving, ordnance keeps
+    // flying, the hull keeps taking it. What is gone is your ability to steer
+    // through any of that — so raising the chart in a firefight now costs more
+    // than it did, which is exactly what that decision says the chart is for.
+    if (pressed.has("w") || pressed.has("arrowup")) nextRow -= 1;
+    else if (pressed.has("s") || pressed.has("arrowdown")) nextRow += 1;
+    else if (pressed.has("a") || pressed.has("arrowleft")) nextCol -= 1;
+    else if (pressed.has("d") || pressed.has("arrowright")) nextCol += 1;
     if (inBounds(nextCol, nextRow)) chartCursor = indexOf(nextCol, nextRow);
   }
 
@@ -759,17 +771,18 @@ function frame(now: number): void {
     // watched for the keypress that takes it away again.
     const demo = presentation.mode === "attract" ? presentation.fly(dt) : null;
 
-    // WASD flies the ship, except while the chart is up, where the same keys
-    // step the cursor instead — see above. The arrows are never reassigned,
-    // so a player who wants to keep manoeuvring while reading the chart can.
+    // Both schemes fly the ship, and both stop flying it while the chart is up,
+    // where they step the cursor instead — see above. The arrows used to be
+    // exempt; they are not any more, because an exemption that only helps the
+    // hand you happened to learn is not a feature.
     const turn = demo
       ? demo.turn
-      : (held.has("arrowright") || (!chartActive && held.has("d")) ? 1 : 0) -
-        (held.has("arrowleft") || (!chartActive && held.has("a")) ? 1 : 0);
+      : (!chartActive && (held.has("arrowright") || held.has("d")) ? 1 : 0) -
+        (!chartActive && (held.has("arrowleft") || held.has("a")) ? 1 : 0);
     const thrust = demo
       ? demo.thrust
-      : (held.has("arrowup") || (!chartActive && held.has("w")) ? 1 : 0) -
-        (held.has("arrowdown") || (!chartActive && held.has("s")) ? 1 : 0);
+      : (!chartActive && (held.has("arrowup") || held.has("w")) ? 1 : 0) -
+        (!chartActive && (held.has("arrowdown") || held.has("s")) ? 1 : 0);
     // The engine bed reads the same thrust the flight model does, so reading
     // the map does not make the ship sound like it is still burning.
     burn = Math.max(0, thrust);

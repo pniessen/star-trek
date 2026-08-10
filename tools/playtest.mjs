@@ -661,10 +661,27 @@ await page.keyboard.down("ArrowRight");
 await page.waitForTimeout(300);
 const headingAfterArrow = await page.evaluate(() => window.__player.heading);
 await page.keyboard.up("ArrowRight");
+// This used to assert the opposite. The arrows were deliberately exempt from the
+// chart so an arrows-flyer could keep manoeuvring while reading it — but that
+// handed the exemption to whichever hand the player happened to have learned, and
+// took it away from the other. Both schemes now drive the cursor and neither
+// flies, which costs the helm for as long as the chart is up. "The chart does not
+// pause the game" is untouched: waves still arrive and the hull still takes it.
 check(
-  "the arrow keys still steer while the chart is up",
-  headingAfterArrow !== headingBeforeArrow,
+  "the arrow keys stop steering while the chart is up",
+  headingAfterArrow === headingBeforeArrow,
   `${headingBeforeArrow} → ${headingAfterArrow}`,
+);
+
+// And the other half of the same change, which nothing covered before.
+const cursorBeforeArrow = await page.evaluate(() => window.__probe.chartCursor);
+await page.keyboard.press("ArrowRight");
+await page.waitForTimeout(300);
+const cursorAfterArrow = await page.evaluate(() => window.__probe.chartCursor);
+check(
+  "...and step the cursor instead",
+  cursorAfterArrow === cursorBeforeArrow + 1,
+  `cursor ${cursorBeforeArrow} → ${cursorAfterArrow}`,
 );
 
 await page.keyboard.up("Tab");
