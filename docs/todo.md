@@ -117,6 +117,33 @@ Still entirely unflown: the five `slab` fractions, `SCANNER.altitudeScale`, and
 every number in `LOOM` — see the gotcha below about why the Loom in particular
 cannot be tuned on a deployed build.
 
+**The brace** — `BRACE` in `src/game/Ship.ts`, and this one has an unusually
+sharp question attached because the mechanic has exactly one dial that decides
+whether it is interesting.
+
+- **`ceiling = 2.5`.** What one quarter may hold. It sets how strong "armoured in
+  front" actually is, and therefore whether the three empty facings are a real
+  price or a formality. Low and the brace is not worth the strip; high and facing
+  your attacker becomes the answer to everything.
+- **`decay = 0.16`** a second, about nine seconds from the ceiling back to full.
+  This is the length of the window, and the window is the mechanic: it should be
+  long enough to cover a pass and short enough that you cannot brace at the start
+  of a wave and forget about it. Measured at 0.156/s in the harness, so the
+  constant is doing what it says.
+- **`yield = 0.7`.** The conversion loss. It matters least of the three — a brace
+  leaves the donors at zero, so re-stacking is naturally starved — and it exists
+  as a backstop rather than as the brake.
+- **`minimum = 0.25`.** The refusal threshold. Too high and the key declines when
+  a player wanted it; too low and it lets them throw three facings away for
+  nothing.
+
+The question no constant answers: **does bracing and then having to keep the
+shooter on your nose read as a decision or as a straitjacket?** The whole design
+rests on that being a tactic rather than a punishment, and it cannot be settled
+from the source. Fly it against a Bastion, which is the one class slow enough to
+stay in front of you, and then against a pair of Raiders, which are the two that
+will not.
+
 **The mix** — `BUS_LEVELS`, the phaser's cadence and pitch pair, the alert's
 `FULL_THREAT`. Three to sit with first:
 

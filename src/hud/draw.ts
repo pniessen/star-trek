@@ -2,7 +2,7 @@ import { Color, MathUtils, Vector3, type PerspectiveCamera } from "three";
 import { TORPEDO } from "../game/weapons.js";
 import { PALETTE } from "../render/palette.js";
 import type { Hud } from "./Hud.js";
-import { FACINGS, type Ship } from "../game/Ship.js";
+import { BRACE, FACINGS, type Ship } from "../game/Ship.js";
 import { ALTITUDE, flight } from "../game/altitude.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, HOSTILE_NAMES, type Fleet, type Hostile } from "../game/hostiles.js";
@@ -351,7 +351,7 @@ function drawTitle(hud: Hud, view: HudView, width: number, height: number): void
     ["CLIMB / DIVE", "Q / E"],
     ["PHASERS", "SPACE"],
     ["TORPEDOES", "X"],
-    ["SHIELD", "Z"],
+    ["BRACE BOW", "Z"],
     ["WARHEAD", "C"],
     ["CHART", "HOLD TAB"],
     ["JUMP", "HOLD SHIFT"],
@@ -887,9 +887,23 @@ function diamond(cx: number, cy: number, r: number): number[] {
   ];
 }
 
-function drawShields(hud: Hud, player: Ship, cx: number, cy: number, view?: HudView): void {
-  const fed = view?.session.reinforcing ?? null;
-
+/**
+ * The four facings, and the brace.
+ *
+ * A braced quarter holds more than a facing is worth, which a gauge that tops out
+ * at full cannot say — so the surplus is drawn as a second arc outside the first,
+ * and the arc *grows* with it rather than only brightening: an arc that spans its
+ * whole quarter is a bow at the ceiling, a stub is one nearly leaked away. Both
+ * channels carry the same number because this one is read in a glance during a
+ * pass, and the stripped quarters beside it going flat is the other half of the
+ * picture.
+ *
+ * No new colour, and not amber. Amber in this HUD means *thin* — it is what a
+ * facing under 0.3 turns, and what the reserve turns when it can no longer hold
+ * you up. A brace is the opposite of thin, so it draws in cyan, brighter than
+ * full. See `PALETTE`: cyan is ours and this is the most ours thing on the gauge.
+ */
+function drawShields(hud: Hud, player: Ship, cx: number, cy: number, _view?: HudView): void {
   FACINGS.forEach((facing, index) => {
     const charge = player.shields[facing];
     const segments: number[] = [];
@@ -897,17 +911,22 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number, view?: HudV
     arc(segments, cx, cy, 34, centre - Math.PI / 4 + 0.24, centre + Math.PI / 4 - 0.24, 6);
     scratch
       .copy(charge < 0.3 ? PALETTE.amber : PALETTE.trace)
-      .multiplyScalar(0.2 + charge * 0.8);
+      // Clamped at full, so the inner arc stays the honest "how much of this
+      // facing is left" gauge it has always been and the surplus lives entirely
+      // in the outer one. Without the clamp a braced bow would simply blow out
+      // to white and read as a rendering fault.
+      .multiplyScalar(0.2 + Math.min(1, charge) * 0.8);
     hud.segments(segments, scratch);
 
-    // The quarter currently drinking the reserve gets a second arc outside the
-    // first. Four fifths of your energy can go into one of these, and which
-    // one should never be a guess.
-    if (facing === fed) {
-      const outer: number[] = [];
-      arc(outer, cx, cy, 41, centre - Math.PI / 4 + 0.18, centre + Math.PI / 4 - 0.18, 7);
-      hud.segments(outer, PALETTE.amber);
-    }
+    const surplus = (charge - 1) / (BRACE.ceiling - 1);
+    if (surplus <= 0.02) return;
+    const outer: number[] = [];
+    // Grown from the middle of the quarter outwards, so a shrinking stack pulls
+    // back toward the centre of the facing it is protecting rather than sliding
+    // off one end of it.
+    const span = (Math.PI / 4 - 0.18) * Math.min(1, surplus);
+    arc(outer, cx, cy, 41, centre - span, centre + span, 7);
+    hud.segments(outer, scratch.copy(PALETTE.trace).multiplyScalar(0.75 + surplus * 0.65));
   });
 
   hud.segments(

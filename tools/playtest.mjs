@@ -366,6 +366,90 @@ await page.keyboard.press("y");
 state = await waitFor((s) => s.flight3d === true, 3000);
 check("Y switches it back on", state.flight3d === true, `flight3d=${state.flight3d}`);
 
+// ── the brace: strip and stack ──────────────────────────────────────────────
+// Z taps rather than holds, costs no energy, and overcharges the bow past full.
+// All three of those are the decision (see `BRACE` in `Ship.ts`), and the one
+// that a keyboard cannot tell you about is the third: a gauge that clamps at 1
+// would show a working brace and a broken one identically.
+//
+// Set up with a known board — a half-empty bow and full quarters behind it — so
+// every figure below is arithmetic rather than a snapshot of a firefight. The
+// fleet is cleared for the same reason and it is not optional: the leak check
+// below watches one facing for a second and a half, and a single hostile bolt
+// landing on the bow in that window would move it further than the leak does and
+// fail a working brace. `WAVE_BREAK` gives ~2.6s before a replacement spawns,
+// which is more than this block needs.
+await page.evaluate(() => {
+  const p = window.__player;
+  window.__fleet.clear();
+  p.energy = 0.6;
+  p.shields.fore = 0.5;
+  p.shields.starboard = 1;
+  p.shields.aft = 1;
+  p.shields.port = 1;
+});
+await page.keyboard.press("z");
+await page.waitForTimeout(120);
+let brace = await page.evaluate(() => {
+  const p = window.__player;
+  return { ...p.shields, energy: p.energy };
+});
+// 0.5 + 3.0 * 0.7 = 2.6, clamped to the 2.5 ceiling. Asserted as a band because
+// the leak has had a frame or two to start pulling it back down.
+check(
+  "Z stacks the after facings into the bow, past full",
+  brace.fore > 2.3 && brace.fore <= 2.5,
+  `fore=${brace.fore}`,
+);
+// Near zero rather than zero, and the difference is passive shield regen: it
+// tops up the thinnest facing below full, so by the time the harness can read
+// the board a frame later the donors have a sliver back. Asserting `=== 0` here
+// failed on 0.0013 of starboard, which is the game working.
+check(
+  "...and strips the three that paid for it",
+  brace.starboard < 0.05 && brace.aft < 0.05 && brace.port < 0.05,
+  JSON.stringify(brace),
+);
+// The load-bearing one. A brace charged to the single pool would be a fifth
+// claimant on it, and unaffordable exactly when it is wanted.
+check("...and costs no energy", brace.energy >= 0.6, `energy=${brace.energy}`);
+await page.screenshot({ path: `${OUT}/braced.png` });
+
+// The surplus leaks, which is what keeps this a panic button and not a stance.
+// At 0.16/s from ~2.5 a second and a half is a visible fall and nowhere near the
+// floor of 1, so this distinguishes a decaying stack from both a frozen one and
+// one that collapses outright.
+//
+// Measured from a reading taken *after* the screenshot, not from the one above.
+// A screenshot costs about two seconds of wall clock and the game keeps running
+// through it, so folding it into the window made a correct 0.16/s look like
+// 0.385/s — the constant was right and the stopwatch was wrong.
+// Cleared again for the same reason as above, and this second clear is what the
+// screenshot makes necessary: two seconds is past `WAVE_BREAK`, so a replacement
+// wave has already spawned and could put a bolt into the bow mid-window.
+const braceStart = await page.evaluate(() => {
+  window.__fleet.clear();
+  return window.__player.shields.fore;
+});
+await page.waitForTimeout(1500);
+const leaked = await page.evaluate(() => window.__player.shields.fore);
+check(
+  "the braced bow leaks its surplus back toward full",
+  leaked < braceStart - 0.1 && leaked > 1,
+  `fore=${braceStart} -> ${leaked} over ~1.5s`,
+);
+
+// Refuses rather than half-works: the donors are already empty, so there is
+// nothing to move and the bow must not be touched.
+await page.keyboard.press("z");
+await page.waitForTimeout(120);
+const again = await page.evaluate(() => window.__player.shields.fore);
+check(
+  "a second brace with nothing left to strip does not spend the bow",
+  again <= leaked + 0.01,
+  `fore=${leaked} -> ${again}`,
+);
+
 // Hand the docking section a light, fresh wave rather than whatever this block
 // has been keeping alive under a hull pin — the same courtesy the hyperwarp
 // section already extends to itself, and for the same reason: what follows is

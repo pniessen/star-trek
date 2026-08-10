@@ -26,6 +26,68 @@ export type ShieldFacing = "fore" | "starboard" | "aft" | "port";
 export const FACINGS: readonly ShieldFacing[] = ["fore", "starboard", "aft", "port"];
 
 /**
+ * Strip and stack — the brace.
+ *
+ * Four facings that deplete separately is a locked decision, and turning a fresh
+ * quarter toward the shooter is meant to be the defensive skill. That skill is
+ * free and continuous, and it was the *only* thing a player could do about the
+ * shields, so there was no moment where you decided something about them. This
+ * is that moment, and there is exactly one of them: **collapse the other three
+ * facings into the bow.**
+ *
+ * Three properties, and each one is load-bearing.
+ *
+ * **It costs no energy at all.** The single pool already arbitrates thrust,
+ * height, phasers and regen; a fifth claimant would just make the brace a thing
+ * you cannot afford at precisely the moment you need it. The price here is not a
+ * spend, it is a *position* — three empty facings — and a price paid in
+ * vulnerability cannot be out-competed by a price paid in energy.
+ *
+ * **It stacks into the bow, never into "the threatened facing".** The old
+ * behaviour hunted for the thinnest quarter, on the reasoning that a player
+ * under fire should not also have to work out which one the game thinks is being
+ * shot at. That reasoning was right about the problem and wrong about the answer:
+ * a game that picks for you cannot be committed to. Choosing the bow costs
+ * nothing to explain, needs no HUD target marker, and — this is the real gain —
+ * fuses bracing with aiming. Phasers fire forward. Brace and shoot are one
+ * posture, so the tactic the brace teaches is *face the thing*, which is the
+ * skill the four facings existed to create rather than a substitute for it.
+ *
+ * **The stack overcharges, and it leaks.** Capping the bow at 1 would make
+ * bracing a fresh ship pure loss, so `ceiling` lets one quarter hold more than a
+ * facing is worth — that surplus is the whole reward. It then bleeds away at
+ * `decay`, which is what keeps this a panic button rather than a build: you brace
+ * *for the pass*, and about nine seconds later the ship is simply a ship with
+ * three empty facings. Without the leak, tapping the key on cooldown-free repeat
+ * would ratchet the bow to the ceiling and hold it there for the whole run, and a
+ * commitment you can hold indefinitely is not a commitment.
+ *
+ * `yield` below 1 is the conversion loss, and it is what stops re-stacking as you
+ * turn from being free. It matters less than it looks: a brace leaves the donors
+ * at zero, so an immediate second tap moves nothing, and passive shield regen at
+ * 0.06 a second on one facing at a time refills them far slower than the surplus
+ * drains. The loss is the backstop, not the brake.
+ */
+export const BRACE = {
+  /** Fraction of the stripped charge that arrives. The rest is the conversion loss. */
+  yield: 0.7,
+  /**
+   * The most one facing may hold, in facings. From fresh — 3.0 stripped, 2.1
+   * delivered, on top of a full bow — this clamps, which is deliberate: the
+   * strongest brace in the game is the one you throw before anything has hit you,
+   * and it should not scale with how untouched you are beyond this.
+   */
+  ceiling: 2.5,
+  /** Facings per second the surplus above 1 bleeds off. ~9s from the ceiling. */
+  decay: 0.16,
+  /**
+   * The smallest stack worth three facings. Below this the key declines instead
+   * of quietly spending everything for a sliver — see `Ship.brace`.
+   */
+  minimum: 0.25,
+} as const;
+
+/**
  * Flight on a floor, Asteroids-style: you rotate, you thrust along your facing,
  * and momentum carries you. The skill is still rotational — there is no pitch
  * input and there never will be, because both hands are already full.
@@ -209,6 +271,15 @@ export class Ship {
     }
     let regen = Ship.RESERVE_REGEN * fit.reserveRegen * dt;
 
+    // A braced bow leaks its surplus. See `BRACE`: this is the single line that
+    // keeps the brace a moment rather than a stance, and it is charged for on
+    // real seconds like everything else that decays.
+    for (const facing of FACINGS) {
+      if (this.shields[facing] > 1) {
+        this.shields[facing] = Math.max(1, this.shields[facing] - BRACE.decay * dt);
+      }
+    }
+
     // Ablative plating's price: once something has actually reached the hull,
     // the facings stop coming back until a starbase repairs it.
     const shieldsLocked = fit.regenStopsWhenHulled && this.hull < 1;
@@ -347,6 +418,33 @@ export class Ship {
 
     this.hull = Math.max(0, this.hull - throughput);
     return true;
+  }
+
+  /**
+   * Strip the three after facings and stack what survives the conversion into
+   * the bow. See `BRACE` for why it is the bow, why it costs nothing, and why
+   * the surplus leaks.
+   *
+   * **It refuses rather than half-works**, and that is not politeness. Stripping
+   * everything is the honest reading of the verb and it is what makes the *timing*
+   * of the tap a real decision — brace too early and you threw three facings away
+   * for a stack you did not need. But a bow already near the ceiling would strip
+   * all three for a sliver, and that is a trap rather than a decision: nothing
+   * about the situation tells the player the key is about to do almost nothing. So
+   * it declines below `minimum`, the same way cracking a warhead declines above
+   * `SCRAM.ceiling`, and the caller says which refusal it was.
+   */
+  brace(): "braced" | "nothing-to-stack" | "already-braced" {
+    if (BRACE.ceiling - this.shields.fore < BRACE.minimum) return "already-braced";
+
+    const donors = FACINGS.filter((facing) => facing !== "fore");
+    const stripped = donors.reduce((sum, facing) => sum + this.shields[facing], 0);
+    const gain = Math.min(stripped * BRACE.yield, BRACE.ceiling - this.shields.fore);
+    if (gain < BRACE.minimum) return "nothing-to-stack";
+
+    for (const facing of donors) this.shields[facing] = 0;
+    this.shields.fore += gain;
+    return "braced";
   }
 
   reset(): void {

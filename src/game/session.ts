@@ -30,7 +30,7 @@ import { stationName } from "../chart/naming.js";
 import { sound } from "../audio/sound.js";
 import { PALETTE } from "../render/palette.js";
 import type { VectorObject } from "../render/VectorObject.js";
-import { FACINGS, type Ship, type ShieldFacing } from "./Ship.js";
+import { type Ship } from "./Ship.js";
 import { AlertPulse, conditionOf, type Condition } from "./alert.js";
 
 /** Uniform in `[low, high]`. Used only for how long until the next Warden. */
@@ -52,8 +52,12 @@ export interface CombatInput {
   readonly thrust: boolean;
   /** Feed a torpedo to the reactor. See `SCRAM` and `handlePlayerFire`. */
   readonly scram: boolean;
-  /** Pour the reserve into the thinnest facing. See `REINFORCE`. */
-  readonly reinforce: boolean;
+  /**
+   * Strip the after facings and stack them into the bow. Tapped, not held — see
+   * `BRACE` in `Ship.ts`. It was a held trickle out of the reserve until the
+   * reserve turned out to be the wrong thing to charge.
+   */
+  readonly brace: boolean;
 }
 
 const WAVE_BREAK = 2.6;
@@ -87,30 +91,6 @@ const SCRAM = {
   energy: 0.22,
   /** Above this there is no emergency, and this stops it being a free top-up. */
   ceiling: 0.5,
-} as const;
-
-/**
- * Pouring the reserve into a facing.
- *
- * Four shields that deplete separately is a locked decision, and turning a
- * fresh quarter toward the shooter is meant to be the defensive skill — but
- * until now that was the *only* thing a player could do about them, and
- * passive regeneration runs at 0.012 a second, which is eighty-three seconds
- * for one dead facing. So the shields were a thing that happened to you.
- *
- * `prior-art.md` credits Starfleet Command and Bridge Commander with two
- * combat verbs: per-facing shields and *energy allocation*. We built the first
- * and never built the second. This is the second, in its smallest honest form.
- *
- * The rate is deliberately brutal on the reserve: a facing from nothing to
- * full costs about four fifths of everything you have, which is forty phaser
- * shots you will not be firing. Turning is still cheaper than paying.
- */
-const REINFORCE = {
-  drain: 0.45,
-  restore: 0.55,
-  /** Below this there is nothing left to give and the pumps just stop. */
-  floor: 0.02,
 } as const;
 
 /**
@@ -186,12 +166,9 @@ export class Session {
   /** Naval condition, recomputed each frame. Drives the panel and the alarm. */
   condition: Condition = "green";
   private readonly alert = new AlertPulse();
-  /**
-   * The facing currently being fed, or null. Published so the shield cluster
-   * can show where the reserve is going — a player pouring four fifths of
-   * their energy into a quarter should be able to see which quarter.
-   */
-  reinforcing: ShieldFacing | null = null;
+  // No `reinforcing` field any more. The brace publishes itself: a facing
+  // holding more than one facing's worth *is* the indicator, and the shield
+  // cluster reads it straight off the ship. See `BRACE` in `Ship.ts`.
 
   /**
    * Seconds left on the arrival card — where you are, what is here, and whether
@@ -371,7 +348,7 @@ export class Session {
       sound.alertBeat(this.alert.frequency, this.alert.components);
     }
 
-    this.handleReinforce(dt, player, input);
+    this.handleBrace(player, input);
     this.handlePlayerFire(dt, player, input);
 
     for (const hostile of this.fleet.hostiles) {
@@ -515,35 +492,27 @@ export class Session {
   // ── shooting ─────────────────────────────────────────────────────────────
 
   /**
-   * Feed the thinnest facing from the reserve, while the key is held.
+   * Strip and stack, on a tap. The arithmetic is `Ship.brace`; this is the seam.
    *
-   * Thinnest rather than the one facing the threat, deliberately: under fire a
-   * player should not also have to work out which quarter the game thinks is
-   * being shot at. The thin one is the one being shot at.
+   * Both refusals get said out loud. A key that silently does nothing is read as
+   * a key that is broken — the deck log teaches this one and a player who tries
+   * it at the wrong moment needs to be told it was the moment and not the key.
    */
-  private handleReinforce(dt: number, player: Ship, input: CombatInput): void {
-    this.reinforcing = null;
-    if (!input.reinforce || this.state === "dead") return;
-    if (player.energy <= REINFORCE.floor) return;
+  private handleBrace(player: Ship, input: CombatInput): void {
+    if (!input.brace || this.state === "dead") return;
 
-    let weakest: ShieldFacing | null = null;
-    for (const facing of FACINGS) {
-      if (player.shields[facing] >= 1) continue;
-      if (!weakest || player.shields[facing] < player.shields[weakest]) weakest = facing;
+    switch (player.brace()) {
+      case "braced":
+        this.say("SHIELDS BRACED");
+        sound.brace();
+        break;
+      case "already-braced":
+        this.say("BOW ALREADY BRACED");
+        break;
+      case "nothing-to-stack":
+        this.say("NOTHING TO STACK");
+        break;
     }
-    if (!weakest) return;
-
-    // Take the energy first and convert what was actually available, so a
-    // reserve running out mid-pour tapers rather than giving a free last tick.
-    const wanted = REINFORCE.drain * dt;
-    const spent = Math.min(wanted, player.energy - REINFORCE.floor);
-    if (spent <= 0) return;
-    player.energy -= spent;
-    player.shields[weakest] = Math.min(
-      1,
-      player.shields[weakest] + (spent / REINFORCE.drain) * REINFORCE.restore,
-    );
-    this.reinforcing = weakest;
   }
 
   private handlePlayerFire(_dt: number, player: Ship, input: CombatInput): void {
@@ -1212,7 +1181,6 @@ export class Session {
     sound.silence();
     this.alert.reset();
     this.condition = "green";
-    this.reinforcing = null;
     this.fleet.clear();
     this.loom.clear();
     this.ordnance.clear();

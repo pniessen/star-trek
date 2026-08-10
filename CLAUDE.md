@@ -34,7 +34,8 @@ alone. It never plays for the demo.
 Controls: arrows/WASD fly, **`Q` held climbs and `E` held dives; release
 either and the ship returns to the plane**, Space
 phasers, X torpedoes, `C` cracks a warhead for its charge when the reserve is
-under half, `Z` pours the reserve into the thinnest facing, R restart. `G`
+under half, **`Z` tapped strips the three after facings and stacks them into the
+bow**, R restart. `G`
 toggles wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
 **`L` turns the deck log off and back on**, **`Y` switches the altitude slab off
 and back on**, `1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics.
@@ -94,6 +95,33 @@ alternatives deliberately.
 - **One energy pool** feeds thrust, shields and weapons.
 - **Four shield facings**, depleting separately. Turning a fresh quarter toward
   the shooter is the defensive skill.
+- **Positioning is the free skill; the brace is the one deliberate action.**
+  `Z` tapped strips the three after facings and stacks what survives a 30%
+  conversion loss into the **bow**, which may then hold up to 2.5 facings' worth
+  and leaks back down to one. Four things about it are the decision, and each
+  closed off something:
+  **It costs no energy.** The single pool already arbitrates thrust, height,
+  phasers and regen, and a fifth claimant would make the brace unaffordable at
+  exactly the moment it is wanted. The price is a *position* — three empty
+  facings — and a price paid in vulnerability cannot be out-competed by one paid
+  in energy. This replaced a held trickle *out of* the reserve, which had the
+  cost pointing the wrong way.
+  **It stacks into the bow, never into "the threatened facing."** The old
+  behaviour hunted for the thinnest quarter so the player would not have to work
+  out which one the game thought was under fire — right about the problem, wrong
+  about the answer, because a game that picks for you cannot be committed to.
+  The bow needs no explanation and no target marker, and it fuses bracing with
+  aiming: phasers fire forward, so brace and shoot are one posture and the tactic
+  is *face the thing*. That is the four-facing skill sharpened, not replaced.
+  **The stack overcharges and then leaks.** A ceiling of 1 would make bracing a
+  fresh ship pure loss, so the surplus above full is the entire reward; `decay`
+  bleeds it off in about nine seconds, which is what keeps this a panic button
+  rather than a build. A commitment you can hold indefinitely is not one.
+  **It refuses rather than half-works.** Stripping everything is what makes the
+  *timing* of the tap a real decision, but a bow near the ceiling would spend all
+  three for a sliver — a trap, not a decision. So it declines below
+  `BRACE.minimum` and says which refusal it was, the way cracking a warhead
+  declines above `SCRAM.ceiling`.
 - **Phasers vs torpedoes**: instant/energy-draining/weaker with distance, versus
   limited/slow/must-be-led.
 - **No win state within a run.** Runs escalate until you die. The *campaign*
@@ -184,7 +212,8 @@ to an sRGB display and every dim trace is crushed to black.
 
 ## State
 
-Built: the renderer, combat (five hostile classes, waves, shield facings,
+Built: the renderer, combat (five hostile classes, waves, shield facings **and
+the brace that strips three of them into the bow**,
 debris that is the ship's own edge segments), **a shallow third dimension —
 two keys, a rest plane at `y = 0`, ~14 units of ceiling each way, hostiles that
 use both halves, and
@@ -235,8 +264,11 @@ sits at one fixed world position however the chart is drawn).
    and it is the block most worth flying first: it is the newest thing here and
    `Y` makes the A/B free. **The whole of `LOOM` joins it too** — `rise` above
    all, which is the one number deciding whether the encounter is interesting or
-   trivial, then `angularRate`, `radius`, `chance` and `minRadius`. Needs a human
-   at the keyboard with the speakers on.
+   trivial, then `angularRate`, `radius`, `chance` and `minRadius`. **And `BRACE`,
+   which is now the newest thing here** — `ceiling` and `decay` are the two that
+   decide whether the brace is a tactic, and the question behind them is whether
+   having to keep the shooter on your nose reads as a decision or a straitjacket.
+   Needs a human at the keyboard with the speakers on.
 2. **Campaign balance.** The command view is built and the campaign is not
    yet winnable at plausible rates — `npm run campaignlength` finds a cliff
    between five steps of ground per run (0% wins) and six (93%), with no

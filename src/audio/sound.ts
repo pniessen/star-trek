@@ -419,6 +419,44 @@ export class Sound {
   }
 
   /**
+   * Strip and stack. Three facings collapsing into one, so it is two motions in
+   * opposite directions: a sweep down as they are emptied and a note up as the
+   * bow takes the charge.
+   *
+   * On the panel bus rather than in the world, because this is the ship doing
+   * something to itself and not an event out there — the same reasoning that puts
+   * `scram` there. And short, hard, un-triumphant: this is not a power-up, it is
+   * a decision with three empty quarters behind it.
+   */
+  brace(): void {
+    // Down: the facings being stripped. Bandpass rather than lowpass so it reads
+    // as charge being moved through something rather than as a filter closing.
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "bandpass",
+      q: 4,
+      freq: 2600,
+      to: 520,
+      level: 0.1,
+      attack: 0.004,
+      decay: 0.2,
+    });
+    // Up, and landing on a fifth — the only interval in the bank that resolves,
+    // because the one thing this sound has to say is that it worked.
+    this.synth.play({
+      bus: "panel",
+      wave: "square",
+      freq: 220,
+      to: 330,
+      level: 0.07,
+      attack: 0.008,
+      decay: 0.22,
+      delay: 0.06,
+    });
+  }
+
+  /**
    * Something reached the hull, which in this game means the multiplier just
    * halved. So it is two sounds: the blow, and then a falling interval that is
    * the money leaving.
