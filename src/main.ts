@@ -3,6 +3,7 @@ import { Stage } from "./render/Stage.js";
 import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { Backdrop, backdrop } from "./render/Backdrop.js";
+import { Planet } from "./render/Planet.js";
 import { PALETTE } from "./render/palette.js";
 import {
   buildBastion,
@@ -63,7 +64,14 @@ const starfield = createStarfield();
 // rebuilt in place; it draws between the starfield and the grid and is pinned
 // to the camera's position every frame. See `render/Backdrop.ts`.
 const sky = new Backdrop();
-stage.scene.add(grid.object, starfield.object, trace.object, sky.object);
+/**
+ * The sector's ringed planet, and the one piece of scenery that is *not* on the
+ * backdrop. It lives in world space so its parallax and its ring's aspect are
+ * real rather than animated — see `render/Planet.ts` for why the previous two
+ * attempts at this read as fake.
+ */
+const planet = new Planet();
+stage.scene.add(grid.object, starfield.object, trace.object, sky.object, planet.object);
 
 /**
  * How stretched the sky is, 0-1, eased rather than snapped.
@@ -341,6 +349,7 @@ adoptSavedEra();
 function applyShapeMode(): void {
   playerHull.setMode(settings.shape);
   starbase.setMode(settings.shape);
+  planet.setMode(settings.shape);
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
@@ -925,6 +934,10 @@ function frame(now: number): void {
   // campaign" rule is untouched, and the cabinet showing the sky of the sector
   // you would actually launch into is the better of the two readings anyway.
   sky.show(campaign.seed, campaign.current);
+  // World-space, so it is told the sector and then left alone apart from the
+  // leash that stops the player flying into it.
+  planet.show(campaign.seed, campaign.current);
+  planet.follow(player.position);
   // The jump's own charge drives the tear, so the sky winds up with the drive
   // and stops the instant it lets go — no second clock to keep in step.
   sky.warp(session.hyperwarp.phase === "charging" ? session.hyperwarp.progress : 0);

@@ -519,13 +519,37 @@ function separation(one: Placement, two: Placement): number {
  * on purpose: this is a backdrop for a game about reading three contacts at
  * once, and it has to lose that fight every time.
  */
+/**
+ * Which composition a roll buys, and `ringed` is no longer among them.
+ *
+ * The ringed planet is real geometry in world space now — see `render/Planet.ts`
+ * — because a body whose whole identity is a 3D relationship could never be sold
+ * by a picture pinned to the sky, which is what both of its attempts on this
+ * backdrop proved. Keeping a flat one here as well would put two ringed planets
+ * in one sector and let the fake one undercut the real one.
+ *
+ * Its share goes to the gas giant, which is the composition that genuinely works
+ * at this distance: a giant's interest is its banding, and banding is paint.
+ *
+ * A function rather than a ternary because TypeScript narrows a `const` by its
+ * initialiser, and every remaining `composition === "ringed"` test below would
+ * then be flagged as comparing types with no overlap. The plan builder and draw
+ * path for the flat version are deliberately left standing behind that — dead but
+ * intact, so reverting this one line brings it back. Excising them is a tidy-up,
+ * not part of this change.
+ */
+function compositionFor(roll: number): SkyComposition {
+  if (roll < 0.5) return "gas-giant";
+  if (roll < 0.78) return "sun";
+  return "dual-sun";
+}
+
 function planSky(seed: number, sector: number): SkyPlan {
   const rng = makeRng(hash(seed, sector * 2 + 7));
   const bodies: BodyPlan[] = [];
 
   const roll = rng.next();
-  const composition: SkyComposition =
-    roll < 0.34 ? "gas-giant" : roll < 0.56 ? "ringed" : roll < 0.82 ? "sun" : "dual-sun";
+  const composition = compositionFor(roll);
 
   const primaryAzimuth = range(rng, 0, 360);
   // Size is drawn before elevation everywhere here, and that ordering is the
