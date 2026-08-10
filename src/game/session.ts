@@ -17,6 +17,7 @@ import {
 } from "./weapons.js";
 import { flight } from "./altitude.js";
 import { LOOM, Loom, type Spinner } from "./loom.js";
+import { DISPATCH, Dispatches } from "./dispatch.js";
 import { MINE, Minefield } from "./mines.js";
 import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
@@ -225,6 +226,8 @@ export class Session {
 
   breakTimer = WAVE_BREAK;
   message = "STAND BY";
+  /** HQ's own channel, sharing this one message row. See `game/dispatch.ts`. */
+  private readonly dispatches = new Dispatches();
   messageTimer = 2;
 
   /** Seconds until the next Warden. See `ESCORT`. */
@@ -1176,11 +1179,33 @@ export class Session {
 
     sound.wave(this.wave);
     this.say(`WAVE ${this.wave}`);
+
+    /**
+     * And HQ, sometimes, about the war the player cannot see from here.
+     *
+     * After `WAVE n` rather than before, so the two read in the order they
+     * matter: the wave is the situation in front of you, the dispatch is context
+     * for it. Held longer than a normal message because these are sentences with
+     * a place name in them — see `DISPATCH.hold`.
+     *
+     * `n` is the escalation index, the same figure the roster and the Loom read,
+     * so HQ starts talking when the sector starts being hard rather than on a
+     * clock of its own. Read-only against the campaign, which is what makes it
+     * safe while the demo is flying the throwaway one.
+     */
+    const dispatch = this.dispatches.consider(this.campaign, n, Math.random());
+    if (dispatch) {
+      this.message = dispatch;
+      this.messageTimer = DISPATCH.hold;
+    }
   }
 
   // ── misc ─────────────────────────────────────────────────────────────────
 
   restart(player: Ship): void {
+    // HQ starts a run with nothing said, so the first dispatch of a run is never
+    // suppressed by the last run's cooldown or silenced as a repeat of its news.
+    this.dispatches.reset();
     // A restart is also a mode change — the shell calls this on its way to the
     // title — so anything still ringing from the last run stops here rather
     // than being heard over a screen that has no run behind it.
