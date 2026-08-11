@@ -212,20 +212,29 @@ export const LOOM = {
 } as const;
 
 /**
- * The switch, so the game can be played without it.
+ * The switches, so the game can be played without either encounter.
  *
- * Same shape and same reasoning as `flight.threeD`: nobody has flown this, so it
- * ships as a toggle rather than as a fact, and off, the game is exactly what it
- * was — `Session.seedLoom` refuses and nothing else in the file is ever reached.
+ * Same shape and same reasoning as `flight.threeD`: nobody has flown these, so
+ * they ship as toggles rather than as facts, and off, the game is exactly what
+ * it was — `Session.seedLoom` refuses and nothing else in `loom.ts` is ever
+ * reached; `game/comet.ts`'s schedulers are pure functions with no switch of
+ * their own, so whatever calls them (Tasks 2-4) is expected to check
+ * `encounters.comet` first, the same way `Loom.open` checks `encounters.loom`.
  *
- * Deliberately **not** on a key. The control surface is full and that is a
- * documented constraint, and a display toggle for something that appears once in
- * fourteen waves would be a binding spent on a thing nobody could see the effect
- * of. Localhost gets `window.__loom.seed()` instead, which is what a harness or
- * a person actually tuning this needs: not a switch, a summons.
+ * One object rather than one flag per file: a single place to see and flip
+ * every encounter this game can turn off is the point, and a second export
+ * beside this one would be a second place to remember to check.
+ *
+ * Deliberately **not** on a key, either of them. The control surface is full
+ * and that is a documented constraint, and a display toggle for something that
+ * appears once in fourteen waves would be a binding spent on a thing nobody
+ * could see the effect of. Localhost gets `window.__loom.seed()` instead,
+ * which is what a harness or a person actually tuning this needs: not a
+ * switch, a summons.
  */
 export const encounters = {
   loom: true,
+  comet: true,
 };
 
 export type LoomPhase = "none" | "weaving" | "sealed" | "fading";

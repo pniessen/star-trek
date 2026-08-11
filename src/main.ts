@@ -25,6 +25,7 @@ import { drawBeacons } from "./game/beacons.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
 import { LOOM, Loom, encounters } from "./game/loom.js";
+import { COMET, Comet, interferenceAt, planFixture } from "./game/comet.js";
 import { Session } from "./game/session.js";
 import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
@@ -136,6 +137,16 @@ const loom = new Loom(() =>
   }).addTo(stage.scene),
 );
 
+/**
+ * The comet. Unlike `Loom`, it takes no shape factory — `Comet` builds and
+ * disposes its own rock inside `show()` rather than pooling one, because a
+ * sector ever has at most one comet standing rather than two spinners to
+ * reuse. `object` holds only the nucleus; the tail is strokes pushed straight
+ * into the shared `TraceBuffer`, drawn beside the Loom's weave below.
+ */
+const comet = new Comet();
+stage.scene.add(comet.object);
+
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
   color: PALETTE.traceDim,
@@ -159,7 +170,7 @@ const campaign = load(window.localStorage, Date.now());
  */
 const persist = (state: Campaign): void => save(state, window.localStorage);
 
-const session = new Session(fleet, wing, loom, STARBASE_POSITION, playerHull, campaign);
+const session = new Session(fleet, wing, loom, comet, STARBASE_POSITION, playerHull, campaign);
 
 const presentation = new Presentation(
   session,
@@ -353,6 +364,7 @@ function applyShapeMode(): void {
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
+  comet.setMode(settings.shape);
 }
 
 window.addEventListener("keydown", (event) => {
@@ -866,10 +878,12 @@ function frame(now: number): void {
   });
 
   // Newly spawned hostiles have to inherit the current geometry mode, and so
-  // does a Warden that arrived after the last time `G` was pressed.
+  // does a Warden that arrived after the last time `G` was pressed — and so
+  // does a comet's rock, rebuilt fresh every time `show()` plans a new one.
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
+  comet.setMode(settings.shape);
 
   playerHull.group.position.copy(player.position);
   // Pitch first about the ship's own right, then roll about its own nose —
@@ -900,6 +914,10 @@ function frame(now: number): void {
   // twenty-six filaments as objects would be a hundred and twenty-six materials
   // for something that is, in the end, a line.
   session.loom.draw(trace);
+  // The comet's tail, on the same terms: regenerated in full every call,
+  // never accumulated. `object` (the rock) is a scene child and draws itself;
+  // this is only the strokes.
+  session.comet.draw(trace);
   session.debris.draw(trace);
   session.death.draw(trace);
   session.docking.draw(trace, player);
@@ -1027,6 +1045,13 @@ function frame(now: number): void {
       loomStrands: session.loom.strands.length,
       loomSpinners: session.loom.spinners.length,
       loomEnabled: encounters.loom,
+      // The comet: which kind is standing here, if any, and how jammed the
+      // player's own position is right now — the one number that gates
+      // cloaks, fire-control and the scanner all at once. Enough for a
+      // harness to prove one is seeded, that flying into it raises the
+      // reading, and that flying back out lets it fall to zero again.
+      comet: session.comet.plan?.kind ?? null,
+      cometInterference: +interferenceAt(session.comet.plan, player.position.x, player.position.z).toFixed(3),
       torpedoes: player.torpedoes,
       debris: session.debris.count,
       mines: session.mines.count,
@@ -1159,6 +1184,28 @@ if (DEBUG_PROBE) {
       prev: () => sky.cycle(-1),
       unpin: () => sky.unpin(),
       describe: () => sky.describe(),
+    },
+    /**
+     * The comet, now wired into a run — `seed` and `model` are the session
+     * side of it, the way `__loom.seed` and `__loom.model` are. `interferenceAt`,
+     * `plan` and `constants` stay: they were never tied to the renderer or
+     * session wiring, and `plan(seed, sector)` is still the pure, un-drawn way
+     * to prove a sector's fixture is deterministic — the same sector gives the
+     * same comet twice — without flying anywhere. `plan` still fixes
+     * `sunAzimuth` at `null` deliberately, so what it returns depends on
+     * `seed`/`sector` alone; a harness wanting the real bearing a run would use
+     * reads it off `__probe.comet` instead.
+     *
+     * `seed()` drops a wanderer on the player — the same convenience
+     * `__loom.seed()` gives someone tuning `COMET.wandererChance`, who would
+     * otherwise wait for a rare roll past `COMET.earliest`.
+     */
+    __comet: {
+      interferenceAt,
+      plan: (seed: number, sector: number) => planFixture(seed, sector, null),
+      constants: COMET,
+      seed: () => session.seedComet(player),
+      model: session.comet,
     },
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.

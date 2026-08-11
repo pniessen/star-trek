@@ -1,6 +1,7 @@
 import { MathUtils, Vector3 } from "three";
 import { PALETTE } from "../render/palette.js";
 import type { VectorObject } from "../render/VectorObject.js";
+import { COMET } from "./comet.js";
 import type { Hostile } from "./hostiles.js";
 import type { Ship } from "./Ship.js";
 
@@ -135,6 +136,15 @@ export class Escort {
   /** True while `says` is the arrival hail, which sounds different from chatter. */
   hailing = false;
 
+  /**
+   * How jammed the tail is at this escort's own position, set per-frame by
+   * `Session.stepComet` from `interferenceAt` — same field, same source, same
+   * reason `Hostile.interference` exists: the tail's rule is "no instrument
+   * works", and the escort's fire control is an instrument too. Zero with no
+   * comet standing, which is what keeps `fire()`'s clamp below a no-op.
+   */
+  interference = 0;
+
   /** True once it has turned for the edge of the sector and is on its way out. */
   leaving = false;
 
@@ -216,7 +226,29 @@ export class Escort {
 
     // It chooses a target further out than it can shoot one, so it closes
     // before it opens up rather than sniping from wherever it happened to be.
-    if (target && this.cooldown <= 0 && target.position.distanceTo(this.position) < WARDEN.fireRange) {
+    //
+    // Fire-control suppression, not a ban: an escort inside the tail still
+    // flies its normal station, it just cannot pull the trigger from outside
+    // a jammed, near-visual range — the same clamp shape `hostiles.ts` uses
+    // against the player, aimed the other way. Without this a Warden parked
+    // on the comet's axis was the safe room `CLAUDE.md` rules out by name: it
+    // sat at `WARDEN.fireRange` (56) while every hostile it was shooting at
+    // was clamped to `COMET.visualRange` (22) and could not fire back.
+    //
+    // `Math.max(this.interference, target.interference)` is "either end
+    // being jammed is enough" applied to *this* engagement: `this.interference`
+    // is this escort's own position (with the player's own reading folded in,
+    // same as a hostile's), and `target.interference` is already the jammed
+    // hostile's own reading — Session sets both before this runs, so a target
+    // deep in the tail suppresses the shot even from an escort standing well
+    // outside it, and the reverse.
+    const reach = target
+      ? Math.min(
+          WARDEN.fireRange,
+          MathUtils.lerp(WARDEN.fireRange, COMET.visualRange, Math.max(this.interference, target.interference)),
+        )
+      : WARDEN.fireRange;
+    if (target && this.cooldown <= 0 && target.position.distanceTo(this.position) < reach) {
       this.cooldown = WARDEN.fireInterval;
       return target;
     }

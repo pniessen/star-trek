@@ -6,6 +6,7 @@ import { BRACE, FACINGS, type Ship } from "../game/Ship.js";
 import { ALTITUDE, flight } from "../game/altitude.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, HOSTILE_NAMES, type Fleet, type Hostile } from "../game/hostiles.js";
+import { COMET_COLOR, radiusAt } from "../game/comet.js";
 import type { Presentation } from "../game/presentation.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { drawBriefing } from "./briefing.js";
@@ -95,6 +96,59 @@ function arc(
   }
 }
 
+/**
+ * The portion of segment `(x0,z0)-(x1,z1)` inside the circle of radius `r`
+ * centred on `(cx,cz)`, or `null` if none of it is — the comet wedge's own
+ * clip, run in world space rather than on the projected screen. Clamping a
+ * projected endpoint to the tube's rim (the way an ordinary contact pins
+ * there) would bend a straight edge into a curve hugging the dial, and the
+ * wedge's edges are straight in world space (`nearRadius`/`farRadius`
+ * interpolate linearly along the tail, the same interpolation
+ * `interferenceAt` runs), so clipping has to happen before that shape is lost.
+ */
+function clipSegmentToCircle(
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  cx: number,
+  cz: number,
+  r: number,
+): [number, number, number, number] | null {
+  const dx = x1 - x0;
+  const dz = z1 - z0;
+  const fx = x0 - cx;
+  const fz = z0 - cz;
+  const a = dx * dx + dz * dz;
+  const b = 2 * (fx * dx + fz * dz);
+  const c = fx * fx + fz * fz - r * r;
+  if (a < 1e-9) return c <= 0 ? [x0, z0, x1, z1] : null;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return null;
+  const sqrtDisc = Math.sqrt(disc);
+  const t0 = Math.max(0, (-b - sqrtDisc) / (2 * a));
+  const t1 = Math.min(1, (-b + sqrtDisc) / (2 * a));
+  if (t0 > t1) return null;
+  return [x0 + dx * t0, z0 + dz * t0, x0 + dx * t1, z0 + dz * t1];
+}
+
+/**
+ * A bearing as three digits, and the only correct way to write one here.
+ *
+ * `pad` rounds and then pads, which is right for a score and wrong for a
+ * compass: it takes the modulo before rounding, so every bearing from 359.5 up
+ * displays as `360` — a reading that does not exist on any compass, appearing
+ * for half a degree of the turn, on the one instrument whose whole job is to be
+ * unambiguous about which way you are pointed. Rounding *first* and wrapping
+ * after is what makes 359.7 read `000`.
+ *
+ * Both readouts go through this, so the rose and the cluster can never disagree
+ * about the same number.
+ */
+export function compass(degrees: number): string {
+  return (Math.round(degrees) % 360).toString().padStart(3, "0");
+}
+
 function pad(value: number, width: number): string {
   return Math.max(0, Math.round(value)).toString().padStart(width, "0");
 }
@@ -154,6 +208,7 @@ export function drawHud(hud: Hud, view: HudView): void {
 
   drawScanner(hud, view, width / 2, height - 148);
   drawShields(hud, player, width / 2, 96, view);
+  drawHeading(hud, player, width / 2, 48);
   // Only when there is a slab to be in. With the switch off the panel is the
   // panel this game has always had, down to the last stroke.
   if (flight.threeD) drawAltitude(hud, player, width / 2 + 58, 96);
@@ -491,6 +546,48 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
   }
   hud.segments(ticks, PALETTE.traceDim);
 
+  /**
+   * The compass rose: what absolute bearing each quarter of the tube points at.
+   *
+   * A heading-up tube is the right choice and stays the right choice — see the
+   * header — but it only ever showed bearings *relative to your nose*, so there
+   * was no way to answer "which way am I facing" or "what bearing is that
+   * contact on", and no instrument anywhere else answered them either.
+   * `Ship.bearing` had existed the whole time and nothing drew it.
+   *
+   * The numbers rotate and the ticks do not, which is the whole idea: the mark at
+   * the top of the tube is always your nose, and the number beside it is where
+   * your nose is pointed. Read any contact's absolute bearing by interpolating
+   * between the four labels rather than by measuring an angle against nothing.
+   *
+   * Three digits, zero-padded, because a readout that changes width as it crosses
+   * 100 jitters under the eye at exactly the moment you are trying to hold a
+   * heading. That is the marine and aviation convention and it is the convention
+   * for the same reason.
+   *
+   * The quarters are dim and the nose is not. This is a rule printed on the
+   * instrument, not traffic on it — the same distinction the starbase's course
+   * line already draws, and the reason neither of them may compete with a
+   * contact.
+   */
+  const heading = player.bearing;
+  for (let i = 0; i < 4; i++) {
+    const quarter = i * 90;
+    const angle = Math.PI / 2 - (quarter * Math.PI) / 180;
+    const label = compass(heading + quarter);
+    const size = i === 0 ? 1.5 : 1.2;
+    const out = radius + (i === 0 ? 21 : 16);
+    scratch.copy(PALETTE.traceDim).multiplyScalar(i === 0 ? 1.15 : 0.55);
+    centred(
+      hud,
+      label,
+      cx + Math.cos(angle) * out,
+      cy + Math.sin(angle) * out - size * 3,
+      size,
+      scratch,
+    );
+  }
+
   // The sweep, with a short decaying trail behind it. The trail is not
   // decoration: it is how you judge when the arm is next due back over a
   // bearing, which is the timing the unresolved returns are read against.
@@ -557,6 +654,138 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       scratch,
     );
   };
+
+  /**
+   * The comet's tail: a faint wedge, drawn before any contact so the fixture
+   * reads as board rather than traffic — `docs/comet.md` §6. Without this the
+   * degraded returns `paintGhost` already draws inside the tail (`vague =
+   * max(cloak, interference)`) would be unexplained noise; the wedge is why
+   * they are honest rather than a phantom.
+   *
+   * The frustum's two long edges are straight lines in world space — the four
+   * corners below are `radiusAt(plan, 0)` and `radiusAt(plan, 1)`, the same
+   * function `interferenceAt` and `Comet.draw` call to decide what jams and
+   * what is drawn, evaluated at its own two ends — so each edge is one line
+   * segment, not a sampled curve, and it already traces exactly the boundary
+   * that test uses. `clipSegmentToCircle` cuts all four
+   * edges to the scanner's own range in world space before they are
+   * projected, which is what keeps a wedge that runs off the tube (most of
+   * them, at `COMET.fixtureLength`) ending cleanly at the rim instead of
+   * pinning to it the way an ordinary contact does.
+   */
+  const plan = session.comet.plan;
+  if (plan) {
+    const rightX = -plan.direction.z;
+    const rightZ = plan.direction.x;
+    const farX = plan.nucleus.x + plan.direction.x * plan.length;
+    const farZ = plan.nucleus.z + plan.direction.z * plan.length;
+
+    const nearRadius = radiusAt(plan, 0);
+    const farRadius = radiusAt(plan, 1);
+    const nearLeft = { x: plan.nucleus.x + rightX * nearRadius, z: plan.nucleus.z + rightZ * nearRadius };
+    const nearRight = { x: plan.nucleus.x - rightX * nearRadius, z: plan.nucleus.z - rightZ * nearRadius };
+    const farLeft = { x: farX + rightX * farRadius, z: farZ + rightZ * farRadius };
+    const farRight = { x: farX - rightX * farRadius, z: farZ - rightZ * farRadius };
+
+    // Near cap first (the coma boundary, where the wedge begins), then both
+    // long edges, then the far cap — which only ever survives the clip on a
+    // tail short enough, or close enough, for its tip to sit inside the tube.
+    const edges: [{ x: number; z: number }, { x: number; z: number }][] = [
+      [nearLeft, nearRight],
+      [nearLeft, farLeft],
+      [nearRight, farRight],
+      [farLeft, farRight],
+    ];
+    const wedge: number[] = [];
+    for (const [a, b] of edges) {
+      const clipped = clipSegmentToCircle(a.x, a.z, b.x, b.z, player.position.x, player.position.z, SCANNER.range);
+      if (!clipped) continue;
+      const p0 = project(point.set(clipped[0], 0, clipped[1]));
+      const p1 = project(point.set(clipped[2], 0, clipped[3]));
+      wedge.push(p0.x, p0.y, p1.x, p1.y);
+    }
+    // Scaled down now, and for the exact inverse of the reason the world tail
+    // was scaled up. This drew at full `COMET_COLOR` while that colour sat at
+    // l=0.30, and measured well under the rings. Test play then found the *world*
+    // tail invisible — `Stage.ts` fogs the scene 45..260, so a comet met at
+    // fighting range loses a third of its light before a stroke lands — and
+    // `COMET_COLOR` went to l=0.62 to fix it. A panel glyph is never fogged, so
+    // the value that is barely enough out there is far too much in here, and
+    // leaving this at full strength would have quietly promoted the wedge above
+    // the rings the first time the world colour moved.
+    //
+    // The ordering is the requirement, not the multiplier: the wedge stays under
+    // `PALETTE.traceDim`'s rings and under a resolved contact, because it is
+    // board and they are traffic. `0.42` is what restores the measured ratio
+    // `task-5-report.md` recorded before the world colour changed.
+    scratch.copy(COMET_COLOR).multiplyScalar(0.42);
+    hud.segments(wedge, scratch);
+
+    /**
+     * The head, homed the way the starbase is — and for the same reason, one
+     * step further out.
+     *
+     * The wedge only exists where the tail crosses the tube. A fixture's nucleus
+     * sits 150-230 units out against `SCANNER.range` of 150, and its tail points
+     * along a seeded bearing that is as often away from you as toward you, so
+     * the common case is a sector that contains a comet and a scanner with
+     * nothing on it. Test play hit that four separate times and every answer was
+     * a console command.
+     *
+     * So this borrows the fix the starbase already proved: a mark that survives
+     * the clamp to the rim, a course line under it, and brightness that *rises*
+     * with distance — clearest when the thing is off the edge and needed, gone
+     * when it is comfortably in view and not. The inversion is the point.
+     *
+     * The glyph is a tadpole: a ring for the nucleus and a stroke leaving it
+     * along the tail's own projected bearing. Deliberately not a ring alone,
+     * which is an unresolved contact, and not the starbase's ring-and-cross. The
+     * stroke is doing real work rather than decorating — it says which way the
+     * tail lies, which is the difference between flying to the head and flying
+     * into the jamming from the wrong end.
+     */
+    const nucleus = project(point.set(plan.nucleus.x, 0, plan.nucleus.z));
+    const headRange = Math.hypot(
+      plan.nucleus.x - player.position.x,
+      plan.nucleus.z - player.position.z,
+    );
+    const far = MathUtils.clamp(headRange / SCANNER.range, 0, 1) ** 1.6;
+
+    if (far > 0.02) {
+      const dx = nucleus.x - cx;
+      const dy = nucleus.y - cy;
+      const length = Math.hypot(dx, dy) || 1;
+      const to = Math.max(0, length - 10) / length;
+      scratch.copy(COMET_COLOR).multiplyScalar(0.16 + 0.3 * far);
+      hud.segments([cx + dx * 0.3, cy + dy * 0.3, cx + dx * to, cy + dy * to], scratch);
+    }
+
+    // The tail's bearing on the tube, taken from a point along it rather than
+    // from `direction` directly, so the stroke inherits the same heading-up
+    // rotation every contact does instead of needing its own copy of it.
+    const downTail = project(
+      point.set(
+        plan.nucleus.x + plan.direction.x * plan.length,
+        0,
+        plan.nucleus.z + plan.direction.z * plan.length,
+      ),
+    );
+    const tx = downTail.x - nucleus.x;
+    const ty = downTail.y - nucleus.y;
+    const span = Math.hypot(tx, ty) || 1;
+    const stalk = nucleus.clamped ? 8 : 11;
+
+    const head: number[] = [];
+    arc(head, nucleus.x, nucleus.y, nucleus.clamped ? 3 : 4, 0, Math.PI * 2, 7);
+    head.push(
+      nucleus.x + (tx / span) * 3,
+      nucleus.y + (ty / span) * 3,
+      nucleus.x + (tx / span) * stalk,
+      nucleus.y + (ty / span) * stalk,
+    );
+    scratch.copy(COMET_COLOR).multiplyScalar(0.4 + 0.55 * far);
+    hud.segments(head, scratch);
+  }
 
   /**
    * Starbase: the thing you are gambling against reaching, and the one contact
@@ -971,6 +1200,30 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number, _view?: Hud
     PALETTE.traceDim,
   );
   hud.textRight("SHIELDS", cx - 48, cy - 4, 1.5, PALETTE.traceDim);
+}
+
+/**
+ * Where the nose is pointed, in degrees, under the shield cluster.
+ *
+ * The scanner's rose already carries this number and carries it better, because
+ * there it labels a direction on a picture. This one exists because the tube is
+ * an instrument you consult and the cluster is the one you *live* in: hull,
+ * reserve, facings, height and now heading, all readable in the glance you were
+ * already making. A player holding a course should not have to look up to the
+ * top of the frame to keep it.
+ *
+ * Directly beneath the ring rather than beside it, because the two flanks are
+ * taken — the `SHIELDS` label runs leftward from `cx - 48` and the altitude tape
+ * owns `cx + 58` — and because a heading belongs with the ship's attitude rather
+ * than alongside a quantity it has nothing to do with.
+ *
+ * Same three zero-padded digits as the rose, for the same reason: a number that
+ * changes width as it crosses 100 jitters exactly when you are trying to hold it
+ * steady. Two readouts of one quantity may never disagree about their shape.
+ */
+function drawHeading(hud: Hud, player: Ship, cx: number, cy: number): void {
+  hud.textRight("HDG", cx - 8, cy, 1.5, PALETTE.traceDim);
+  hud.text(compass(player.bearing), cx + 4, cy, 1.9, PALETTE.trace);
 }
 
 /**

@@ -1,5 +1,6 @@
 import { Color, MathUtils, Vector3 } from "three";
 import { ALTITUDE, flight } from "./altitude.js";
+import { COMET } from "./comet.js";
 import { sound } from "../audio/sound.js";
 import { VectorObject } from "../render/VectorObject.js";
 import { PALETTE } from "../render/palette.js";
@@ -224,6 +225,18 @@ export class Hostile {
   /** True for the single frame the Shroud commits to a strike. */
   revealed = false;
 
+  /**
+   * How badly this contact's instruments are being jammed, 0-1. Set each frame
+   * by `Session` from the comet; not owned here, because the comet is a thing
+   * in the sector and a hostile has no idea it is in one.
+   *
+   * Deliberately *not* folded into `cloak`. That field gates `hidden()` and
+   * `shape.group.visible`, so raising it for jamming would make a hostile
+   * invisible and unhittable inside the tail — the opposite of the intent,
+   * which is that the tail is where you can finally *see* things.
+   */
+  interference = 0;
+
   private phase: "hidden" | "striking" | "veiling" = "hidden";
   private phaseTimer = 0;
   private layTimer = 0;
@@ -323,7 +336,23 @@ export class Hostile {
     // precedent it copied: the player's tubes now do the same thing, in
     // `Session.tubeAim`, for exactly the same reason. Nobody in this game has a
     // pitch axis, and nothing needs one.
-    if (this.cooldown <= 0 && !this.hidden && distance < this.spec.fireRange && aimError < 0.4) {
+    // Fire-control suppression, not navigation: the approach above is
+    // untouched, and a hostile in the tail still flies its normal station. It
+    // simply cannot pull the trigger from outside a jammed, near-visual range
+    // — the interpolation collapses toward `COMET.visualRange` as
+    // `interference` climbs, and is the old `fireRange` exactly when it is 0.
+    //
+    // Clamped to never exceed `fireRange` itself, because a lerp toward a
+    // floor only suppresses when the floor is below where you started. It is
+    // for every class but the Harrow, whose `fireRange: 0` is the one already
+    // below `COMET.visualRange` — without the clamp, jamming would be the one
+    // thing that could make it shoot, which is exactly the duel `fireRange: 0`
+    // exists to rule out.
+    const reach = Math.min(
+      this.spec.fireRange,
+      MathUtils.lerp(this.spec.fireRange, COMET.visualRange, this.interference),
+    );
+    if (this.cooldown <= 0 && !this.hidden && distance < reach && aimError < 0.4) {
       this.cooldown = this.spec.fireInterval;
       // Lead the target — a bolt aimed where you are is a bolt you outrun. The
       // solve is a plain vector subtraction and has been three-dimensional all
@@ -391,6 +420,16 @@ export class Hostile {
    * the decloak has to give you a moment to put the nose on it.
    */
   private updateCloak(dt: number, spec: CloakSpec, distance: number, aimError: number): void {
+    // The tail strips the veil outright: cloak is driven toward 0 at the same
+    // rate a strike's wind-up uses, and the phase clock is frozen rather than
+    // allowed to re-veil, so a Shroud caught here stays a hull you can shoot
+    // for as long as it stays jammed. A Shroud in the tail is a Shroud you can
+    // shoot.
+    if (this.interference > COMET.stripAt) {
+      this.cloak = Math.max(0, this.cloak - dt / spec.wind);
+      return;
+    }
+
     this.phaseTimer -= dt;
 
     switch (this.phase) {

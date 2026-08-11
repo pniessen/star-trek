@@ -119,6 +119,15 @@ export class Ship {
   impact = 0;
   /** True while the reserve is dry and the drive is running on impulse alone. */
   starved = false;
+  /**
+   * How jammed the ship's own position is, 0-1 — set by `Session.stepComet`
+   * every frame, in the same shape and for the same reason
+   * `Hostile.interference` exists (see `hostiles.ts`, Task 3). This ship does
+   * not carry a cloak for it to suppress, so the one thing it drives here is
+   * the reserve's own regeneration — see `updateEnergy`'s comment for why a
+   * *drain* alone was not enough.
+   */
+  interference = 0;
 
   /**
    * What the refits fitted between runs add up to. Set by `Session.restart`
@@ -293,7 +302,24 @@ export class Ship {
       }
     }
 
-    this.energy = MathUtils.clamp(this.energy + regen, 0, 1);
+    // Suppressed by `interference`, not the shield spend above — a comet is
+    // the reason this line exists. `docs/comet.md` §2 is one rule, "inside
+    // the tail, no instrument works", and every effect is supposed to be a
+    // consequence of it rather than an item tuned apart from it. Whatever
+    // tops the tank back up is an instrument, so jamming it is the same
+    // sentence cloak suppression and fire-control suppression already come
+    // from — draining the tank while leaving the recharge running was the
+    // weaker reading, and it was also exploitable: draining and regen scale
+    // by two *independent* multipliers (`fit.energyReserve`,
+    // `fit.reserveRegen`), so no constant on the drain alone can hold across
+    // every loadout — stack a deep reserve with a slow-regen refit and the
+    // drain can be outrun no matter how it is tuned, right when the player
+    // is best equipped to do it. Suppressing the source instead closes that
+    // at the root: a refit that raises `reserveRegen` still raises it, it
+    // just has nothing to multiply while `interference` is at its ceiling.
+    // At `interference` 0 (open space, or `Comet` fully unwired below) this
+    // is exactly the term this replaced, byte for byte.
+    this.energy = MathUtils.clamp(this.energy + regen * (1 - this.interference), 0, 1);
   }
 
   /**
@@ -460,6 +486,7 @@ export class Ship {
     this.hull = 1;
     this.torpedoes = this.torpedoCapacity;
     this.impact = 0;
+    this.interference = 0;
     this.ablative = this.loadout.ablative;
     for (const facing of FACINGS) this.shields[facing] = 1;
   }

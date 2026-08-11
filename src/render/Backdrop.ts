@@ -725,6 +725,36 @@ function planSky(seed: number, sector: number): SkyPlan {
   return { composition, bodies, band, nebula, asterisms };
 }
 
+/**
+ * The sun's azimuth for a sector, planned fresh rather than read off whatever
+ * sky happens to be built right now.
+ *
+ * `Backdrop.describe()` reports the sky the *instance* currently has up, and
+ * that is a real trap for a caller asking about a sector that instance has not
+ * rebuilt for yet. `campaign.current` moves at exactly two moments —
+ * `Session.restart` and a hyperwarp `arrive` — and both are the same frame the
+ * comet's fixture has to be planned for the sector just moved *to*; `show()`
+ * for that sector does not run until later in that same frame's `main.ts`
+ * loop. A live instance would hand back the *previous* sector's sun, silently,
+ * every single time — the tail pointing wrong forever, not just for a frame.
+ * Attract mode compounds it: the rendered `Backdrop` always shows the
+ * *player's* sector regardless of which campaign the session is bound to (see
+ * `main.ts`'s own reasoning for why `sky.show` reads `campaign` and not the
+ * session's), so a demo's comet would be planned off a sun that is not even in
+ * its sector. Going straight to `planSky` sidesteps both: it is pure in `seed`
+ * and `sector` alone, so it always answers for the sector actually asked
+ * about, whatever the live sky is currently showing.
+ *
+ * Degrees, matching `SkyBodyReport.azimuth` — the one unit `comet.ts`'s
+ * `tailDirection` accepts, with nothing to convert. Null when the sector's sky
+ * has no sun (a gas-giant or ringed-planet composition, most of the time),
+ * which is `planFixture`'s own cue to fall back to a seeded bearing instead.
+ */
+export function sunAzimuthOf(seed: number, sector: number): number | null {
+  const sun = planSky(seed, sector).bodies.find((body) => body.kind === "sun");
+  return sun ? sun.azimuth : null;
+}
+
 function clampElevation(elevation: number): number {
   return Math.max(SKY.minElevation, Math.min(SKY.maxElevation, elevation));
 }

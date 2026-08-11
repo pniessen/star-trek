@@ -74,6 +74,98 @@ await page.evaluate(() => {
   window.__stage.crt.enabled = false;
 });
 
+// ── the comet's tail-volume test ────────────────────────────────────────────
+// `interferenceAt` is a pure function with no game state behind it, so it is
+// asserted here, before a run even exists, rather than waiting for the
+// renderer and session wiring the later comet tasks add.
+const vol = await page.evaluate(() => {
+  const { interferenceAt } = window.__comet;
+  const plan = {
+    nucleus: { x: 0, y: 0, z: 0 },
+    direction: { x: 0, y: 0, z: 1 },
+    length: 400, nearRadius: 20, farRadius: 90, nucleusRadius: 8,
+  };
+  return {
+    onAxis: interferenceAt(plan, 0, 200),
+    sunward: interferenceAt(plan, 0, -200),
+    beyond: interferenceAt(plan, 0, 600),
+    outside: interferenceAt(plan, 400, 200),
+    edge: interferenceAt(plan, 54, 200),
+    none: interferenceAt(null, 0, 200),
+  };
+});
+check("the tail jams on its axis", vol.onAxis > 0.5, `v=${vol.onAxis}`);
+check("...and not sunward of the nucleus", vol.sunward === 0, `v=${vol.sunward}`);
+check("...and not past its end", vol.beyond === 0, `v=${vol.beyond}`);
+check("...and not off to the side", vol.outside === 0, `v=${vol.outside}`);
+check("...and fades toward the edge", vol.edge > 0 && vol.edge < vol.onAxis, `edge=${vol.edge} axis=${vol.onAxis}`);
+check("no comet, no interference", vol.none === 0, `v=${vol.none}`);
+
+// ── the fixture is seeded ───────────────────────────────────────────────────
+// Also pure, and checked here for the same reason: `planFixture(seed, sector,
+// null)` is deterministic in `seed` and `sector` alone. `COMET.fixtureChance`
+// is 0.25, so a single hardcoded sector would read as flaky roughly three
+// times in four — this scans forward from a fixed seed for the first sector
+// that actually rolls a fixture instead, which stays honest even if the
+// chance itself is retuned later.
+const fixtureSeeded = await page.evaluate(() => {
+  const { plan } = window.__comet;
+  const seed = 4242;
+  let sector = -1;
+  let a = null;
+  for (let s = 0; s < 64 && a === null; s++) {
+    const candidate = plan(seed, s);
+    if (candidate) {
+      sector = s;
+      a = candidate;
+    }
+  }
+  if (a === null) return { found: false };
+  const b = plan(seed, sector);
+  const repeats =
+    a.nucleus.x === b.nucleus.x &&
+    a.nucleus.z === b.nucleus.z &&
+    a.direction.x === b.direction.x &&
+    a.direction.z === b.direction.z;
+  // A neighbouring sector under the same seed: not guaranteed a fixture of its
+  // own, so any detectable difference — null, or a different nucleus — proves
+  // the point equally well. Nothing requires two different squares to agree
+  // with each other, only that each one agrees with itself.
+  const otherSector = (sector + 1) % 64;
+  const c = plan(seed, otherSector);
+  const differs = c === null || c.nucleus.x !== a.nucleus.x || c.nucleus.z !== a.nucleus.z;
+  return { found: true, sector, otherSector, repeats, differs };
+});
+check(
+  "planFixture repeats for the same seed and sector",
+  fixtureSeeded.found && fixtureSeeded.repeats,
+  JSON.stringify(fixtureSeeded),
+);
+check(
+  "...and differs for a different sector",
+  fixtureSeeded.found && fixtureSeeded.differs,
+  JSON.stringify(fixtureSeeded),
+);
+
+// ── the compass ─────────────────────────────────────────────────────────────
+// A bearing readout must never show 360, and the naive spelling does: taking
+// the modulo before rounding displays `360` for every bearing from 359.5 up.
+// Half a degree of every turn, on the one instrument whose job is to say
+// unambiguously which way you are pointed. Pure formatting, so it is asserted
+// here with the other run-independent checks.
+const bearings = await page.evaluate(async () => {
+  const { compass } = await import("/src/hud/draw.ts");
+  return [0, 5, 95, 359.4, 359.5, 359.7, 360].map((d) => compass(d));
+});
+check("a bearing is always three digits", bearings.every((b) => b.length === 3), bearings.join(" "));
+check("...and never reads 360", !bearings.includes("360"), bearings.join(" "));
+check(
+  "...and wraps to 000 rather than rounding over the top",
+  bearings[4] === "000" && bearings[5] === "000" && bearings[6] === "000",
+  `359.5=${bearings[4]} 359.7=${bearings[5]} 360=${bearings[6]}`,
+);
+check("...and pads below 100", bearings[0] === "000" && bearings[1] === "005", bearings.slice(0, 2).join(" "));
+
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
 // — the same contract `Y` has. Checked before the first run, which is also the
@@ -627,6 +719,378 @@ state = await waitFor((s) => s.wave >= 6 && s.cloaked > 0, 30000);
 check("the shroud arrives cloaked", state.cloaked > 0, `wave=${state.wave} cloaked=${state.cloaked}`);
 await page.screenshot({ path: `${OUT}/cloaked.png` });
 
+// ── the comet: a Shroud caught in the tail loses its cloak ─────────────────
+// Reuses the Shroud already established above (`state.cloaked > 0`) rather
+// than spawning a fresh one. The comet is parked directly on top of it and
+// re-parked there every tick — the hostile is still flying its own station,
+// and "on the axis" has to hold for the whole measurement, not just the
+// instant it was set up. `interferenceAt` treats the nucleus itself as
+// full-strength (`t === 0` lands inside the coma test) regardless of the
+// tail's own length or radius, so this is the shortest honest way to say "in
+// the tail" without out-flying a moving target.
+//
+// `updateCloak` strips unconditionally once `interference > COMET.stripAt` —
+// it does not care about distance, aim or the strike cycle's own phase — so
+// nothing here needs to wait for a strike window; the only clock is `wind`
+// (0.45s for the Shroud), and the poll loop lives inside one `evaluate` call
+// for the same reason the HQ dispatch check above does: real seconds, not
+// simulated ones, are what `dt`-scaled decay runs against.
+const shroudTest = await page.evaluate(async () => {
+  const target = window.__fleet.hostiles.find((h) => h.hidden);
+  if (!target) return { found: false };
+
+  const tmpl = window.__player.velocity;
+  window.__session.comet.show({
+    kind: "wanderer",
+    nucleus: target.position.clone(),
+    direction: tmpl.clone().set(0, 0, 1),
+    length: 60,
+    nearRadius: 15,
+    farRadius: 15,
+    nucleusRadius: 6,
+    drift: tmpl.clone().set(0, 0, 0),
+  });
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let cloak = target.cloak;
+  let hidden = target.hidden;
+  for (let i = 0; i < 60 && cloak >= 0.05; i++) {
+    const plan = window.__session.comet.plan;
+    if (plan) plan.nucleus.copy(target.position);
+    await wait(50);
+    cloak = target.cloak;
+    hidden = target.hidden;
+  }
+  window.__session.comet.show(null);
+  return { found: true, cloak, hidden };
+});
+check("a Shroud is on the board to jam", shroudTest.found, JSON.stringify(shroudTest));
+check(
+  "a Shroud caught in the tail loses its cloak",
+  shroudTest.found && shroudTest.cloak < 0.05,
+  JSON.stringify(shroudTest),
+);
+check(
+  "...and becomes hittable again",
+  shroudTest.found && shroudTest.hidden === false,
+  JSON.stringify(shroudTest),
+);
+
+// ── the comet: locks fail across the boundary ──────────────────────────────
+// This time the player alone stands in the tail — the nucleus is parked on
+// the ship, not on a hostile — and a non-cloaking hostile is placed well
+// outside the tail's own cone (30 units off, against a 15-unit radius) but
+// still inside its class's ordinary `fireRange`. `Session.stepComet` takes
+// the max of the player's own reading and each hostile's own
+// (`hostile.interference = Math.max(here, ...)`), so a hostile standing in
+// open space still inherits a jammed lock the instant the player is inside —
+// "either end standing in the tail is enough to blind a lock between them" is
+// the rule under test, not merely "close to the tail suppresses fire".
+//
+// A hostile with `fireRange <= COMET.visualRange` (the Harrow, by design)
+// would pass this check for the wrong reason, so the search is for a class
+// whose range is well above both 30 (the test distance) and `visualRange`
+// (22) — the swarmer's fireRange of exactly 30 is excluded too, since equal
+// is not less-than and would make the "would have fired" half of this an
+// assumption rather than a fact.
+let lockTargetFound = false;
+for (let attempt = 0; attempt < 8 && !lockTargetFound; attempt++) {
+  lockTargetFound = await page.evaluate(() => {
+    const h = window.__fleet.hostiles.find((x) => !x.spec.cloak && x.spec.fireRange > 32);
+    if (h) window.__lockTarget = h;
+    return !!h;
+  });
+  if (!lockTargetFound) {
+    await page.evaluate(() => {
+      window.__session.wave++;
+      window.__fleet.clear();
+    });
+    await page.waitForTimeout(400);
+  }
+}
+check("a hostile with real range is on the board", lockTargetFound, `found=${lockTargetFound}`);
+
+// The same block also answers the third assertion — contacts degrade on the
+// tube — by running the real `ScannerModel` class against the live player and
+// fleet, imported straight from its own module rather than reimplemented.
+// `contacts` in `hud/draw.ts` is a private instance the renderer owns, so a
+// fresh one here is the honest way to exercise production code without
+// touching a file under review elsewhere. Its sweep is simulated with fixed
+// steps rather than real waits — `ScannerModel.update` has no wall-clock
+// dependency, and 150 steps of 1/60s is 2.5s of arm rotation (a full sweep is
+// ~1.5s at `SCANNER.sweepRate`), comfortably enough for the arm to cross the
+// target's bearing at least once.
+const lockTest = lockTargetFound
+  ? await page.evaluate(async () => {
+      const target = window.__lockTarget;
+      const player = window.__player;
+      player.velocity.set(0, 0, 0);
+
+      // Every other hostile pushed well off the scanner and out of anyone's
+      // fireRange, so only the hostile under test can possibly fire or ghost.
+      for (const h of window.__fleet.hostiles) {
+        if (h === target) continue;
+        h.position.set(600, 0, 600);
+        h.velocity.set(0, 0, 0);
+      }
+
+      const tmpl = player.velocity;
+      window.__session.comet.show({
+        kind: "wanderer",
+        nucleus: player.position.clone(),
+        direction: tmpl.clone().set(0, 0, 1),
+        length: 60,
+        nearRadius: 15,
+        farRadius: 15,
+        nucleusRadius: 6,
+        drift: tmpl.clone().set(0, 0, 0),
+      });
+
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const boltsBefore = window.__session.ordnance.projectiles.filter((p) => p.kind === "bolt").length;
+
+      // Parked, aimed and cooldown-zeroed every tick: if the interference
+      // clamp were not real, this alone is enough to fire well inside the
+      // class's own `fireInterval` within a 1.5s window.
+      for (let i = 0; i < 30; i++) {
+        target.position.set(player.position.x + 30, 0, player.position.z);
+        target.velocity.set(0, 0, 0);
+        target.heading = Math.atan2(
+          player.position.x - target.position.x,
+          player.position.z - target.position.z,
+        );
+        target.cooldown = 0;
+        player.velocity.set(0, 0, 0);
+        await wait(50);
+      }
+
+      const boltsAfter = window.__session.ordnance.projectiles.filter((p) => p.kind === "bolt").length;
+
+      const { ScannerModel } = await import("/src/hud/scanner.ts");
+      const scanner = new ScannerModel();
+      for (let i = 0; i < 150 && scanner.ghosts.length === 0; i++) {
+        scanner.update(1 / 60, player, window.__fleet);
+      }
+
+      window.__session.comet.show(null);
+      window.__lockTarget = null;
+
+      return {
+        fireRange: target.spec.fireRange,
+        interference: { player: player.interference, target: target.interference },
+        boltsBefore,
+        boltsAfter,
+        ghosts: scanner.ghosts.length,
+      };
+    })
+  : null;
+check(
+  "a hostile outside the tail cannot lock a player standing inside it",
+  !!lockTest && lockTest.boltsAfter === lockTest.boltsBefore,
+  JSON.stringify(lockTest),
+);
+check(
+  "...and a non-cloaking contact still ghosts on the tube from the jamming alone",
+  !!lockTest && lockTest.ghosts > 0,
+  JSON.stringify(lockTest),
+);
+
+// ── the comet: the Warden is jammed too ─────────────────────────────────────
+// The final-branch review's top finding: `Escort` had no `interference` field
+// at all, so a Warden parked in a fixture's tail kept firing from
+// `WARDEN.fireRange` (56) while every hostile it fought was clamped to
+// `COMET.visualRange` (22) and could not fire back — the safe room
+// `CLAUDE.md` rules out by name ("hiding behind it can never be a strategy").
+//
+// The comet is centred on the escort's own spawn point with a wide coma
+// (`nucleusRadius: 40`), so `interferenceAt` reads ~1 at the escort's
+// position regardless of where the player stands — isolating this from the
+// player-position term the lock test above already covers. The target sits a
+// fixed 30 units off, inside `WARDEN.fireRange` but outside `visualRange`,
+// and is re-pinned there every tick — relative to the escort's own live
+// position, not a fixed point — because the escort's steering closes on a
+// target it cannot see is unreachable, and a closing distance would make the
+// jammed case pass for the wrong reason once it drifted under 22.
+//
+// The live game loop drives this, the same way the reserve-drain block below
+// does: `window.__session.update` is never called directly here.
+await page.evaluate(() => {
+  window.__fleet.clear();
+  window.__wing.clear();
+  window.__session.breakTimer = Infinity; // no wave spawn to contaminate the fleet mid-test
+});
+const wardenTest = await page.evaluate(async () => {
+  const player = window.__player;
+  player.velocity.set(0, 0, 0);
+  const escort = window.__wing.spawn("passing", player.position.clone(), 0);
+  const target = window.__fleet.spawn("brawler", escort.position.clone(), 0);
+
+  const tmpl = player.velocity;
+  window.__session.comet.show({
+    kind: "wanderer",
+    nucleus: escort.position.clone(),
+    direction: tmpl.clone().set(0, 0, 1),
+    length: 60,
+    nearRadius: 40,
+    farRadius: 40,
+    nucleusRadius: 40,
+    drift: tmpl.clone().set(0, 0, 0),
+  });
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const hullBefore = target.hull;
+
+  for (let i = 0; i < 30 && !target.dead; i++) {
+    escort.velocity.set(0, 0, 0);
+    target.position.set(escort.position.x + 30, 0, escort.position.z);
+    target.velocity.set(0, 0, 0);
+    escort.cooldown = 0;
+    await wait(50);
+  }
+
+  const jammed = {
+    hullBefore,
+    hullAfter: target.hull,
+    interference: { escort: escort.interference, target: target.interference },
+  };
+
+  window.__session.comet.show(null);
+  window.__fleet.clear();
+  window.__wing.clear();
+
+  // Control: identical setup, no comet — proves the harness would otherwise
+  // let the escort fire, so a null result above is the fix and not a test
+  // that never had a chance to catch anything.
+  const escort2 = window.__wing.spawn("passing", player.position.clone(), 0);
+  const target2 = window.__fleet.spawn("brawler", escort2.position.clone(), 0);
+  const openHullBefore = target2.hull;
+  for (let i = 0; i < 30 && !target2.dead; i++) {
+    escort2.velocity.set(0, 0, 0);
+    target2.position.set(escort2.position.x + 30, 0, escort2.position.z);
+    target2.velocity.set(0, 0, 0);
+    escort2.cooldown = 0;
+    await wait(50);
+  }
+  const open = { hullBefore: openHullBefore, hullAfter: target2.hull };
+
+  window.__fleet.clear();
+  window.__wing.clear();
+
+  return { jammed, open };
+});
+await page.evaluate(() => {
+  window.__session.breakTimer = 0; // hand the clock back to the wave scheduler
+});
+check(
+  "an escort inside the tail cannot fire on a target beyond COMET.visualRange",
+  wardenTest.jammed.hullAfter === wardenTest.jammed.hullBefore,
+  JSON.stringify(wardenTest.jammed),
+);
+check(
+  "...and the same setup with no comet standing is not itself the reason nothing fired",
+  wardenTest.open.hullAfter < wardenTest.open.hullBefore,
+  JSON.stringify(wardenTest.open),
+);
+
+// ── the comet: the reserve pays for standing in the tail ───────────────────
+// `window.__comet.seed()` drops a real wanderer — the same one a run gets —
+// which drifts at ~4.7 units/s (`COMET.wandererEntry * 2 / COMET.wandererDuration`,
+// there is no named constant for it). A tail moving that fast carries a fixed
+// observation point out of itself within a couple of seconds, so the player
+// is re-parked on the drifting nucleus every tick for the whole span — without
+// that, this measurement reads as "no drain", which is a mistake already made
+// once on this feature. Thrust released and full shields, the same setup the
+// altitude block above uses, so the only thing left to move the reserve is
+// the tail itself.
+await page.evaluate(() => {
+  window.__fleet.clear();
+  const p = window.__player;
+  p.velocity.set(0, 0, 0);
+  p.energy = 0.9;
+  for (const facing of ["fore", "starboard", "aft", "port"]) p.shields[facing] = 1;
+  window.__session.seedComet(p);
+  p.position.copy(window.__session.comet.plan.nucleus);
+});
+await page.evaluate(() => {
+  window.__cometPin = setInterval(() => {
+    const plan = window.__session.comet.plan;
+    const p = window.__player;
+    if (plan) p.position.copy(plan.nucleus);
+    p.velocity.set(0, 0, 0);
+  }, 80);
+});
+let cometBefore = (await probe()).energy;
+await page.waitForTimeout(1500);
+let cometAfter = (await probe()).energy;
+check(
+  "the reserve falls while parked in the tail",
+  cometAfter < cometBefore - 0.01,
+  `energy ${cometBefore} -> ${cometAfter} over ~1.5s`,
+);
+await page.evaluate(() => {
+  clearInterval(window.__cometPin);
+  delete window.__cometPin;
+});
+
+// And stops the instant the ship is not in it any more: same board, moved
+// off the tail entirely and given a fresh reserve to fall from. Passive
+// regen (see the altitude block's own comment on it) is what makes this
+// honest — without a real drain to fight, energy strictly rises.
+await page.evaluate(() => {
+  const p = window.__player;
+  p.position.set(p.position.x + 500, 0, p.position.z + 500);
+  p.velocity.set(0, 0, 0);
+  p.energy = 0.9;
+  for (const facing of ["fore", "starboard", "aft", "port"]) p.shields[facing] = 1;
+});
+cometBefore = (await probe()).energy;
+await page.waitForTimeout(1500);
+cometAfter = (await probe()).energy;
+check(
+  "...and stops outside it",
+  cometAfter > cometBefore,
+  `energy ${cometBefore} -> ${cometAfter}`,
+);
+
+// ── the comet: the switch actually governs it ───────────────────────────────
+// A full restart is the honest way to prove `encounters.comet` gates the
+// pipeline rather than merely "no plan happens to be standing" — `showComet`
+// is the one place that reads the switch, and it only ever runs at a restart
+// or a hyperwarp arrival. `window.__loom.weave` is the same `encounters`
+// singleton `Loom` is gated behind, re-exported under that name.
+await page.evaluate(() => {
+  window.__loom.weave.comet = false;
+});
+await page.evaluate(() => {
+  window.__session.restart(window.__player);
+});
+// Read straight off the live objects rather than through `waitFor`/`__probe`:
+// that snapshot is only rebuilt once per animation frame, and `restart()` runs
+// via `evaluate`, outside that frame's timing — a poll can land on it before
+// the next frame has rebuilt `__probe`, which reads as a wave still up from
+// *before* the restart. `window.__fleet` and `window.__session` are always
+// current, so polling them directly is what actually waits for the fresh wave
+// this switch is being tested against.
+let noComet = { plan: undefined, hostiles: [], player: undefined };
+for (let i = 0; i < 100 && noComet.hostiles.length === 0; i++) {
+  noComet = await page.evaluate(() => ({
+    plan: window.__session.comet.plan,
+    hostiles: window.__fleet.hostiles.map((h) => h.interference),
+    player: window.__player.interference,
+  }));
+  if (noComet.hostiles.length === 0) await page.waitForTimeout(150);
+}
+check("the switch off leaves no comet standing", noComet.plan === null, JSON.stringify(noComet.plan));
+check(
+  "...and interference stays zero on every hostile",
+  noComet.hostiles.length > 0 && noComet.hostiles.every((v) => v === 0),
+  JSON.stringify(noComet.hostiles),
+);
+check("...and on the player too", noComet.player === 0, `interference=${noComet.player}`);
+await page.evaluate(() => {
+  window.__loom.weave.comet = true;
+});
+
 await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
 // ── hyperwarp ───────────────────────────────────────────────────────────────
@@ -941,6 +1405,56 @@ check(
   "a saved hull still boots",
   rebooted.alive && !rebooted.fault && rebooted.era === chosen,
   `saved ${chosen} -> ${rebooted.era}${rebooted.fault ? " FAULT" : ""}`,
+);
+
+// ── finding a comet without a console ───────────────────────────────────────
+// A fixture's nucleus sits past `SCANNER.range` more often than not and its tail
+// points along a seeded bearing, so a sector could contain one with nothing at
+// all on the tube to say so — four separate test-play sessions ended in a console
+// command. These pin the two answers that fixed it. Last in the file because the
+// first walks the campaign's own `front` to reach chosen sectors.
+const found = await page.evaluate(() => {
+  const c = window.__campaign;
+  const has = (i) => !!window.__comet.plan(c.seed, i);
+  const all = [...Array(64).keys()];
+  const read = (sector) => {
+    c.front = sector;
+    c.current = sector;
+    window.__presentation.enter("title");
+    window.__presentation.startRun();
+    const at = window.__campaign.current;
+    return {
+      at,
+      has: has(at),
+      named: window.__presentation.briefing.lines.some((l) => l.text.includes("COMET")),
+    };
+  };
+  return {
+    with: read(all.find(has)),
+    without: read(all.find((i) => !has(i))),
+    // A debug hook that cannot say whether it worked is one you cannot trust:
+    // this used to return void, so the console printed `undefined` and read as
+    // a failed call.
+    seeded: (() => {
+      const plan = window.__comet.seed();
+      return plan ? plan.kind : null;
+    })(),
+  };
+});
+check(
+  "the deck log names a comet in a sector that has one",
+  found.with.has && found.with.named,
+  `sector ${found.with.at} has=${found.with.has} named=${found.with.named}`,
+);
+check(
+  "...and stays quiet in a sector that does not",
+  !found.without.has && !found.without.named,
+  `sector ${found.without.at} has=${found.without.has} named=${found.without.named}`,
+);
+check(
+  "seeding a comet hands back the plan rather than undefined",
+  found.seeded === "wanderer",
+  `returned ${found.seeded}`,
 );
 
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");

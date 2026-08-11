@@ -1,0 +1,861 @@
+import { BufferAttribute, Color, Group, IcosahedronGeometry, SRGBColorSpace, Vector3 } from "three";
+import { makeRng, type Rng } from "../chart/rng.js";
+import type { TraceBuffer } from "../render/TraceBuffer.js";
+import { VectorObject } from "../render/VectorObject.js";
+
+/**
+ * The comet — *Balance of Terror* (TOS, 1966), where an ionised tail is the
+ * only reason a cloaked enemy is ever findable. This game already owns both
+ * halves of that scene: the Shroud is a cloaker whose whole identity is
+ * *never resolves*, and until now nowhere on the board was worth fighting in.
+ * See `docs/comet.md` for the full design; this file is §2, §4 and §7 of it.
+ *
+ * **The rule, in one sentence: inside the tail, no instrument works.** Every
+ * later consequence — cloaks failing, locks refusing to cross the boundary,
+ * the scanner degrading contacts to unresolved returns — is downstream of
+ * this file answering one question: *how jammed is this point in space*, as
+ * a single number from 0 to 1. `interferenceAt` is that question and nothing
+ * else lives here yet; the hostile-facing rules, the drain and the renderer
+ * are Tasks 2 through 4.
+ *
+ * **Two schedules, one class.** A *fixture* is seeded per sector exactly the
+ * way `Planet.ts` places the ringed giant — same technique, different hash,
+ * so the two are not correlated — and is terrain a run is planned around: a
+ * sector worth choosing to intercept in, which is the first time the chart
+ * has had a reason to care what a square contains beyond threat and yield. A
+ * *wanderer* is a rare, short-lived crossing rolled at a wave break, the way
+ * a Loom is: an opportunity taken or missed rather than terrain held. They
+ * share this file's constants, its tail-volume test and its type, because
+ * anything else would be the same feature built twice.
+ *
+ * **Why `interferenceAt` is 2D.** The slab is ±14 units either side of
+ * `y = 0`; a tail is hundreds of units long. A cylinder that tested height
+ * would be indistinguishable from one that did not at any range a player
+ * could tell the difference from the cockpit, so the honest version is also
+ * the cheap one: a test on `x, z` alone, exactly as `Ship.facingFrom` treats
+ * the four shield facings as a ring rather than a sphere for the same reason.
+ */
+
+export type CometKind = "fixture" | "wanderer";
+
+/**
+ * One comet, wherever it came from. `kind` is carried on the plan rather than
+ * inferred from which function built it, because the renderer and the session
+ * rules (Tasks 2-4) read a plan without caring which scheduler produced it —
+ * a fixture and a wanderer are the same object at different scale.
+ */
+export interface CometPlan {
+  kind: CometKind;
+  /** World position of the nucleus, on the floor (`y = 0`) like everything
+   * else that is a place rather than a ship — see `CLAUDE.md`'s conventions. */
+  nucleus: Vector3;
+  /** Unit vector the tail streams along, away from the sector's sun. */
+  direction: Vector3;
+  /** Tail length along `direction`, in world units. */
+  length: number;
+  /** Tail radius at the nucleus end of the cone. */
+  nearRadius: number;
+  /** Tail radius at the far end of the cone. */
+  farRadius: number;
+  /** Radius of the coma — the sphere of interference around the nucleus
+   * itself, so the head is not a hole in the middle of its own tail. */
+  nucleusRadius: number;
+  /** World units per second the nucleus moves. Zero for a fixture that has
+   * not been given one yet is a valid plan; both schedulers below set it. */
+  drift: Vector3;
+}
+
+/**
+ * Every number the comet is. First-draft guesses of exactly the same species
+ * as `LOOM`'s — reasoned about, never flown, and on the tuning list in
+ * `docs/todo.md` once one exists for this feature. All of them are defined
+ * here even though this task's code only reads the first four, because one
+ * constant block that Tasks 2-4 read without adding a second export is the
+ * point of writing it this way.
+ */
+export const COMET = {
+  // ── the tail-volume test (this file, `interferenceAt`) ──────────────────
+
+  /**
+   * Fraction of the tail's length that stays at full strength before the
+   * far-end fade begins. A comet's tail is dense through most of its body and
+   * only thins near the tip, so this is closer to 1 than to 0.5 — the fade is
+   * the last third of the cone, not half of it.
+   */
+  solidFraction: 0.65,
+  /**
+   * The far-end fade never multiplies interference below this, even right at
+   * the tip. Without a floor the last few units before `length` would carry a
+   * reading so faint it is indistinguishable from open space, and the
+   * boundary has to *look* interfered with — a quiet scanner reading as an
+   * empty sector is the lie §3 of the design rules out.
+   */
+  tipFloor: 0.2,
+  /**
+   * Ceiling multiplier at the densest point of the tail. Kept at 1 so the
+   * core reaches the same top of the 0-1 range `hostiles.ts`'s `cloak` field
+   * already uses — the two are meant to converge on one scanner grammar (see
+   * `docs/comet.md` §7), and a comet that could not reach what a cloak
+   * reaches would never fully mask a contact standing in it.
+   */
+  strength: 1,
+  /**
+   * The interference value above which fire-control and cloaks are treated
+   * as *inside*, not merely degraded — the boundary consequences in §2 of the
+   * design key off. Set at the halfway point of the 0-1 range `interferenceAt`
+   * returns — a plain midpoint guess, not derived from `hostiles.ts`'s own
+   * `HIDDEN_AT` threshold on `cloak` (0.4), which is a different number for a
+   * different question and is not meant to match this one. Unused until
+   * Task 2 wires the hostile side of the rule.
+   */
+  stripAt: 0.5,
+
+  // ── the fixture — seeded per sector, `planFixture` ───────────────────────
+
+  /**
+   * Chance a given sector's seed produces a fixture. Roughly one in four per
+   * the design (§4): common enough that a run meets one, rare enough that a
+   * comet in every sector would be furniture rather than a place worth
+   * choosing. Same shape as `Planet.ts`'s inline roll, pulled out here
+   * because this constant is the one later tasks and `docs/todo.md` need to
+   * find without reading the function.
+   */
+  fixtureChance: 0.25,
+  /**
+   * Tail length for a fixture. Was 420 — "hundreds long" per the design —
+   * until code review caught what that number actually does against
+   * `Stage.ts`'s scene fog, which runs 45..260: a 420-unit tail has its
+   * outer 40% fogged to pure black no matter how it is drawn, so most of the
+   * length was never visible from any distance a player would stand at. 170
+   * (with `fixtureScaleJitter` this ranges 119-221) keeps the whole cone
+   * substantially inside the fog range with margin to spare, so the tail has
+   * a visible end a player can actually judge. It is still an enormous
+   * region against the game's own engagement ranges (14-78, `PHASER
+   * .falloffEnd` at 78) — a shorter tail here is not a smaller encounter.
+   */
+  fixtureLength: 170,
+  /** Tail radius at the nucleus, for a fixture. */
+  fixtureNearRadius: 26,
+  /** Tail radius at the far end, for a fixture. Wide: this is the large,
+   * planned-around instance of the class, not the one you stumble across. */
+  fixtureFarRadius: 105,
+  /** Coma radius for a fixture's nucleus. */
+  fixtureNucleusRadius: 11,
+  /**
+   * How far a fixture's scale is allowed to jitter off 1, seeded per sector —
+   * the same reason `Planet.ts` varies its own `scale`: identical instances
+   * in every sector that rolls one would be furniture twice over.
+   */
+  fixtureScaleJitter: 0.3,
+  /**
+   * Distance band from sector centre a fixture's nucleus is placed at. The
+   * floor is past a wave's own spawn ring (`LOOM.radius` reasons about the
+   * same 95-140 unit band) so the comet is never simply where the fight
+   * already is.
+   *
+   * The ceiling was 340 and was wrong: `tailDirection` picks the tail's
+   * bearing independently of `placeBearing`, so the worst case is a tail
+   * pointing straight back out along the placement ray, and in that case
+   * length buys nothing — the nucleus is the closest point the tail assembly
+   * ever gets to the centre, at exactly `distance`. A fixture placed near the
+   * old ceiling was therefore, at worst, not the 340-119=221-unit-tail
+   * discovery `fixtureLength` implied but a bare rock sitting 340 out against
+   * a 150-unit `SCANNER.range` and a 260-unit fog far plane — past both, and
+   * `docs/comet.md` §6 is explicit that a region no instrument can reach is
+   * one that does not exist.
+   *
+   * 230 keeps that same worst case closer to reach than 340 did, without
+   * pretending to a precision this file does not have: nothing bounds where
+   * the player actually is when a fixture might be found —
+   * `Session.spawnWave` recentres each wave's ring on the player's *current*
+   * position, not on sector centre, so "how close does the player tend to be
+   * to the origin" is not a number this codebase tracks anywhere. What is
+   * true without assuming that: 230 sits inside the 260-unit fog far plane
+   * with margin, where 340 did not, and it is close enough to
+   * `SCANNER.range` (150) that a player who has closed even a modest
+   * distance toward it — rather than the whole 190-unit gap the old ceiling
+   * left — reaches scanner range. The floor is untouched — it was never the
+   * problem. Whether 230 is actually close enough for a fixture to be found
+   * in ordinary play, as opposed to merely closer, is unverified and belongs
+   * with the rest of `COMET`'s constants in `docs/todo.md` — see the
+   * discoverability entry there.
+   */
+  fixtureRangeMin: 150,
+  fixtureRangeMax: 230,
+  /**
+   * World units per second a fixture's nucleus drifts. Slow, on purpose —
+   * "terrain you plan around" (design §4) means the tail should still be
+   * roughly where it was found a wave later, sweeping the sector over the
+   * course of a whole run rather than crossing it in one.
+   */
+  fixtureDrift: 1.6,
+
+  // ── the wanderer — rolled at a wave break, `planWanderer` ────────────────
+
+  /**
+   * Chance at a wave break that a wanderer crosses, checked the way
+   * `LOOM.chance` is. Rarer than the Loom's 0.1: the design (§4) flags the
+   * wanderer as the half of this feature at risk of reading as a second Loom,
+   * and the cheapest way to keep the two from competing for the same "rare
+   * thing arrived" moment is to make this one arrive less often.
+   */
+  wandererChance: 0.06,
+  /**
+   * Escalation index — `wave + threat - 1`, same number `LOOM.earliest`
+   * reads — below which a wanderer never rolls. Lower than the Loom's 4: this
+   * is an opportunity rather than a hazard, so there is less reason to wait
+   * for a flying habit before offering it.
+   */
+  earliest: 3,
+  /** Seconds a wanderer takes to cross the sector and leave — "within a
+   * couple of minutes" per the design. */
+  wandererDuration: 110,
+  /** How far out on each side of its crossing point a wanderer starts and
+   * ends, in world units. Half of `wandererDuration` times its implied speed
+   * is what a player actually has to reach it inside. */
+  wandererEntry: 260,
+  /** Tail length for a wanderer. Shorter than a fixture's — "smaller, denser,
+   * shorter" per the design (§4). */
+  wandererLength: 190,
+  /** Tail radius at the nucleus, for a wanderer. */
+  wandererNearRadius: 14,
+  /** Tail radius at the far end, for a wanderer. */
+  wandererFarRadius: 46,
+  /** Coma radius for a wanderer's nucleus. */
+  wandererNucleusRadius: 6,
+
+  // ── the cost and the render (§5, §6 of the design; Tasks 2 and 4) ────────
+
+  /**
+   * Reserve drained per second while inside the tail, before the reserve's
+   * own scaling (`Session.stepComet` divides by `fit.energyReserve`, the same
+   * way every other draw on the pool does). §5 of the design is explicit
+   * about the job this number has: without a cost the tail is a safe room,
+   * because nothing can lock you inside it, and the drain is the brake on
+   * camping it — but it is no longer the *whole* brake, which is what let
+   * this number come back down.
+   *
+   * Two things this was priced against and rejected, in order. First,
+   * `ALTITUDE.drain` (0.038) — the wrong neighbour: altitude is a burst held
+   * for a few seconds of a pass, and "an order more forgiving" than that
+   * left an earlier draft at 0.015, *below* `Ship.RESERVE_REGEN` (0.016), so
+   * a stationary ship at full interference netted positive energy — the
+   * exact camping the drain exists to prevent. Raised to 0.03 to clear
+   * regen, that held for the baseline loadout and broke again at the
+   * top of the refit tree: Galaxy era (1.4×) stacked with a capacitor
+   * bank and a dilithium matrix reaches `energyReserve` 2.8× while
+   * `reserveRegen` falls to 0.65×, and `0.03 / 2.8 − 0.016 × 0.65 ≈
+   * +0.0003`/s — net positive again, for exactly the late-campaign
+   * player best equipped to find it. No single value of this constant
+   * can hold across every loadout, because the drain scales by
+   * `energyReserve` and regen scales by `fit.reserveRegen` — two
+   * independent multipliers with no fixed relationship between them.
+   *
+   * So the drain stopped being the only mechanism: `Ship.updateEnergy` now
+   * scales the reserve's own passive regen down by `interference`, to
+   * nothing at the ceiling — see that method's comment for why this is also
+   * the more honest reading of §2 ("no instrument works") rather than a
+   * second patch. With regen no longer in the race, this constant only has
+   * to be a real clock on its own: 0.02 gives roughly −0.02/s at rest at
+   * baseline (a full reserve in ~50s) and −0.0071/s at the 2.8× stack
+   * (~140s) — both real, both falling, and the ratio between them is just
+   * the tank ratio, which is the honest amount a reserve refit should help.
+   */
+  drain: 0.02,
+  /**
+   * Range inside the tail a hostile must close to before it may fire once
+   * long-range lock fails — §2's second consequence. Set below
+   * `PHASER.falloffStart` (26) so a fight inside the tail is visibly closer
+   * and more dangerous than the open-sector norm, not merely blinder. Unused
+   * until Task 2.
+   */
+  visualRange: 22,
+  /** Units per second the tail's streaming strokes drift along its axis, for
+   * the renderer. Purely cosmetic; unused until Task 4. */
+  flow: 18,
+  /**
+   * Filaments in the plume, and segments in each.
+   *
+   * This replaced 500 loose motes, and the reason is the whole shape of the
+   * thing. Each mote was an independent equal-length dash, all of them parallel
+   * to the axis and scattered uniformly through the cone — which is a *particle
+   * field*, and a particle field is what it read as: test play called it "a
+   * collection of vector lines" that "doesn't have the visual effect one expects
+   * from a comet". More of them would not have fixed it. Density was never the
+   * problem; continuity was.
+   *
+   * A filament is a chain of connected segments streaming down the tail, so the
+   * eye follows a line of gas instead of counting specks. `Backdrop.buildNebula`
+   * already reached the same answer for the same reason and is the precedent —
+   * and it also recorded the trap, which is that a flow varying over the *patch*
+   * rather than over each *filament* draws circles instead of streams.
+   *
+   * 60 × 13 is 780 at the absolute ceiling, against `TraceBuffer`'s 5000 shared
+   * game-wide — but segments outside the tail are skipped rather than drawn, so
+   * the true per-frame cost is lower and only one comet ever stands at once.
+   */
+  filaments: 84,
+  filamentSegments: 13,
+  /**
+   * How much of the tail's length one filament spans, as a fraction, before the
+   * per-filament jitter. Short enough that several overlap at any point along
+   * the axis — that overlap is what makes a plume look continuous rather than
+   * combed — and long enough to read as a stroke rather than a dash.
+   */
+  filamentSpan: 0.34,
+  /**
+   * Radians a filament turns about the axis over its whole span. Small: this is
+   * the difference between gas that is streaming and gas that is being stirred,
+   * and a comet tail is the first of those. Zero would make every filament a
+   * perfectly straight radial line and put the combed look straight back.
+   */
+  swirl: 0.5,
+  /**
+   * Exponent biasing filaments toward the axis. Above 1 crowds the core and
+   * thins the envelope, which is what gives the plume a soft edge instead of the
+   * visible cone boundary a uniform distribution draws. The boundary itself is
+   * still exactly `radiusAt` — this only decides where the gas sits inside it.
+   */
+  coreBias: 1.9,
+} as const;
+
+/**
+ * The tail's radius at a point `along` its length, 0 at the nucleus rising to
+ * 1 at the tip. One function rather than three copies of the same lerp: the
+ * boundary `interferenceAt` tests, the cone `Comet.draw` streams motes inside
+ * of, and the wedge `hud/draw.ts` paints on the scanner all have to trace the
+ * *same* taper, or changing the shape here silently desyncs what jams from
+ * what is drawn. A pure refactor — the taper is still linear, only written
+ * once now.
+ */
+export function radiusAt(plan: CometPlan, along: number): number {
+  return plan.nearRadius + (plan.farRadius - plan.nearRadius) * along;
+}
+
+/**
+ * How jammed a point in space is, 0 outside the tail rising to `COMET.strength`
+ * on the axis. A 2D test on `x, z` alone — see the header for why height is
+ * deliberately never read.
+ *
+ * `plan` is nullable so callers can pass a sector's comet straight through
+ * without a guard at every call site, the same convenience `Loom.aim` and
+ * the minefield's own queries take.
+ */
+export function interferenceAt(plan: CometPlan | null, x: number, z: number): number {
+  if (!plan) return 0;
+  const vx = x - plan.nucleus.x;
+  const vz = z - plan.nucleus.z;
+  // Along the tail. Negative is sunward of the nucleus, where there is no tail.
+  const t = vx * plan.direction.x + vz * plan.direction.z;
+  if (t < -plan.nucleusRadius || t > plan.length) return 0;
+
+  const px = vx - plan.direction.x * t;
+  const pz = vz - plan.direction.z * t;
+  const perp = Math.hypot(px, pz);
+
+  // The coma: a sphere of interference around the nucleus itself, so the head is
+  // not a hole in the middle of its own tail.
+  if (t < 0) return perp < plan.nucleusRadius ? 1 : 0;
+
+  const along = t / plan.length;
+  const radius = radiusAt(plan, along);
+  if (perp > radius) return 0;
+
+  // Falls off toward the edge and toward the far end, so the boundary is a
+  // gradient rather than a wall the player can stand one unit outside of.
+  const across = 1 - perp / radius;
+  const fade = 1 - Math.max(0, (along - COMET.solidFraction) / (1 - COMET.solidFraction));
+  return Math.min(1, across * Math.max(COMET.tipFloor, fade) * COMET.strength);
+}
+
+/**
+ * Degrees to radians, matching `Backdrop.ts`'s own `DEG` — needed because
+ * `sunAzimuth` below is degrees (see `tailDirection`) while every bearing this
+ * file computes for itself (`planFixture`'s placement and drift, a seeded
+ * fallback) is radians, the same mix `Backdrop.ts` lives with throughout.
+ */
+const DEG = Math.PI / 180;
+
+/** Unit vector for a world bearing in radians, matching `Planet.ts`'s own `sin`/`cos` pairing. */
+function bearingVector(bearingRadians: number): Vector3 {
+  return new Vector3(Math.sin(bearingRadians), 0, Math.cos(bearingRadians));
+}
+
+/**
+ * The tail's own axis: away from the sun.
+ *
+ * `sunAzimuth`, when given, is **degrees**, not radians — it is only ever
+ * going to be `SkyBodyReport.azimuth` (`render/Backdrop.ts`), which is
+ * documented there as degrees clockwise from +Z (`atan2(x, z)`, azimuth 0 is
+ * dead ahead at heading 0) and is converted through that file's own `DEG`
+ * at every use. Taking degrees here means Task 4 can pass
+ * `sunAzimuthOf(sky)` straight through with nothing to convert and nothing
+ * to get wrong; taking radians would have made every wired-up tail point at
+ * a wrong bearing with nothing to throw and catch it.
+ *
+ * Pointing the tail at the sun's opposite bearing is pointing it away from
+ * the sun. A sky with no sun (`sunAzimuth === null`) has nothing to point
+ * away from, so a seeded bearing (already radians — this file's own, not
+ * the sky's) stands in. Nothing calls this with a real azimuth yet; that
+ * wiring is Task 4.
+ */
+function tailDirection(rng: { next(): number }, sunAzimuth: number | null): Vector3 {
+  if (sunAzimuth === null) return bearingVector(rng.next() * Math.PI * 2);
+  return bearingVector((sunAzimuth + 180) * DEG);
+}
+
+/**
+ * One sector's comet, or none. Deterministic in `seed` and `sector` alone —
+ * the same sector gives the same comet twice, which is what lets a run's
+ * chart and its combat agree on where the terrain is.
+ *
+ * The hash mix is deliberately not `Planet.ts`'s (`seed * 2654435761 +
+ * sector * 40503 + 977`): reusing it would correlate a sector's comet with
+ * its ringed planet, so the same square always paired the same two things,
+ * which is exactly the furniture problem `planPlanet`'s own comment warns
+ * against for a planet alone.
+ *
+ * `sunAzimuth` is degrees, not radians — see `tailDirection` for why that is
+ * the unit and not a stylistic choice.
+ */
+export function planFixture(seed: number, sector: number, sunAzimuth: number | null): CometPlan | null {
+  const rng = makeRng((sector * 2246822519 + seed * 3266489917 + 668265263) >>> 0);
+  if (rng.next() > COMET.fixtureChance) return null;
+
+  const scale = 1 + (rng.next() * 2 - 1) * COMET.fixtureScaleJitter;
+  const placeBearing = rng.next() * Math.PI * 2;
+  const distance = COMET.fixtureRangeMin + rng.next() * (COMET.fixtureRangeMax - COMET.fixtureRangeMin);
+  const driftBearing = rng.next() * Math.PI * 2;
+
+  return {
+    kind: "fixture",
+    nucleus: bearingVector(placeBearing).multiplyScalar(distance),
+    direction: tailDirection(rng, sunAzimuth),
+    length: COMET.fixtureLength * scale,
+    nearRadius: COMET.fixtureNearRadius * scale,
+    farRadius: COMET.fixtureFarRadius * scale,
+    nucleusRadius: COMET.fixtureNucleusRadius * scale,
+    drift: bearingVector(driftBearing).multiplyScalar(COMET.fixtureDrift),
+  };
+}
+
+/**
+ * A wanderer, crossing near `around` — the same "wherever the player was
+ * standing" placement `Loom.open` uses, and for the same reason: an
+ * opportunity that opens somewhere the player already is not is not an
+ * opportunity. Always returns a plan; whether one is rolled at all is
+ * `COMET.wandererChance` and `COMET.earliest`, checked by the caller the way
+ * `Loom.open` checks `LOOM.chance` before ever constructing a `Loom`.
+ *
+ * It enters on one side of `around`, drifts straight through, and exits the
+ * other — `wandererEntry` out on each side, covered in `wandererDuration`
+ * seconds, which is what makes `drift` a constant velocity rather than
+ * something a caller has to re-aim mid-flight.
+ *
+ * `sunAzimuth` is degrees, not radians — see `tailDirection` for why that is
+ * the unit and not a stylistic choice.
+ */
+export function planWanderer(around: Vector3, sunAzimuth: number | null, rng: () => number): CometPlan {
+  const travelBearing = rng() * Math.PI * 2;
+  const travel = bearingVector(travelBearing);
+  const speed = (COMET.wandererEntry * 2) / COMET.wandererDuration;
+
+  return {
+    kind: "wanderer",
+    nucleus: travel.clone().multiplyScalar(-COMET.wandererEntry).add(around),
+    direction: tailDirection({ next: rng }, sunAzimuth),
+    length: COMET.wandererLength,
+    nearRadius: COMET.wandererNearRadius,
+    farRadius: COMET.wandererFarRadius,
+    nucleusRadius: COMET.wandererNucleusRadius,
+    drift: travel.multiplyScalar(speed),
+  };
+}
+
+/**
+ * Pale, heavily desaturated ice-blue — defined here rather than added to
+ * `PALETTE` because *colour is information* and this is explicitly outside
+ * that vocabulary (see the file header, and `docs/comet.md` §6). The tempting
+ * mistake — magenta, because the tail is what unresolves things — is rejected
+ * there too: magenta is the Shroud's own colour, and a magenta field would be
+ * the worst possible background to hunt a magenta contact against.
+ *
+ * **Saturation is the rule this obeys; luminance is not, and the first version
+ * got that wrong.** `encounters.md` asks decoration for strictly lower
+ * saturation *and* lower luminance than any information colour, and this was
+ * built to both — s=0.20, l=0.30, under `PALETTE.traceDim`'s s≈0.54, l≈0.37 on
+ * every axis. Then it was flown: "just looks like a collection of vector lines".
+ * Part of that was the tail's shape, which `COMET.filaments` fixes. The rest was
+ * this. `Stage.ts` fogs the scene 45..260, so a comet met at a hundred units has
+ * already lost a third of its brightness before a stroke is drawn, and a colour
+ * chosen to sit below the dimmest thing on the panel has nothing left to lose.
+ *
+ * The luminance half of that rule was written for the *sky* — a backdrop that
+ * must never compete with the instruments in front of it, and which nothing ever
+ * flies through. This is a world object at fighting range that the design
+ * requires you to find. Holding it to a backdrop's ceiling was applying the
+ * right rule to the wrong kind of thing.
+ *
+ * What actually keeps a colour out of the information vocabulary is
+ * **saturation**: every information colour here is a committed hue — cyan gold
+ * acid-green red-orange violet magenta. At s=0.20 this cannot be mistaken for
+ * any of them at any brightness; it reads as pale gas, which is what it is. So
+ * the saturation stays where it was and the luminance rises to where the thing
+ * is visible.
+ *
+ * The HUD wedge takes the same colour scaled down, because a panel glyph is
+ * unfogged and has the opposite problem — see `hud/draw.ts`.
+ */
+export const COMET_COLOR = new Color().setHSL(205 / 360, 0.2, 0.62, SRGBColorSpace);
+
+/** The visible rock's radius, as a fraction of `CometPlan.nucleusRadius` —
+ * the coma's own interference sphere, which the rock has to sit well inside
+ * of. A rock the same size as the coma would leave no room for the
+ * near-nucleus glow (see `COMA_BIAS`) to read as a halo around it. */
+const ROCK_FRACTION = 0.4;
+/**
+ * How far each corner of the rock is allowed to move, as a fraction of its
+ * radius, independently on each axis. Was a radial scale — each corner
+ * pushed in or out along the direction it already had — and that was the
+ * bug code review caught: an icosahedron's silhouette is carried by its
+ * *vertex directions*, twelve points in a rigid five-fold arrangement, and
+ * scaling their distance from the centre leaves every one of those
+ * directions untouched, so it still reads as exactly the die it is. Moving
+ * each corner by an independent random offset on X, Y and Z displaces the
+ * *directions* too, which is what actually breaks the shape's symmetry. 0.5
+ * is deliberately aggressive — up to half the radius on each axis,
+ * compounding to well past it on the diagonal — because the design's bar
+ * ("a perfectly round comet reads as a moon", §6) turned out to have a
+ * sharper failure mode on the other side: a recognisable Platonic solid.
+ */
+const ROCK_JITTER = 0.5;
+
+/**
+ * How much of a filament's length fades in at its head and out at its tail.
+ *
+ * The single most important number for whether this reads as gas. A filament
+ * drawn at even brightness end to end terminates in a hard stop, and sixty hard
+ * stops scattered through a cone is precisely the "collection of vector lines"
+ * the loose-mote version was rejected for — the continuity buys nothing if every
+ * strand still announces where it ends. Tapering both ends to nothing means no
+ * filament has a visible end at all, and the eye integrates the overlap into
+ * something with no edges, which is what a plume is.
+ *
+ * The tail end fades over a longer run than the head, because the head is
+ * emerging from the coma where the gas is dense and the tail is dissipating
+ * where it is not.
+ */
+const FILAMENT_FADE_IN = 0.18;
+const FILAMENT_FADE_OUT = 0.4;
+
+/**
+ * The coma — the glow around the head, and how it stopped being made of
+ * particles.
+ *
+ * The first version of this file drew twelve short spokes radiating from the
+ * rock in a full sphere — the design doc's "halo of short strokes" (§6) read
+ * literally. Code review caught what that actually looks like: radiating
+ * lines from a bright centre is the exact shape `Backdrop.ts` already uses
+ * for a sun (`kind: "sun"; rays: number`), so two unrelated objects were
+ * drawing the same silhouette, one level up from the hue collision *colour
+ * is information* already exists to prevent. The fix folds the coma into the
+ * tail field instead: squaring a uniform `[0, 1)` draw pushes it toward 0, so
+ * roughly 40% of every tail's motes seed within the nearest tenth of its
+ * length. That cluster reads as a dense glow around the head — a halo, not
+ * spikes — and it costs nothing extra, because `draw`'s own brightness
+ * falloff (dimmer with `along`) was already making that same region the
+ * brightest part of the tail; this just makes it the densest part too.
+ *
+ * **That version had a flaw, and this is the correction.** Seeding the density
+ * cluster into the flow made it a feature of the *particles*, not of the *head*
+ * — and `update` moves every particle down the axis at the same rate. A rigid
+ * rotation preserves the distribution's shape, but it also carries it: the
+ * cluster drifted away from the nucleus, reached the tip, and wrapped, so the
+ * coma slowly pulsed down the tail instead of staying on the rock. The old
+ * comment claimed the shape was kept for the comet's lifetime, which was true,
+ * and quietly implied it was kept *in place*, which was not.
+ *
+ * A coma is a property of position, so it is now computed at draw time from
+ * `along` rather than seeded into the field. It cannot migrate because it is not
+ * made of anything that moves.
+ */
+const COMA_GLOW = 1.1;
+/** Fraction of the tail's length the head glow reaches before it is spent. */
+const COMA_REACH = 0.14;
+
+/**
+ * One strand of the plume. Everything but `head` is fixed at construction, so a
+ * filament keeps its shape for the comet's whole life and only its position
+ * along the axis moves — the same rigid-rotation property the mote field had,
+ * and the reason the distribution `show` seeds is the distribution you see.
+ *
+ * `radial` is a fraction of the *local* cone radius rather than a world
+ * distance, so a filament fans outward exactly as fast as `radiusAt` widens and
+ * never crosses the boundary `interferenceAt` tests.
+ */
+interface TailFilament {
+  /** Position of the strand's leading end, in [-span, 1]. Advances with the flow. */
+  head: number;
+  /** How far along the tail it reaches from `head`. */
+  span: number;
+  angle: number;
+  radial: number;
+  /** Radians turned about the axis across the whole span. Signed. */
+  swirl: number;
+  /** Per-strand brightness, so the plume is not uniformly lit. */
+  level: number;
+}
+
+/**
+ * A seed for this comet's own rock jitter and tail field, derived from the
+ * plan rather than carried on it. `CometPlan` has no seed field of its own —
+ * adding one would duplicate state the plan's numbers already are — and
+ * `planFixture`/`planWanderer` are themselves deterministic, so hashing the
+ * placement is enough: the same comet always produces the same plan values
+ * and therefore the same hash, which is what makes the particle field (and
+ * incidentally the rock) look the same on a second visit.
+ */
+function seedFrom(plan: CometPlan): number {
+  const mix = (n: number): number => {
+    let h = Math.imul(Math.floor(n * 1024) ^ 0x9e3779b9, 2654435761) >>> 0;
+    h ^= h >>> 15;
+    return h >>> 0;
+  };
+  return (mix(plan.nucleus.x) ^ mix(plan.nucleus.z) ^ mix(plan.length) ^ mix(plan.nearRadius)) >>> 0;
+}
+
+/**
+ * An icosahedron with each corner shoved sideways by an independent offset
+ * on every axis, not merely pushed in or out along its own radius.
+ *
+ * Subdivided once (`detail = 1`: 42 corners, 80 faces) rather than left at
+ * the bare 12-vertex base — more corners to displace independently means
+ * more chances for two adjacent faces to end up at genuinely different
+ * angles, which is what "hard to name the underlying primitive" actually
+ * requires. Still low-poly against `PLANET.segments`' own "this is a stroke
+ * renderer" ceiling.
+ *
+ * `IcosahedronGeometry` is non-indexed — every face owns three private copies
+ * of its corners rather than sharing forty-two — so jittering by vertex index
+ * would tear the faces apart at every shared edge. Corners are keyed by their
+ * un-jittered position instead (normalised by `radius`, so the key's
+ * precision does not depend on how big this particular rock is), so every
+ * face that meets at a given corner moves it by the same offset and the rock
+ * stays watertight.
+ */
+function buildRockGeometry(radius: number, rng: Rng): IcosahedronGeometry {
+  const geometry = new IcosahedronGeometry(radius, 1);
+  const position = geometry.getAttribute("position") as BufferAttribute;
+  const offsetByCorner = new Map<string, Vector3>();
+  const v = new Vector3();
+
+  for (let i = 0; i < position.count; i++) {
+    v.fromBufferAttribute(position, i);
+    const key = `${(v.x / radius).toFixed(4)}:${(v.y / radius).toFixed(4)}:${(v.z / radius).toFixed(4)}`;
+    let offset = offsetByCorner.get(key);
+    if (!offset) {
+      offset = new Vector3(
+        (rng.next() * 2 - 1) * radius * ROCK_JITTER,
+        (rng.next() * 2 - 1) * radius * ROCK_JITTER,
+        (rng.next() * 2 - 1) * radius * ROCK_JITTER,
+      );
+      offsetByCorner.set(key, offset);
+    }
+    v.add(offset);
+    position.setXYZ(i, v.x, v.y, v.z);
+  }
+  position.needsUpdate = true;
+  return geometry;
+}
+
+/**
+ * The comet as drawn: a nucleus and a tail whose own density stands in for
+ * the coma — `docs/comet.md` §6, though §6 describes the coma as a separate
+ * halo and code review is why it is not one; see `COMA_BIAS`.
+ *
+ * Everything obeys the locked idiom. The nucleus is real occluded geometry
+ * through `VectorObject`, exactly the argument `Planet.ts` records for why the
+ * ringed planet stopped being a picture: a solid body has to be able to hide
+ * what is behind it. The tail is not — it is strokes through `TraceBuffer`,
+ * regenerated in full every frame and never accumulated, the same contract
+ * every other transient in this game keeps.
+ *
+ * `object` holds only the nucleus. The tail is pushed straight into the
+ * shared `TraceBuffer` in world space, exactly as `Loom.draw` pushes the
+ * weave rather than moving a `Group` — a comet drifting slowly across a
+ * whole run is not worth a second transform to keep in step with `plan`'s own
+ * numbers when `draw` can simply read them.
+ */
+export class Comet {
+  readonly object = Object.assign(new Group(), { name: "comet" });
+
+  plan: CometPlan | null = null;
+
+  /**
+   * A line waiting for the panel, exactly as `Loom.says` is — written by
+   * whoever calls `show` with a wanderer (`Session.placeWanderer`), read and
+   * cleared by `Session`'s own step. `show` itself never sets this: it is
+   * also how a sector's fixture gets drawn at entry, and a fixture that was
+   * simply standing there when the run began has nothing to announce.
+   */
+  says: string | null = null;
+
+  private rock: VectorObject | null = null;
+  private readonly filaments: TailFilament[] = [];
+
+  /**
+   * Rebuild for a new plan, if it is not already the one standing.
+   *
+   * A reference check rather than a key string: unlike `Planet.show`, which is
+   * handed a bare `seed`/`sector` pair every frame and has to build its own
+   * identity for them, a caller here already holds the one `CometPlan` object
+   * that answers "which comet" — passing `null` through is the same
+   * convenience `interferenceAt` takes at every call site.
+   */
+  show(plan: CometPlan | null): void {
+    if (plan === this.plan) return;
+    this.clear();
+    this.plan = plan;
+    if (!plan) return;
+
+    const rng = makeRng(seedFrom(plan));
+
+    this.rock = new VectorObject(buildRockGeometry(plan.nucleusRadius * ROCK_FRACTION, rng), {
+      color: COMET_COLOR,
+      linewidth: 1.1,
+    });
+    this.object.add(this.rock.group);
+    this.object.position.copy(plan.nucleus);
+
+    for (let i = 0; i < COMET.filaments; i++) {
+      const span = COMET.filamentSpan * (0.55 + rng.next() * 0.9);
+      this.filaments.push({
+        // Seeded across the whole cycle including the negative part, so the
+        // plume is already mid-stream on its first frame rather than every
+        // strand marching out of the nucleus together.
+        head: rng.next() * (1 + span) - span,
+        span,
+        angle: rng.next() * Math.PI * 2,
+        // Biased to the axis: dense core, thin envelope, soft edge. See
+        // `COMET.coreBias`.
+        radial: rng.next() ** COMET.coreBias,
+        swirl: (rng.next() * 2 - 1) * COMET.swirl,
+        level: 0.55 + rng.next() * 0.45,
+      });
+    }
+  }
+
+  /**
+   * Streams the tail forward and keeps the rock on station.
+   *
+   * `plan.nucleus` may have drifted since last frame — moving it is Task 3's
+   * concern, wired into `Session`, not this one's — so this only ever reads
+   * the position it is given rather than integrating `plan.drift` itself.
+   */
+  update(dt: number): void {
+    if (!this.plan) return;
+    this.object.position.copy(this.plan.nucleus);
+
+    const step = (COMET.flow * dt) / this.plan.length;
+    for (const filament of this.filaments) {
+      filament.head += step;
+      // Re-enters from behind the nucleus rather than from 0, so a strand fades
+      // in as it emerges instead of appearing whole. Wrapping at its own span is
+      // what makes emergence continuous.
+      if (filament.head > 1) filament.head -= 1 + filament.span;
+    }
+  }
+
+  /**
+   * The tail, as strokes — its own near-nucleus density standing in for the
+   * coma; see `COMA_BIAS`.
+   *
+   * Computed in world space from `plan` directly — never from `object`'s own
+   * transform, which only the rock reads — so a comet that has drifted since
+   * `update` last ran is drawn exactly where it now stands.
+   *
+   * Regenerated in full every call and nothing here persists between them:
+   * this is what `TraceBuffer` is for, and `COMET.strokes` (500) is a tenth
+   * of its 5000-segment ceiling for the one comet a sector ever has standing
+   * at once.
+   */
+  draw(trace: TraceBuffer): void {
+    if (!this.plan) return;
+    const plan = this.plan;
+    const { x: nx, y: ny, z: nz } = plan.nucleus;
+
+    // Each filament walked as a connected chain, at a radius following the cone
+    // `interferenceAt` itself tests, so the plume and the rule it stands in for
+    // never disagree about the tail's shape.
+    const rightX = -plan.direction.z;
+    const rightZ = plan.direction.x;
+    const steps = COMET.filamentSegments;
+
+    for (const filament of this.filaments) {
+      let px = 0;
+      let py = 0;
+      let pz = 0;
+      let previous = -1;
+
+      for (let k = 0; k <= steps; k++) {
+        const u = k / steps;
+        const along = filament.head + filament.span * u;
+        // Outside the tail: break the chain rather than clamping it, or a strand
+        // half-emerged would be drawn flattened against the nucleus.
+        if (along < 0 || along > 1) {
+          previous = -1;
+          continue;
+        }
+
+        const angle = filament.angle + filament.swirl * u;
+        const r = filament.radial * radiusAt(plan, along);
+        const ox = Math.cos(angle) * r;
+        const oy = Math.sin(angle) * r;
+        const t = along * plan.length;
+
+        const x = nx + plan.direction.x * t + rightX * ox;
+        const y = ny + oy;
+        const z = nz + plan.direction.z * t + rightZ * ox;
+
+        if (previous >= 0) {
+          // Fades along the tail, softens toward the envelope, and tapers to
+          // nothing at both of the strand's own ends — the last of those is what
+          // stops sixty visible line-ends reading as scatter. See
+          // `FILAMENT_FADE_IN`.
+          const mid = (u + previous) / 2;
+          const ends = Math.min(1, mid / FILAMENT_FADE_IN, (1 - mid) / FILAMENT_FADE_OUT);
+          // The coma, as brightness rather than as density — see `COMA_GLOW`
+          // for why the seeded-cluster version could not stay on the rock.
+          const coma = 1 + COMA_GLOW * Math.max(0, 1 - along / COMA_REACH);
+          const level =
+            filament.level *
+            ends *
+            coma *
+            (1 - along * 0.72) *
+            (1 - filament.radial * 0.55);
+          if (level > 0.02) trace.push(px, py, pz, x, y, z, COMET_COLOR, level);
+        }
+
+        px = x;
+        py = y;
+        pz = z;
+        previous = u;
+      }
+    }
+  }
+
+  setMode(mode: Parameters<VectorObject["setMode"]>[0]): void {
+    this.rock?.setMode(mode);
+  }
+
+  /** Torn down on a sector change or a run restart — the same moment
+   * `Planet.clear` and `Loom.clear` are. */
+  clear(): void {
+    this.rock?.dispose();
+    this.rock = null;
+    this.filaments.length = 0;
+    this.plan = null;
+    this.says = null;
+    for (const child of [...this.object.children]) this.object.remove(child);
+  }
+}

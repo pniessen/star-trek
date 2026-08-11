@@ -215,8 +215,16 @@ hittability — `hidden()` is `cloak > HIDDEN_AT`, and `shape.group.visible` rea
 it — so raising it for interference would make hostiles invisible and
 invulnerable inside the tail, which is the opposite of the intent.
 
-So: a second field, **`interference`**, scanner-only, and `paintGhost` keys off
-`max(cloak, interference)`. Two causes, one grammar, no new HUD vocabulary.
+So: a second field, **`interference`**. This was first written down here as
+*scanner-only*, which turned out to be wrong and is corrected in place rather
+than left to mislead the next reader: it also drives cloak suppression (§2.1)
+and the fire-control reach clamp (§2.2), because both of those are instruments
+too and the one-sentence rule in §2 does not carve out an exception for them.
+What `interference` is *not* allowed to touch is narrower than "the scanner" —
+it is exactly *visibility and hittability*, `hidden()` and
+`shape.group.visible`, the two things `cloak` alone still gates. `paintGhost`
+keys off `max(cloak, interference)`, same as planned. Two causes, one grammar,
+no new HUD vocabulary.
 
 The pleasing consequence: inside the tail the Shroud's `cloak` is being driven
 *down* while everyone's `interference` is driven *up*, so all contacts converge
@@ -247,6 +255,29 @@ rather than being staged.
 - the reserve falls while inside and stops falling on exit
 - the fixture is seeded — the same sector gives the same comet twice
 - the tail points away from the sun when the sector's sky has one
+
+### Two things that changed on the way in
+
+**§5's drain became a regen suppression, not only a drain.** The reasoning in
+§5 — "a light drain on the reserve" — assumed one constant could be priced
+once and hold. It cannot: `energyReserve` and `reserveRegen` are two
+independent refit multipliers with no fixed relationship between them, so a
+drain sized to beat regen at the baseline loadout goes net-positive at the top
+of the refit tree, which is exactly the camping §5 exists to prevent, and
+exactly for the player best equipped to find it. `Ship.updateEnergy` now
+suppresses the reserve's own passive regen by `interference`, down to nothing
+at the ceiling, and `COMET.drain` stayed as a second, smaller term on top —
+which is also the more literal reading of §2's own sentence: recharging is an
+instrument too, and inside the tail no instrument works. See `COMET.drain`'s
+own comment in `comet.ts` for the full arithmetic.
+
+**`sunAzimuth` is degrees, not radians.** §6 says the tail points away from
+`Backdrop`'s own `azimuth`, and that field is documented there as degrees
+clockwise from `+Z`. The comet's own bearing math is radians throughout, the
+same mix `Backdrop.ts` itself lives with — so `planFixture` and `planWanderer`
+both take `sunAzimuth` in degrees and convert internally, which means a caller
+holding a `SkyBodyReport` can pass its `azimuth` straight through with nothing
+to get wrong.
 
 ---
 

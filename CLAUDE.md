@@ -262,6 +262,23 @@ says something, and leaves. It shoots, weakly and slowly, and **its kills pay
 the player nothing** — no salvage, no multiplier, no entry on the tally, so
 hiding behind it can never be a strategy. See `game/allies.ts`.
 
+Also built: **the comet**, from *Balance of Terror* — an ionised tail that makes
+the one rule "inside the tail, no instrument works" real as a place rather than
+a sentence. A Shroud caught in it loses its cloak and cannot re-veil; nothing
+can lock across the boundary, so a hostile safely outside still cannot resolve
+a player standing inside, and the reverse; the scanner degrades every contact
+to the unresolved return it already draws. A **fixture** is seeded per sector
+the way the ringed planet is, roughly one sector in four, and drifts slowly
+enough to plan around for a whole run; a **wanderer** is a rare, short-lived
+crossing rolled at a wave break, the way a Loom is. The reserve pays for
+standing in it — not only the small `COMET.drain`, but the tail's own
+suppression of the reserve's passive regen, which is what makes the cost real
+at every refit tier rather than only the baseline one. Behind
+`encounters.comet` in `game/comet.ts`, defaulting on, with **no keyboard
+binding** — the same reasoning `game/loom.ts` already gives: the control
+surface is full, and a binding spent on something a run meets at most once is
+a binding spent on nothing. See `game/comet.ts` and `docs/comet.md`.
+
 Not built: mouse aim, leaderboards, and per-sector docking (the starbase still
 sits at one fixed world position however the chart is drawn).
 
@@ -310,15 +327,18 @@ sits at one fixed world position however the chart is drawn).
   design, and so is one with no audio device — the first failure retires the
   whole audio layer rather than raising in the frame loop.
 - `window.__probe`, `__session`, `__player`, `__fleet`, `__stage`,
-  `__presentation`, `__sound`, `__loom`, `__sky` are exposed on localhost only,
-  for headless inspection. **`__loom.seed()` opens a Loom on demand** — it
-  appears at a wave break with a one-in-ten chance from escalation index four,
-  so waiting for one is not a way to tune one. **`__sky.next()` walks the
-  backdrop from sector to sector** without playing a war, which is the only
-  practical way to review what the generator makes. Neither has a key, for the
-  same reason: the control surface is full, and a binding spent on something
-  that appears once in fourteen waves — or that you only look at — is a binding
-  spent on nothing.
+  `__presentation`, `__sound`, `__loom`, `__sky`, `__comet` are exposed on
+  localhost only, for headless inspection. **`__loom.seed()` opens a Loom on
+  demand** — it appears at a wave break with a one-in-ten chance from
+  escalation index four, so waiting for one is not a way to tune one.
+  **`__comet.seed()` drops a wanderer on the player** for the same reason —
+  `interferenceAt`, `plan(seed, sector)` and `constants` (`COMET`) stay
+  reachable too, the pure half unwired from any run at all. **`__sky.next()`
+  walks the backdrop from sector to sector** without playing a war, which is
+  the only practical way to review what the generator makes. None of the
+  three has a key, for the same reason: the control surface is full, and a
+  binding spent on something that appears once in fourteen waves — or that
+  you only look at — is a binding spent on nothing.
   `__probe.state` is still only `clear`/`fighting`/`dead`; the title and attract
   screens are `__probe.mode`, which is the shell around a run, not a combat
   phase. **A headless run must launch itself** — the page now lands on the
