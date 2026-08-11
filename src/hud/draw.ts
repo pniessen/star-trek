@@ -6,7 +6,7 @@ import { BRACE, FACINGS, type Ship } from "../game/Ship.js";
 import { ALTITUDE, flight } from "../game/altitude.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, HOSTILE_NAMES, type Fleet, type Hostile } from "../game/hostiles.js";
-import { COMET_COLOR } from "../game/comet.js";
+import { COMET_COLOR, radiusAt } from "../game/comet.js";
 import type { Presentation } from "../game/presentation.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { drawBriefing } from "./briefing.js";
@@ -602,11 +602,12 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
    * max(cloak, interference)`) would be unexplained noise; the wedge is why
    * they are honest rather than a phantom.
    *
-   * The frustum's two long edges are straight lines in world space —
-   * `nearRadius`/`farRadius` interpolate linearly along `direction`, the same
-   * interpolation `interferenceAt` itself runs to decide what jams — so each
-   * edge is one line segment, not a sampled curve, and it already traces
-   * exactly the boundary that test uses. `clipSegmentToCircle` cuts all four
+   * The frustum's two long edges are straight lines in world space — the four
+   * corners below are `radiusAt(plan, 0)` and `radiusAt(plan, 1)`, the same
+   * function `interferenceAt` and `Comet.draw` call to decide what jams and
+   * what is drawn, evaluated at its own two ends — so each edge is one line
+   * segment, not a sampled curve, and it already traces exactly the boundary
+   * that test uses. `clipSegmentToCircle` cuts all four
    * edges to the scanner's own range in world space before they are
    * projected, which is what keeps a wedge that runs off the tube (most of
    * them, at `COMET.fixtureLength`) ending cleanly at the rim instead of
@@ -619,10 +620,12 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     const farX = plan.nucleus.x + plan.direction.x * plan.length;
     const farZ = plan.nucleus.z + plan.direction.z * plan.length;
 
-    const nearLeft = { x: plan.nucleus.x + rightX * plan.nearRadius, z: plan.nucleus.z + rightZ * plan.nearRadius };
-    const nearRight = { x: plan.nucleus.x - rightX * plan.nearRadius, z: plan.nucleus.z - rightZ * plan.nearRadius };
-    const farLeft = { x: farX + rightX * plan.farRadius, z: farZ + rightZ * plan.farRadius };
-    const farRight = { x: farX - rightX * plan.farRadius, z: farZ - rightZ * plan.farRadius };
+    const nearRadius = radiusAt(plan, 0);
+    const farRadius = radiusAt(plan, 1);
+    const nearLeft = { x: plan.nucleus.x + rightX * nearRadius, z: plan.nucleus.z + rightZ * nearRadius };
+    const nearRight = { x: plan.nucleus.x - rightX * nearRadius, z: plan.nucleus.z - rightZ * nearRadius };
+    const farLeft = { x: farX + rightX * farRadius, z: farZ + rightZ * farRadius };
+    const farRight = { x: farX - rightX * farRadius, z: farZ - rightZ * farRadius };
 
     // Near cap first (the coma boundary, where the wedge begins), then both
     // long edges, then the far cap — which only ever survives the clip on a

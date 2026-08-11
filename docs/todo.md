@@ -232,7 +232,8 @@ at all*, not merely how it looks:
   also the only part of the jamming volume that sits *ahead* of the tail —
   too small and the coma is invisible against the cone it sits in front of,
   too large and a comet jams a sphere well before the tail proper begins.
-- **`fixtureRangeMin/Max` (150–340)** and **`fixtureDrift = 1.6`** — how far
+- **`fixtureRangeMin/Max` (150–230, brought in from 150–340 by the final-fix
+  pass — see `comet.ts`'s own comment)** and **`fixtureDrift = 1.6`** — how far
   out a fixture sits and how fast it sweeps the sector over a run. **`wandererDuration
   = 110`**, **`wandererEntry = 260`** (together fixing the wanderer's ~4.7
   units/s crossing speed) and **`wandererLength/nearRadius/farRadius`** (190 /

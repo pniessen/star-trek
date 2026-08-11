@@ -368,6 +368,10 @@ export class Session {
         this.wing.clear();
         this.loom.clear();
         this.ordnance.clear();
+        // Same reasoning as the pack above: 500 strokes still streaming and a
+        // nucleus still drifting over the readout is noise across four lines
+        // of numbers, not atmosphere.
+        this.comet.show(null);
       }
       return;
     }
@@ -1060,18 +1064,19 @@ export class Session {
 
   /**
    * One step of the comet: drifts the nucleus, streams the tail, feeds the one
-   * number the tail-volume test produces into `Hostile.interference` and
-   * `Ship.interference` — the seams `hostiles.ts` and `Ship.updateEnergy`
-   * consume for cloak suppression, the fire-control reach clamp, and now the
-   * reserve's own recharge — and drains the reserve on top of that while the
-   * player stands in the tail. `docs/comet.md` §2 and §5 are the rule;
-   * everything the comet *is* lives in `comet.ts`, the same split `stepLoom`
-   * takes with `loom.ts`.
+   * number the tail-volume test produces into `Hostile.interference`,
+   * `Escort.interference` and `Ship.interference` — the seams `hostiles.ts`,
+   * `allies.ts` and `Ship.updateEnergy` consume for cloak suppression, the
+   * fire-control reach clamp, and now the reserve's own recharge — and drains
+   * the reserve on top of that while the player stands in the tail.
+   * `docs/comet.md` §2 and §5 are the rule; everything the comet *is* lives in
+   * `comet.ts`, the same split `stepLoom` takes with `loom.ts`.
    *
-   * `max` of the player's own reading and each hostile's own is what "nothing
-   * locks across the boundary" means: either end standing in the tail is
-   * enough to blind a lock between them, so a hostile safely outside still
-   * cannot resolve a player who is inside, and the reverse.
+   * `max` of the player's own reading and each hostile's (or the escort's)
+   * own is what "nothing locks across the boundary" means: either end
+   * standing in the tail is enough to blind a lock between them, so a
+   * hostile — or an escort — safely outside still cannot resolve a target
+   * standing inside, and the reverse.
    */
   private stepComet(dt: number, player: Ship): void {
     const plan = this.comet.plan;
@@ -1117,6 +1122,18 @@ export class Session {
         interferenceAt(this.comet.plan, hostile.position.x, hostile.position.z),
       );
     }
+    // The escort gets the same treatment, or it is the safe room `CLAUDE.md`
+    // rules out by name: park it on the axis and every hostile it fights is
+    // clamped to `COMET.visualRange` while it keeps shooting from
+    // `WARDEN.fireRange`. Same shape, same "either end" reasoning as above —
+    // `Escort.update` folds in the specific target's own reading too, since
+    // Session has no target to look up ahead of `stepEscort` choosing one.
+    if (this.wing.escort) {
+      this.wing.escort.interference = Math.max(
+        here,
+        interferenceAt(this.comet.plan, this.wing.escort.position.x, this.wing.escort.position.z),
+      );
+    }
     // The drain is no longer the tail's only cost — see `Ship.updateEnergy`
     // for the regen suppression that now runs alongside it, and `COMET.drain`'s
     // own comment for why splitting the job between the two was necessary
@@ -1129,6 +1146,14 @@ export class Session {
         0,
         player.energy - (COMET.drain * here * dt) / player.loadout.energyReserve,
       );
+    }
+
+    // A wanderer's arrival line, deferred exactly as `stepLoom` defers
+    // `Loom.says` — see `placeWanderer`'s own comment for why saying it at
+    // the moment of creation would lose to `WAVE n`.
+    if (this.comet.says) {
+      this.say(this.comet.says);
+      this.comet.says = null;
     }
   }
 
@@ -1169,9 +1194,21 @@ export class Session {
     this.placeWanderer(player);
   }
 
-  /** The one place `planWanderer` is actually called — the roll in
+  /**
+   * The one place `planWanderer` is actually called — the roll in
    * `spawnWave` and the on-demand `seedComet` both land here so the two
-   * cannot drift out of sync with each other. */
+   * cannot drift out of sync with each other.
+   *
+   * A wanderer used to arrive with nothing said: `COMET.wandererEntry` (260)
+   * is outside both `SCANNER.range` (150) and the scene fog's far plane,
+   * closing at ~4.7 units/s, so a 6% roll nobody was told about was invisible
+   * to every instrument for its first ~23 seconds — a feature that does not
+   * exist, by `docs/comet.md` §6's own rule. `this.comet.says` is read and
+   * cleared by `stepComet` next frame, the same deferred hand-off
+   * `Loom.open` uses for `WEAVE DETECTED` and for the same reason: called
+   * from inside `spawnWave`, saying it here would be overwritten by `WAVE n`
+   * moments later in the same call.
+   */
   private placeWanderer(player: Ship): void {
     this.comet.show(
       planWanderer(
@@ -1180,6 +1217,7 @@ export class Session {
         Math.random,
       ),
     );
+    this.comet.says = "COMET SIGHTED";
     this.wandererAge = 0;
   }
 

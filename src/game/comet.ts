@@ -151,11 +151,30 @@ export const COMET = {
    * Distance band from sector centre a fixture's nucleus is placed at. The
    * floor is past a wave's own spawn ring (`LOOM.radius` reasons about the
    * same 95-140 unit band) so the comet is never simply where the fight
-   * already is; the ceiling keeps it inside the distance a run's own pacing
-   * makes reachable in the couple of minutes a wave lasts.
+   * already is.
+   *
+   * The ceiling was 340 and was wrong: `tailDirection` picks the tail's
+   * bearing independently of `placeBearing`, so the worst case is a tail
+   * pointing straight back out along the placement ray, and in that case
+   * length buys nothing — the nucleus is the closest point the tail assembly
+   * ever gets to the centre, at exactly `distance`. A fixture placed near the
+   * old ceiling was therefore, at worst, not the 340-119=221-unit-tail
+   * discovery `fixtureLength` implied but a bare rock sitting 340 out against
+   * a 150-unit `SCANNER.range` and a 260-unit fog far plane — past both, and
+   * `docs/comet.md` §6 is explicit that a region no instrument can reach is
+   * one that does not exist.
+   *
+   * 230 keeps that same worst case inside reach of ordinary play rather than
+   * a blind hunt: the player starts at the centre and a wave's own combat
+   * keeps them within roughly 100 units of it, so closing that 100 units
+   * toward a worst-case fixture leaves 230-100=130 units to the nucleus,
+   * comfortably inside `SCANNER.range` (150) with margin rather than pinned
+   * to its edge. The floor is untouched — it was never the problem — so the
+   * band is 150-230, narrower than before but every fixture in it is now
+   * findable regardless of which way its tail happens to point.
    */
   fixtureRangeMin: 150,
-  fixtureRangeMax: 340,
+  fixtureRangeMax: 230,
   /**
    * World units per second a fixture's nucleus drifts. Slow, on purpose —
    * "terrain you plan around" (design §4) means the tail should still be
@@ -260,6 +279,19 @@ export const COMET = {
 } as const;
 
 /**
+ * The tail's radius at a point `along` its length, 0 at the nucleus rising to
+ * 1 at the tip. One function rather than three copies of the same lerp: the
+ * boundary `interferenceAt` tests, the cone `Comet.draw` streams motes inside
+ * of, and the wedge `hud/draw.ts` paints on the scanner all have to trace the
+ * *same* taper, or changing the shape here silently desyncs what jams from
+ * what is drawn. A pure refactor — the taper is still linear, only written
+ * once now.
+ */
+export function radiusAt(plan: CometPlan, along: number): number {
+  return plan.nearRadius + (plan.farRadius - plan.nearRadius) * along;
+}
+
+/**
  * How jammed a point in space is, 0 outside the tail rising to `COMET.strength`
  * on the axis. A 2D test on `x, z` alone — see the header for why height is
  * deliberately never read.
@@ -285,7 +317,7 @@ export function interferenceAt(plan: CometPlan | null, x: number, z: number): nu
   if (t < 0) return perp < plan.nucleusRadius ? 1 : 0;
 
   const along = t / plan.length;
-  const radius = plan.nearRadius + (plan.farRadius - plan.nearRadius) * along;
+  const radius = radiusAt(plan, along);
   if (perp > radius) return 0;
 
   // Falls off toward the edge and toward the far end, so the boundary is a
@@ -568,6 +600,15 @@ export class Comet {
 
   plan: CometPlan | null = null;
 
+  /**
+   * A line waiting for the panel, exactly as `Loom.says` is — written by
+   * whoever calls `show` with a wanderer (`Session.placeWanderer`), read and
+   * cleared by `Session`'s own step. `show` itself never sets this: it is
+   * also how a sector's fixture gets drawn at entry, and a fixture that was
+   * simply standing there when the run began has nothing to announce.
+   */
+  says: string | null = null;
+
   private rock: VectorObject | null = null;
   private readonly motes: TailMote[] = [];
 
@@ -649,7 +690,7 @@ export class Comet {
     const rightZ = plan.direction.x;
     for (const mote of this.motes) {
       const t = mote.along * plan.length;
-      const radius = plan.nearRadius + (plan.farRadius - plan.nearRadius) * mote.along;
+      const radius = radiusAt(plan, mote.along);
       const r = mote.radial * radius;
       const ox = Math.cos(mote.angle) * r;
       const oy = Math.sin(mote.angle) * r;
@@ -681,6 +722,7 @@ export class Comet {
     this.rock = null;
     this.motes.length = 0;
     this.plan = null;
+    this.says = null;
     for (const child of [...this.object.children]) this.object.remove(child);
   }
 }

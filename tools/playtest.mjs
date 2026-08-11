@@ -147,6 +147,45 @@ check(
   JSON.stringify(fixtureSeeded),
 );
 
+// ── the fixture is discoverable ─────────────────────────────────────────────
+// Final-branch review, finding 2: at the old ceiling (`fixtureRangeMax: 340`)
+// a fixture's tail could point straight back out along its own placement ray
+// — `tailDirection` picks a bearing independently of where the nucleus was
+// placed — leaving the nucleus itself, not any part of the tail, as the
+// closest the whole fixture ever gets to the sector centre. `docs/comet.md`
+// §6: a region no instrument can reach is one that does not exist. Checked
+// against `planFixture`'s real output across many seeds rather than trusting
+// `COMET.fixtureRangeMax` alone — a bug in the distance math would slip past
+// a check on the constant but not past this.
+//
+// 100 is the design brief's own stated approximation for how far combat
+// actually ranges from sector centre; there is no named constant for it, so
+// it is inlined here rather than imported.
+const discoverable = await page.evaluate(async () => {
+  const { plan, constants } = window.__comet;
+  const { SCANNER } = await import("/src/hud/scanner.ts");
+  const COMBAT_RADIUS = 100;
+  let checked = 0;
+  let worst = -Infinity;
+  for (let seed = 0; seed < 40; seed++) {
+    for (let sector = 0; sector < 64; sector++) {
+      const fixture = plan(seed, sector);
+      if (!fixture) continue;
+      checked++;
+      const distance = Math.hypot(fixture.nucleus.x, fixture.nucleus.z);
+      // Worst case: the tail points straight away, so only the nucleus counts
+      // toward how close a player who has closed `COMBAT_RADIUS` can get.
+      worst = Math.max(worst, distance - COMBAT_RADIUS);
+    }
+  }
+  return { checked, worst, range: SCANNER.range, ceiling: constants.fixtureRangeMax };
+});
+check(
+  "every seeded fixture's nucleus is within scanner reach of ordinary combat, worst case",
+  discoverable.checked > 20 && discoverable.worst <= discoverable.range,
+  JSON.stringify(discoverable),
+);
+
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
 // — the same contract `Y` has. Checked before the first run, which is also the
@@ -874,6 +913,103 @@ check(
   "...and a non-cloaking contact still ghosts on the tube from the jamming alone",
   !!lockTest && lockTest.ghosts > 0,
   JSON.stringify(lockTest),
+);
+
+// ── the comet: the Warden is jammed too ─────────────────────────────────────
+// The final-branch review's top finding: `Escort` had no `interference` field
+// at all, so a Warden parked in a fixture's tail kept firing from
+// `WARDEN.fireRange` (56) while every hostile it fought was clamped to
+// `COMET.visualRange` (22) and could not fire back — the safe room
+// `CLAUDE.md` rules out by name ("hiding behind it can never be a strategy").
+//
+// The comet is centred on the escort's own spawn point with a wide coma
+// (`nucleusRadius: 40`), so `interferenceAt` reads ~1 at the escort's
+// position regardless of where the player stands — isolating this from the
+// player-position term the lock test above already covers. The target sits a
+// fixed 30 units off, inside `WARDEN.fireRange` but outside `visualRange`,
+// and is re-pinned there every tick — relative to the escort's own live
+// position, not a fixed point — because the escort's steering closes on a
+// target it cannot see is unreachable, and a closing distance would make the
+// jammed case pass for the wrong reason once it drifted under 22.
+//
+// The live game loop drives this, the same way the reserve-drain block below
+// does: `window.__session.update` is never called directly here.
+await page.evaluate(() => {
+  window.__fleet.clear();
+  window.__wing.clear();
+  window.__session.breakTimer = Infinity; // no wave spawn to contaminate the fleet mid-test
+});
+const wardenTest = await page.evaluate(async () => {
+  const player = window.__player;
+  player.velocity.set(0, 0, 0);
+  const escort = window.__wing.spawn("passing", player.position.clone(), 0);
+  const target = window.__fleet.spawn("brawler", escort.position.clone(), 0);
+
+  const tmpl = player.velocity;
+  window.__session.comet.show({
+    kind: "wanderer",
+    nucleus: escort.position.clone(),
+    direction: tmpl.clone().set(0, 0, 1),
+    length: 60,
+    nearRadius: 40,
+    farRadius: 40,
+    nucleusRadius: 40,
+    drift: tmpl.clone().set(0, 0, 0),
+  });
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const hullBefore = target.hull;
+
+  for (let i = 0; i < 30 && !target.dead; i++) {
+    escort.velocity.set(0, 0, 0);
+    target.position.set(escort.position.x + 30, 0, escort.position.z);
+    target.velocity.set(0, 0, 0);
+    escort.cooldown = 0;
+    await wait(50);
+  }
+
+  const jammed = {
+    hullBefore,
+    hullAfter: target.hull,
+    interference: { escort: escort.interference, target: target.interference },
+  };
+
+  window.__session.comet.show(null);
+  window.__fleet.clear();
+  window.__wing.clear();
+
+  // Control: identical setup, no comet — proves the harness would otherwise
+  // let the escort fire, so a null result above is the fix and not a test
+  // that never had a chance to catch anything.
+  const escort2 = window.__wing.spawn("passing", player.position.clone(), 0);
+  const target2 = window.__fleet.spawn("brawler", escort2.position.clone(), 0);
+  const openHullBefore = target2.hull;
+  for (let i = 0; i < 30 && !target2.dead; i++) {
+    escort2.velocity.set(0, 0, 0);
+    target2.position.set(escort2.position.x + 30, 0, escort2.position.z);
+    target2.velocity.set(0, 0, 0);
+    escort2.cooldown = 0;
+    await wait(50);
+  }
+  const open = { hullBefore: openHullBefore, hullAfter: target2.hull };
+
+  window.__fleet.clear();
+  window.__wing.clear();
+
+  return { jammed, open };
+});
+await page.evaluate(() => {
+  window.__session.breakTimer = 0; // hand the clock back to the wave scheduler
+});
+check(
+  "an escort inside the tail cannot fire on a target beyond COMET.visualRange",
+  wardenTest.jammed.hullAfter === wardenTest.jammed.hullBefore,
+  JSON.stringify(wardenTest.jammed),
+);
+check(
+  "...and the same setup with no comet standing is not itself the reason nothing fired",
+  wardenTest.open.hullAfter < wardenTest.open.hullBefore,
+  JSON.stringify(wardenTest.open),
 );
 
 // ── the comet: the reserve pays for standing in the tail ───────────────────
