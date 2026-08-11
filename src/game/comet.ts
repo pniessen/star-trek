@@ -1,5 +1,7 @@
-import { Vector3 } from "three";
-import { makeRng } from "../chart/rng.js";
+import { BufferAttribute, Color, Group, IcosahedronGeometry, SRGBColorSpace, Vector3 } from "three";
+import { makeRng, type Rng } from "../chart/rng.js";
+import type { TraceBuffer } from "../render/TraceBuffer.js";
+import { VectorObject } from "../render/VectorObject.js";
 
 /**
  * The comet — *Balance of Terror* (TOS, 1966), where an ionised tail is the
@@ -350,4 +352,286 @@ export function planWanderer(around: Vector3, sunAzimuth: number | null, rng: ()
     nucleusRadius: COMET.wandererNucleusRadius,
     drift: travel.multiplyScalar(speed),
   };
+}
+
+/**
+ * Pale, heavily desaturated ice-blue — defined here rather than added to
+ * `PALETTE` because *colour is information* and this is explicitly outside
+ * that vocabulary (see the file header, and `docs/comet.md` §6). The tempting
+ * mistake — magenta, because the tail is what unresolves things — is rejected
+ * there too: magenta is the Shroud's own colour, and a magenta field would be
+ * the worst possible background to hunt a magenta contact against.
+ *
+ * `encounters.md`'s rule for decoration is strictly lower saturation *and*
+ * lower luminance than any information colour. `PALETTE.traceDim` is the
+ * dimmest one on the wheel (structure, grid, distant detail), so it is the
+ * bar to clear: in sRGB HSL it sits at s≈0.54, l≈0.37. This sits at s=0.20,
+ * l=0.30 — comfortably under both, and blue enough (hue 205°) to read as
+ * "ice" rather than as a paler version of the cyan every information colour
+ * on the wheel already leans toward.
+ */
+export const COMET_COLOR = new Color().setHSL(205 / 360, 0.2, 0.3, SRGBColorSpace);
+
+/** The visible rock's radius, as a fraction of `CometPlan.nucleusRadius` —
+ * the coma's own interference sphere, which the rock has to sit well inside
+ * of. A rock the same size as the coma would leave the halo below with
+ * nowhere to be. */
+const ROCK_FRACTION = 0.4;
+/**
+ * How far each corner of the icosahedron is allowed to jitter off the unit
+ * sphere. A perfectly round comet reads as a moon — see the design doc §6 —
+ * so this is deliberately large enough to break the silhouette at the twelve
+ * vertices `IcosahedronGeometry(radius, 0)` gives it, the lowest poly count
+ * three.js offers and the same "this is a stroke renderer" reasoning
+ * `PLANET.segments` records.
+ */
+const ROCK_JITTER = 0.4;
+
+/**
+ * Short strokes around the nucleus, filling the gap between the rock and
+ * where the tail's own cone begins — the design doc's "halo of short
+ * strokes", and the reason `CometPlan.nucleusRadius` is bigger than the rock
+ * it is named for: without it, the coma's own interference sphere would be a
+ * visible hole in the middle of the tail.
+ */
+const COMA_SPOKES = 12;
+
+/** World units a tail streak trails behind its own leading point, nearest the
+ * nucleus. It grows toward the tip (`STREAK_FAR`) so the stream reads as
+ * material stretching outward rather than as a field of static dots — the
+ * same reason a phaser beam is drawn as a line and not a dash. */
+const STREAK_NEAR = 4;
+const STREAK_FAR = 9;
+
+/** One streaming mote in the tail. `angle` and `radial` are fixed at
+ * construction — only `along` moves — so a particle spirals slightly outward
+ * as it flows and snaps back to a tight radius when it wraps, which is
+ * exactly the shape a cone's own cross-section implies for something moving
+ * along its axis at a constant fraction of the local radius. */
+interface TailMote {
+  along: number;
+  angle: number;
+  radial: number;
+}
+
+/** One spoke of the coma halo, in full spherical spread around the nucleus —
+ * unlike the tail, which only exists downstream of it. */
+interface ComaSpoke {
+  theta: number;
+  phi: number;
+  reach: number;
+}
+
+/**
+ * A seed for this comet's own rock jitter and tail field, derived from the
+ * plan rather than carried on it. `CometPlan` has no seed field of its own —
+ * adding one would duplicate state the plan's numbers already are — and
+ * `planFixture`/`planWanderer` are themselves deterministic, so hashing the
+ * placement is enough: the same comet always produces the same plan values
+ * and therefore the same hash, which is what makes the particle field (and
+ * incidentally the rock) look the same on a second visit.
+ */
+function seedFrom(plan: CometPlan): number {
+  const mix = (n: number): number => {
+    let h = Math.imul(Math.floor(n * 1024) ^ 0x9e3779b9, 2654435761) >>> 0;
+    h ^= h >>> 15;
+    return h >>> 0;
+  };
+  return (mix(plan.nucleus.x) ^ mix(plan.nucleus.z) ^ mix(plan.length) ^ mix(plan.nearRadius)) >>> 0;
+}
+
+/**
+ * An icosahedron with each corner pushed in or out along its own radius.
+ *
+ * `IcosahedronGeometry` is non-indexed — every face owns three private copies
+ * of its corners rather than sharing twelve — so jittering by vertex index
+ * would tear the faces apart at every shared edge. Corners are keyed by their
+ * un-jittered position instead, so every face that meets at a given corner
+ * moves it by the same amount and the rock stays watertight.
+ */
+function buildRockGeometry(radius: number, rng: Rng): IcosahedronGeometry {
+  const geometry = new IcosahedronGeometry(radius, 0);
+  const position = geometry.getAttribute("position") as BufferAttribute;
+  const scaleByCorner = new Map<string, number>();
+  const v = new Vector3();
+
+  for (let i = 0; i < position.count; i++) {
+    v.fromBufferAttribute(position, i);
+    const key = `${v.x.toFixed(1)}:${v.y.toFixed(1)}:${v.z.toFixed(1)}`;
+    let scale = scaleByCorner.get(key);
+    if (scale === undefined) {
+      scale = 1 - ROCK_JITTER / 2 + rng.next() * ROCK_JITTER;
+      scaleByCorner.set(key, scale);
+    }
+    v.multiplyScalar(scale);
+    position.setXYZ(i, v.x, v.y, v.z);
+  }
+  position.needsUpdate = true;
+  return geometry;
+}
+
+/**
+ * The comet as drawn: a nucleus, a coma and a tail — `docs/comet.md` §6.
+ *
+ * Everything obeys the locked idiom. The nucleus is real occluded geometry
+ * through `VectorObject`, exactly the argument `Planet.ts` records for why the
+ * ringed planet stopped being a picture: a solid body has to be able to hide
+ * what is behind it. The coma and the tail are neither — they are strokes
+ * through `TraceBuffer`, regenerated in full every frame and never
+ * accumulated, the same contract every other transient in this game keeps.
+ *
+ * `object` holds only the nucleus. The coma and the tail are pushed straight
+ * into the shared `TraceBuffer` in world space, exactly as `Loom.draw` pushes
+ * the weave rather than moving a `Group` — a comet drifting slowly across a
+ * whole run is not worth a second transform to keep in step with `plan`'s own
+ * numbers when `draw` can simply read them.
+ */
+export class Comet {
+  readonly object = Object.assign(new Group(), { name: "comet" });
+
+  plan: CometPlan | null = null;
+
+  private rock: VectorObject | null = null;
+  private readonly comaSpokes: ComaSpoke[] = [];
+  private readonly motes: TailMote[] = [];
+
+  /**
+   * Rebuild for a new plan, if it is not already the one standing.
+   *
+   * A reference check rather than a key string: unlike `Planet.show`, which is
+   * handed a bare `seed`/`sector` pair every frame and has to build its own
+   * identity for them, a caller here already holds the one `CometPlan` object
+   * that answers "which comet" — passing `null` through is the same
+   * convenience `interferenceAt` takes at every call site.
+   */
+  show(plan: CometPlan | null): void {
+    if (plan === this.plan) return;
+    this.clear();
+    this.plan = plan;
+    if (!plan) return;
+
+    const rng = makeRng(seedFrom(plan));
+
+    this.rock = new VectorObject(buildRockGeometry(plan.nucleusRadius * ROCK_FRACTION, rng), {
+      color: COMET_COLOR,
+      linewidth: 1.1,
+    });
+    this.object.add(this.rock.group);
+    this.object.position.copy(plan.nucleus);
+
+    for (let i = 0; i < COMA_SPOKES; i++) {
+      this.comaSpokes.push({
+        theta: rng.next() * Math.PI * 2,
+        phi: (rng.next() - 0.5) * Math.PI,
+        reach: rng.next(),
+      });
+    }
+    for (let i = 0; i < COMET.strokes; i++) {
+      this.motes.push({ along: rng.next(), angle: rng.next() * Math.PI * 2, radial: rng.next() });
+    }
+  }
+
+  /**
+   * Streams the tail forward and keeps the rock on station.
+   *
+   * `plan.nucleus` may have drifted since last frame — moving it is Task 3's
+   * concern, wired into `Session`, not this one's — so this only ever reads
+   * the position it is given rather than integrating `plan.drift` itself.
+   */
+  update(dt: number): void {
+    if (!this.plan) return;
+    this.object.position.copy(this.plan.nucleus);
+
+    const step = (COMET.flow * dt) / this.plan.length;
+    for (const mote of this.motes) {
+      mote.along += step;
+      if (mote.along >= 1) mote.along -= Math.floor(mote.along);
+    }
+  }
+
+  /**
+   * The coma and the tail, as strokes.
+   *
+   * Both are computed in world space from `plan` directly — never from
+   * `object`'s own transform, which only the rock reads — so a comet that has
+   * drifted since `update` last ran is drawn exactly where it now stands.
+   *
+   * Regenerated in full every call and nothing here persists between them:
+   * this is what `TraceBuffer` is for, and `COMET.strokes` (40) plus
+   * `COMA_SPOKES` (12) is comfortably under 1% of its 5000-segment ceiling for
+   * the one comet a sector ever has standing at once.
+   */
+  draw(trace: TraceBuffer): void {
+    if (!this.plan) return;
+    const plan = this.plan;
+    const { x: nx, y: ny, z: nz } = plan.nucleus;
+    const rockRadius = plan.nucleusRadius * ROCK_FRACTION;
+
+    // The coma: short spokes in a full sphere around the rock, from just past
+    // its own surface out toward the coma's interference radius — the halo
+    // that keeps the head from reading as a hole in the middle of its own
+    // tail. Brightest nearest the rock, the same falloff the tail itself uses.
+    for (const spoke of this.comaSpokes) {
+      const cosPhi = Math.cos(spoke.phi);
+      const dx = Math.sin(spoke.theta) * cosPhi;
+      const dy = Math.sin(spoke.phi);
+      const dz = Math.cos(spoke.theta) * cosPhi;
+      const inner = rockRadius * 1.15;
+      const outer = rockRadius + (plan.nucleusRadius - rockRadius) * (0.35 + spoke.reach * 0.65);
+      trace.push(
+        nx + dx * inner,
+        ny + dy * inner,
+        nz + dz * inner,
+        nx + dx * outer,
+        ny + dy * outer,
+        nz + dz * outer,
+        COMET_COLOR,
+        0.75 - spoke.reach * 0.35,
+      );
+    }
+
+    // The tail: each mote drawn as a short streak along the flow direction,
+    // at a radius that follows the cone `interferenceAt` itself tests —
+    // `nearRadius` at the nucleus widening to `farRadius` at the tip — so the
+    // strokes and the rule they are standing in for never disagree about the
+    // tail's shape.
+    const rightX = -plan.direction.z;
+    const rightZ = plan.direction.x;
+    for (const mote of this.motes) {
+      const t = mote.along * plan.length;
+      const radius = plan.nearRadius + (plan.farRadius - plan.nearRadius) * mote.along;
+      const r = mote.radial * radius;
+      const ox = Math.cos(mote.angle) * r;
+      const oy = Math.sin(mote.angle) * r;
+
+      const ax = nx + plan.direction.x * t + rightX * ox;
+      const ay = ny + oy;
+      const az = nz + plan.direction.z * t + rightZ * ox;
+
+      const streak = STREAK_NEAR + (STREAK_FAR - STREAK_NEAR) * mote.along;
+      const bx = ax - plan.direction.x * streak;
+      const bz = az - plan.direction.z * streak;
+
+      // Dims toward the tip and toward the edge of the cone — never toward
+      // the axis, which is what keeps the tail reading as a diffuse stream
+      // rather than a hollow shell.
+      const level = (1 - mote.along * 0.85) * (1 - mote.radial * 0.7);
+      trace.push(ax, ay, az, bx, ay, bz, COMET_COLOR, Math.max(0.08, level));
+    }
+  }
+
+  setMode(mode: Parameters<VectorObject["setMode"]>[0]): void {
+    this.rock?.setMode(mode);
+  }
+
+  /** Torn down on a sector change or a run restart — the same moment
+   * `Planet.clear` and `Loom.clear` are. */
+  clear(): void {
+    this.rock?.dispose();
+    this.rock = null;
+    this.comaSpokes.length = 0;
+    this.motes.length = 0;
+    this.plan = null;
+    for (const child of [...this.object.children]) this.object.remove(child);
+  }
 }
