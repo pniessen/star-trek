@@ -132,6 +132,23 @@ function clipSegmentToCircle(
   return [x0 + dx * t0, z0 + dz * t0, x0 + dx * t1, z0 + dz * t1];
 }
 
+/**
+ * A bearing as three digits, and the only correct way to write one here.
+ *
+ * `pad` rounds and then pads, which is right for a score and wrong for a
+ * compass: it takes the modulo before rounding, so every bearing from 359.5 up
+ * displays as `360` — a reading that does not exist on any compass, appearing
+ * for half a degree of the turn, on the one instrument whose whole job is to be
+ * unambiguous about which way you are pointed. Rounding *first* and wrapping
+ * after is what makes 359.7 read `000`.
+ *
+ * Both readouts go through this, so the rose and the cluster can never disagree
+ * about the same number.
+ */
+export function compass(degrees: number): string {
+  return (Math.round(degrees) % 360).toString().padStart(3, "0");
+}
+
 function pad(value: number, width: number): string {
   return Math.max(0, Math.round(value)).toString().padStart(width, "0");
 }
@@ -191,6 +208,7 @@ export function drawHud(hud: Hud, view: HudView): void {
 
   drawScanner(hud, view, width / 2, height - 148);
   drawShields(hud, player, width / 2, 96, view);
+  drawHeading(hud, player, width / 2, 48);
   // Only when there is a slab to be in. With the switch off the panel is the
   // panel this game has always had, down to the last stroke.
   if (flight.threeD) drawAltitude(hud, player, width / 2 + 58, 96);
@@ -527,6 +545,48 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     );
   }
   hud.segments(ticks, PALETTE.traceDim);
+
+  /**
+   * The compass rose: what absolute bearing each quarter of the tube points at.
+   *
+   * A heading-up tube is the right choice and stays the right choice — see the
+   * header — but it only ever showed bearings *relative to your nose*, so there
+   * was no way to answer "which way am I facing" or "what bearing is that
+   * contact on", and no instrument anywhere else answered them either.
+   * `Ship.bearing` had existed the whole time and nothing drew it.
+   *
+   * The numbers rotate and the ticks do not, which is the whole idea: the mark at
+   * the top of the tube is always your nose, and the number beside it is where
+   * your nose is pointed. Read any contact's absolute bearing by interpolating
+   * between the four labels rather than by measuring an angle against nothing.
+   *
+   * Three digits, zero-padded, because a readout that changes width as it crosses
+   * 100 jitters under the eye at exactly the moment you are trying to hold a
+   * heading. That is the marine and aviation convention and it is the convention
+   * for the same reason.
+   *
+   * The quarters are dim and the nose is not. This is a rule printed on the
+   * instrument, not traffic on it — the same distinction the starbase's course
+   * line already draws, and the reason neither of them may compete with a
+   * contact.
+   */
+  const heading = player.bearing;
+  for (let i = 0; i < 4; i++) {
+    const quarter = i * 90;
+    const angle = Math.PI / 2 - (quarter * Math.PI) / 180;
+    const label = compass(heading + quarter);
+    const size = i === 0 ? 1.5 : 1.2;
+    const out = radius + (i === 0 ? 21 : 16);
+    scratch.copy(PALETTE.traceDim).multiplyScalar(i === 0 ? 1.15 : 0.55);
+    centred(
+      hud,
+      label,
+      cx + Math.cos(angle) * out,
+      cy + Math.sin(angle) * out - size * 3,
+      size,
+      scratch,
+    );
+  }
 
   // The sweep, with a short decaying trail behind it. The trail is not
   // decoration: it is how you judge when the arm is next due back over a
@@ -1071,6 +1131,30 @@ function drawShields(hud: Hud, player: Ship, cx: number, cy: number, _view?: Hud
     PALETTE.traceDim,
   );
   hud.textRight("SHIELDS", cx - 48, cy - 4, 1.5, PALETTE.traceDim);
+}
+
+/**
+ * Where the nose is pointed, in degrees, under the shield cluster.
+ *
+ * The scanner's rose already carries this number and carries it better, because
+ * there it labels a direction on a picture. This one exists because the tube is
+ * an instrument you consult and the cluster is the one you *live* in: hull,
+ * reserve, facings, height and now heading, all readable in the glance you were
+ * already making. A player holding a course should not have to look up to the
+ * top of the frame to keep it.
+ *
+ * Directly beneath the ring rather than beside it, because the two flanks are
+ * taken — the `SHIELDS` label runs leftward from `cx - 48` and the altitude tape
+ * owns `cx + 58` — and because a heading belongs with the ship's attitude rather
+ * than alongside a quantity it has nothing to do with.
+ *
+ * Same three zero-padded digits as the rose, for the same reason: a number that
+ * changes width as it crosses 100 jitters exactly when you are trying to hold it
+ * steady. Two readouts of one quantity may never disagree about their shape.
+ */
+function drawHeading(hud: Hud, player: Ship, cx: number, cy: number): void {
+  hud.textRight("HDG", cx - 8, cy, 1.5, PALETTE.traceDim);
+  hud.text(compass(player.bearing), cx + 4, cy, 1.9, PALETTE.trace);
 }
 
 /**

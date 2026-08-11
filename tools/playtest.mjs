@@ -147,6 +147,25 @@ check(
   JSON.stringify(fixtureSeeded),
 );
 
+// ── the compass ─────────────────────────────────────────────────────────────
+// A bearing readout must never show 360, and the naive spelling does: taking
+// the modulo before rounding displays `360` for every bearing from 359.5 up.
+// Half a degree of every turn, on the one instrument whose job is to say
+// unambiguously which way you are pointed. Pure formatting, so it is asserted
+// here with the other run-independent checks.
+const bearings = await page.evaluate(async () => {
+  const { compass } = await import("/src/hud/draw.ts");
+  return [0, 5, 95, 359.4, 359.5, 359.7, 360].map((d) => compass(d));
+});
+check("a bearing is always three digits", bearings.every((b) => b.length === 3), bearings.join(" "));
+check("...and never reads 360", !bearings.includes("360"), bearings.join(" "));
+check(
+  "...and wraps to 000 rather than rounding over the top",
+  bearings[4] === "000" && bearings[5] === "000" && bearings[6] === "000",
+  `359.5=${bearings[4]} 359.7=${bearings[5]} 360=${bearings[6]}`,
+);
+check("...and pads below 100", bearings[0] === "000" && bearings[1] === "005", bearings.slice(0, 2).join(" "));
+
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
 // — the same contract `Y` has. Checked before the first run, which is also the
