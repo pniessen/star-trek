@@ -274,15 +274,49 @@ export const COMET = {
    * the renderer. Purely cosmetic; unused until Task 4. */
   flow: 18,
   /**
-   * Streaming strokes drawn per frame for one tail. Was 40 — about one
-   * stroke per ten units of a 420-unit cone — until code review's
-   * screenshots showed exactly what this repo already has on record for the
-   * same mistake: the backdrop's star band went from 2,600 candidates to
-   * 20,000 for the same reason a sparse point field reads as noise, not a
-   * body. 500 is still a tenth of `TraceBuffer`'s 5000-segment ceiling, and
-   * only one comet is ever standing at once.
+   * Filaments in the plume, and segments in each.
+   *
+   * This replaced 500 loose motes, and the reason is the whole shape of the
+   * thing. Each mote was an independent equal-length dash, all of them parallel
+   * to the axis and scattered uniformly through the cone — which is a *particle
+   * field*, and a particle field is what it read as: test play called it "a
+   * collection of vector lines" that "doesn't have the visual effect one expects
+   * from a comet". More of them would not have fixed it. Density was never the
+   * problem; continuity was.
+   *
+   * A filament is a chain of connected segments streaming down the tail, so the
+   * eye follows a line of gas instead of counting specks. `Backdrop.buildNebula`
+   * already reached the same answer for the same reason and is the precedent —
+   * and it also recorded the trap, which is that a flow varying over the *patch*
+   * rather than over each *filament* draws circles instead of streams.
+   *
+   * 60 × 13 is 780 at the absolute ceiling, against `TraceBuffer`'s 5000 shared
+   * game-wide — but segments outside the tail are skipped rather than drawn, so
+   * the true per-frame cost is lower and only one comet ever stands at once.
    */
-  strokes: 500,
+  filaments: 84,
+  filamentSegments: 13,
+  /**
+   * How much of the tail's length one filament spans, as a fraction, before the
+   * per-filament jitter. Short enough that several overlap at any point along
+   * the axis — that overlap is what makes a plume look continuous rather than
+   * combed — and long enough to read as a stroke rather than a dash.
+   */
+  filamentSpan: 0.34,
+  /**
+   * Radians a filament turns about the axis over its whole span. Small: this is
+   * the difference between gas that is streaming and gas that is being stirred,
+   * and a comet tail is the first of those. Zero would make every filament a
+   * perfectly straight radial line and put the combed look straight back.
+   */
+  swirl: 0.5,
+  /**
+   * Exponent biasing filaments toward the axis. Above 1 crowds the core and
+   * thins the envelope, which is what gives the plume a soft edge instead of the
+   * visible cone boundary a uniform distribution draws. The boundary itself is
+   * still exactly `radiusAt` — this only decides where the gas sits inside it.
+   */
+  coreBias: 1.9,
 } as const;
 
 /**
@@ -446,15 +480,33 @@ export function planWanderer(around: Vector3, sunAzimuth: number | null, rng: ()
  * there too: magenta is the Shroud's own colour, and a magenta field would be
  * the worst possible background to hunt a magenta contact against.
  *
- * `encounters.md`'s rule for decoration is strictly lower saturation *and*
- * lower luminance than any information colour. `PALETTE.traceDim` is the
- * dimmest one on the wheel (structure, grid, distant detail), so it is the
- * bar to clear: in sRGB HSL it sits at s≈0.54, l≈0.37. This sits at s=0.20,
- * l=0.30 — comfortably under both, and blue enough (hue 205°) to read as
- * "ice" rather than as a paler version of the cyan every information colour
- * on the wheel already leans toward.
+ * **Saturation is the rule this obeys; luminance is not, and the first version
+ * got that wrong.** `encounters.md` asks decoration for strictly lower
+ * saturation *and* lower luminance than any information colour, and this was
+ * built to both — s=0.20, l=0.30, under `PALETTE.traceDim`'s s≈0.54, l≈0.37 on
+ * every axis. Then it was flown: "just looks like a collection of vector lines".
+ * Part of that was the tail's shape, which `COMET.filaments` fixes. The rest was
+ * this. `Stage.ts` fogs the scene 45..260, so a comet met at a hundred units has
+ * already lost a third of its brightness before a stroke is drawn, and a colour
+ * chosen to sit below the dimmest thing on the panel has nothing left to lose.
+ *
+ * The luminance half of that rule was written for the *sky* — a backdrop that
+ * must never compete with the instruments in front of it, and which nothing ever
+ * flies through. This is a world object at fighting range that the design
+ * requires you to find. Holding it to a backdrop's ceiling was applying the
+ * right rule to the wrong kind of thing.
+ *
+ * What actually keeps a colour out of the information vocabulary is
+ * **saturation**: every information colour here is a committed hue — cyan gold
+ * acid-green red-orange violet magenta. At s=0.20 this cannot be mistaken for
+ * any of them at any brightness; it reads as pale gas, which is what it is. So
+ * the saturation stays where it was and the luminance rises to where the thing
+ * is visible.
+ *
+ * The HUD wedge takes the same colour scaled down, because a panel glyph is
+ * unfogged and has the opposite problem — see `hud/draw.ts`.
  */
-export const COMET_COLOR = new Color().setHSL(205 / 360, 0.2, 0.3, SRGBColorSpace);
+export const COMET_COLOR = new Color().setHSL(205 / 360, 0.2, 0.62, SRGBColorSpace);
 
 /** The visible rock's radius, as a fraction of `CometPlan.nucleusRadius` —
  * the coma's own interference sphere, which the rock has to sit well inside
@@ -478,16 +530,27 @@ const ROCK_FRACTION = 0.4;
  */
 const ROCK_JITTER = 0.5;
 
-/** World units a tail streak trails behind its own leading point, nearest the
- * nucleus. It grows toward the tip (`STREAK_FAR`) so the stream reads as
- * material stretching outward rather than as a field of static dots — the
- * same reason a phaser beam is drawn as a line and not a dash. */
-const STREAK_NEAR = 4;
-const STREAK_FAR = 9;
+/**
+ * How much of a filament's length fades in at its head and out at its tail.
+ *
+ * The single most important number for whether this reads as gas. A filament
+ * drawn at even brightness end to end terminates in a hard stop, and sixty hard
+ * stops scattered through a cone is precisely the "collection of vector lines"
+ * the loose-mote version was rejected for — the continuity buys nothing if every
+ * strand still announces where it ends. Tapering both ends to nothing means no
+ * filament has a visible end at all, and the eye integrates the overlap into
+ * something with no edges, which is what a plume is.
+ *
+ * The tail end fades over a longer run than the head, because the head is
+ * emerging from the coma where the gas is dense and the tail is dissipating
+ * where it is not.
+ */
+const FILAMENT_FADE_IN = 0.18;
+const FILAMENT_FADE_OUT = 0.4;
 
 /**
- * Skews a mote's seeded `along` toward the nucleus, so the tail's own
- * density stands in for the coma instead of a second, separate stroke set.
+ * The coma — the glow around the head, and how it stopped being made of
+ * particles.
  *
  * The first version of this file drew twelve short spokes radiating from the
  * rock in a full sphere — the design doc's "halo of short strokes" (§6) read
@@ -503,23 +566,44 @@ const STREAK_FAR = 9;
  * falloff (dimmer with `along`) was already making that same region the
  * brightest part of the tail; this just makes it the densest part too.
  *
- * `update` only ever adds a constant `step` to `along` and wraps it, the same
- * amount for every mote every frame — a rigid rotation through the [0, 1)
- * cycle — so the shape of the distribution this seeds is exactly the shape
- * it keeps for the comet's whole lifetime, not just at the moment `show` is
- * called.
+ * **That version had a flaw, and this is the correction.** Seeding the density
+ * cluster into the flow made it a feature of the *particles*, not of the *head*
+ * — and `update` moves every particle down the axis at the same rate. A rigid
+ * rotation preserves the distribution's shape, but it also carries it: the
+ * cluster drifted away from the nucleus, reached the tip, and wrapped, so the
+ * coma slowly pulsed down the tail instead of staying on the rock. The old
+ * comment claimed the shape was kept for the comet's lifetime, which was true,
+ * and quietly implied it was kept *in place*, which was not.
+ *
+ * A coma is a property of position, so it is now computed at draw time from
+ * `along` rather than seeded into the field. It cannot migrate because it is not
+ * made of anything that moves.
  */
-const COMA_BIAS = 2;
+const COMA_GLOW = 1.1;
+/** Fraction of the tail's length the head glow reaches before it is spent. */
+const COMA_REACH = 0.14;
 
-/** One streaming mote in the tail. `angle` and `radial` are fixed at
- * construction — only `along` moves — so a particle spirals slightly outward
- * as it flows and snaps back to a tight radius when it wraps, which is
- * exactly the shape a cone's own cross-section implies for something moving
- * along its axis at a constant fraction of the local radius. */
-interface TailMote {
-  along: number;
+/**
+ * One strand of the plume. Everything but `head` is fixed at construction, so a
+ * filament keeps its shape for the comet's whole life and only its position
+ * along the axis moves — the same rigid-rotation property the mote field had,
+ * and the reason the distribution `show` seeds is the distribution you see.
+ *
+ * `radial` is a fraction of the *local* cone radius rather than a world
+ * distance, so a filament fans outward exactly as fast as `radiusAt` widens and
+ * never crosses the boundary `interferenceAt` tests.
+ */
+interface TailFilament {
+  /** Position of the strand's leading end, in [-span, 1]. Advances with the flow. */
+  head: number;
+  /** How far along the tail it reaches from `head`. */
+  span: number;
   angle: number;
   radial: number;
+  /** Radians turned about the axis across the whole span. Signed. */
+  swirl: number;
+  /** Per-strand brightness, so the plume is not uniformly lit. */
+  level: number;
 }
 
 /**
@@ -617,7 +701,7 @@ export class Comet {
   says: string | null = null;
 
   private rock: VectorObject | null = null;
-  private readonly motes: TailMote[] = [];
+  private readonly filaments: TailFilament[] = [];
 
   /**
    * Rebuild for a new plan, if it is not already the one standing.
@@ -643,11 +727,20 @@ export class Comet {
     this.object.add(this.rock.group);
     this.object.position.copy(plan.nucleus);
 
-    for (let i = 0; i < COMET.strokes; i++) {
-      this.motes.push({
-        along: rng.next() ** COMA_BIAS,
+    for (let i = 0; i < COMET.filaments; i++) {
+      const span = COMET.filamentSpan * (0.55 + rng.next() * 0.9);
+      this.filaments.push({
+        // Seeded across the whole cycle including the negative part, so the
+        // plume is already mid-stream on its first frame rather than every
+        // strand marching out of the nucleus together.
+        head: rng.next() * (1 + span) - span,
+        span,
         angle: rng.next() * Math.PI * 2,
-        radial: rng.next(),
+        // Biased to the axis: dense core, thin envelope, soft edge. See
+        // `COMET.coreBias`.
+        radial: rng.next() ** COMET.coreBias,
+        swirl: (rng.next() * 2 - 1) * COMET.swirl,
+        level: 0.55 + rng.next() * 0.45,
       });
     }
   }
@@ -664,9 +757,12 @@ export class Comet {
     this.object.position.copy(this.plan.nucleus);
 
     const step = (COMET.flow * dt) / this.plan.length;
-    for (const mote of this.motes) {
-      mote.along += step;
-      if (mote.along >= 1) mote.along -= Math.floor(mote.along);
+    for (const filament of this.filaments) {
+      filament.head += step;
+      // Re-enters from behind the nucleus rather than from 0, so a strand fades
+      // in as it emerges instead of appearing whole. Wrapping at its own span is
+      // what makes emergence continuous.
+      if (filament.head > 1) filament.head -= 1 + filament.span;
     }
   }
 
@@ -688,33 +784,63 @@ export class Comet {
     const plan = this.plan;
     const { x: nx, y: ny, z: nz } = plan.nucleus;
 
-    // Each mote drawn as a short streak along the flow direction,
-    // at a radius that follows the cone `interferenceAt` itself tests —
-    // `nearRadius` at the nucleus widening to `farRadius` at the tip — so the
-    // strokes and the rule they are standing in for never disagree about the
-    // tail's shape.
+    // Each filament walked as a connected chain, at a radius following the cone
+    // `interferenceAt` itself tests, so the plume and the rule it stands in for
+    // never disagree about the tail's shape.
     const rightX = -plan.direction.z;
     const rightZ = plan.direction.x;
-    for (const mote of this.motes) {
-      const t = mote.along * plan.length;
-      const radius = radiusAt(plan, mote.along);
-      const r = mote.radial * radius;
-      const ox = Math.cos(mote.angle) * r;
-      const oy = Math.sin(mote.angle) * r;
+    const steps = COMET.filamentSegments;
 
-      const ax = nx + plan.direction.x * t + rightX * ox;
-      const ay = ny + oy;
-      const az = nz + plan.direction.z * t + rightZ * ox;
+    for (const filament of this.filaments) {
+      let px = 0;
+      let py = 0;
+      let pz = 0;
+      let previous = -1;
 
-      const streak = STREAK_NEAR + (STREAK_FAR - STREAK_NEAR) * mote.along;
-      const bx = ax - plan.direction.x * streak;
-      const bz = az - plan.direction.z * streak;
+      for (let k = 0; k <= steps; k++) {
+        const u = k / steps;
+        const along = filament.head + filament.span * u;
+        // Outside the tail: break the chain rather than clamping it, or a strand
+        // half-emerged would be drawn flattened against the nucleus.
+        if (along < 0 || along > 1) {
+          previous = -1;
+          continue;
+        }
 
-      // Dims toward the tip and toward the edge of the cone — never toward
-      // the axis, which is what keeps the tail reading as a diffuse stream
-      // rather than a hollow shell.
-      const level = (1 - mote.along * 0.85) * (1 - mote.radial * 0.7);
-      trace.push(ax, ay, az, bx, ay, bz, COMET_COLOR, Math.max(0.08, level));
+        const angle = filament.angle + filament.swirl * u;
+        const r = filament.radial * radiusAt(plan, along);
+        const ox = Math.cos(angle) * r;
+        const oy = Math.sin(angle) * r;
+        const t = along * plan.length;
+
+        const x = nx + plan.direction.x * t + rightX * ox;
+        const y = ny + oy;
+        const z = nz + plan.direction.z * t + rightZ * ox;
+
+        if (previous >= 0) {
+          // Fades along the tail, softens toward the envelope, and tapers to
+          // nothing at both of the strand's own ends — the last of those is what
+          // stops sixty visible line-ends reading as scatter. See
+          // `FILAMENT_FADE_IN`.
+          const mid = (u + previous) / 2;
+          const ends = Math.min(1, mid / FILAMENT_FADE_IN, (1 - mid) / FILAMENT_FADE_OUT);
+          // The coma, as brightness rather than as density — see `COMA_GLOW`
+          // for why the seeded-cluster version could not stay on the rock.
+          const coma = 1 + COMA_GLOW * Math.max(0, 1 - along / COMA_REACH);
+          const level =
+            filament.level *
+            ends *
+            coma *
+            (1 - along * 0.72) *
+            (1 - filament.radial * 0.55);
+          if (level > 0.02) trace.push(px, py, pz, x, y, z, COMET_COLOR, level);
+        }
+
+        px = x;
+        py = y;
+        pz = z;
+        previous = u;
+      }
     }
   }
 
@@ -727,7 +853,7 @@ export class Comet {
   clear(): void {
     this.rock?.dispose();
     this.rock = null;
-    this.motes.length = 0;
+    this.filaments.length = 0;
     this.plan = null;
     this.says = null;
     for (const child of [...this.object.children]) this.object.remove(child);

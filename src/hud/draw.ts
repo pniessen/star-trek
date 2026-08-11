@@ -704,18 +704,22 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       const p1 = project(point.set(clipped[2], 0, clipped[3]));
       wedge.push(p0.x, p0.y, p1.x, p1.y);
     }
-    // No multiplier: `COMET_COLOR` alone is the wedge's brightness.
-    // `docs/comet.md` §6 bounds its *hue* — strictly lower saturation and
-    // luminance than any information colour, which Task 2's review confirmed
-    // clears the whole palette, `PALETTE.star` included — but nothing there
-    // requires darkening it further before it is drawn. A `× 0.6` on top read
-    // as belt-and-braces and instead put the wedge below the threshold this
-    // brief is graded on: legible at a glance, from the tube alone. Measured
-    // against the same scanner (`task-5-report.md`), full-strength
-    // `COMET_COLOR` still lands well under both `PALETTE.traceDim`'s rings and
-    // a resolved contact's mark — board, not traffic — with room to spare, so
-    // this is the ceiling, not a compromise.
-    hud.segments(wedge, COMET_COLOR);
+    // Scaled down now, and for the exact inverse of the reason the world tail
+    // was scaled up. This drew at full `COMET_COLOR` while that colour sat at
+    // l=0.30, and measured well under the rings. Test play then found the *world*
+    // tail invisible — `Stage.ts` fogs the scene 45..260, so a comet met at
+    // fighting range loses a third of its light before a stroke lands — and
+    // `COMET_COLOR` went to l=0.62 to fix it. A panel glyph is never fogged, so
+    // the value that is barely enough out there is far too much in here, and
+    // leaving this at full strength would have quietly promoted the wedge above
+    // the rings the first time the world colour moved.
+    //
+    // The ordering is the requirement, not the multiplier: the wedge stays under
+    // `PALETTE.traceDim`'s rings and under a resolved contact, because it is
+    // board and they are traffic. `0.42` is what restores the measured ratio
+    // `task-5-report.md` recorded before the world colour changed.
+    scratch.copy(COMET_COLOR).multiplyScalar(0.42);
+    hud.segments(wedge, scratch);
   }
 
   /**

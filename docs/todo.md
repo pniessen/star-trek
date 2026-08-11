@@ -261,10 +261,37 @@ at all*, not merely how it looks:
   shape of the fade along the tail. Reasoned against the boundary having to
   *look* interfered with (§3 of the design) rather than measured against a
   screen.
-- **`flow = 18`** and **`strokes = 500`** — purely cosmetic, the tail's own
-  animation rate and density. `strokes` was already raised once from 40 before
-  ever being flown, on the strength of the backdrop's own star-count history
-  (see `comet.ts`); still unverified against a real frame.
+- **The plume** — `flow = 18`, `filaments = 84`, `filamentSegments = 13`,
+  `filamentSpan = 0.34`, `swirl = 0.5`, `coreBias = 1.9`, and the `COMA_GLOW` /
+  `COMA_REACH` pair. Cosmetic, but the block with the most flown evidence behind
+  it, because two rounds of test play landed on it directly.
+
+  The tail was 500 loose motes and read as *"a collection of vector lines"* with
+  none of "the visual effect one expects from a comet". Density was never the
+  problem — it had already been raised from 40 to 500 for exactly that mistaken
+  reason. **Continuity was.** A mote is an isolated dash; sixty connected
+  filaments streaming down the axis read as gas, which is what
+  `Backdrop.buildNebula` had already concluded for the same reason.
+
+  Two things fell out of that and both are worth knowing before touching these:
+  **the coma cannot be seeded into the flow** — a density cluster near the head
+  is carried down the tail by `update` and wraps, so the glow migrated instead of
+  sitting on the rock; it is now computed from `along` at draw time. And the
+  filament *end fades* (`FILAMENT_FADE_IN/OUT`) matter more than the count: 84
+  strands with hard ends are 84 visible line-ends, which is the scatter the whole
+  change was meant to remove.
+
+  Measured at **779 segments a frame** against `TraceBuffer`'s shared 5000.
+- **`COMET_COLOR`'s luminance, now 0.62, was 0.30.** Not on this list as a
+  preference — it is a correction. The original obeyed `encounters.md`'s rule for
+  *decoration*: lower saturation **and** lower luminance than any information
+  colour. That rule was written for the sky, which nothing flies through, and
+  applying it to a world object at fighting range made the plume invisible once
+  `Stage.ts`'s 45..260 fog took its third. Saturation (0.20) is what actually
+  keeps a colour out of the information vocabulary, since every information hue
+  here is a committed one; luminance was the wrong half to borrow. The HUD wedge
+  now scales the same colour *down* by 0.42, because a panel glyph is unfogged
+  and has the opposite problem — if either number moves, check the other.
 
 Three more came out of building and reviewing it, not out of the original
 design, and are recorded here rather than only in code comments because they
@@ -358,8 +385,10 @@ yet resolved by it:
 4. **Draw cost.** The tail is a per-frame stroke field on top of a post chain
    that already costs half a second a frame under software GL (see the
    headless-Chromium gotcha in §6). The playtest harness runs post disabled
-   for exactly this reason, and `COMET.strokes` has to be set against a real
-   machine, not the harness.
+   for exactly this reason, and `COMET.filaments` × `filamentSegments` has to be
+   set against a real machine, not the harness. Measured at 779 segments a frame
+   against a shared 5000 on a real one, so there is headroom — but the harness
+   cannot tell you what that costs under post.
 
 ---
 
