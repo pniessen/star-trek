@@ -1148,18 +1148,6 @@ if (DEBUG_PROBE) {
      *
      *   __sky.pin(1, 0); __sky.next(); __sky.enabled = false; __sky.unpin();
      */
-    /**
-     * The comet's pure geometry, exposed the same way `__loom` exposes the
-     * weave: nothing here has a renderer or session wiring yet (that is
-     * Tasks 2-4), so what a harness can test today is the tail-volume rule
-     * itself. `plan` fixes `sunAzimuth` at `null` because nothing in the game
-     * calls `planFixture` with a real one yet either — see `game/comet.ts`.
-     */
-    __comet: {
-      interferenceAt,
-      plan: (seed: number, sector: number) => planFixture(seed, sector, null),
-      constants: COMET,
-    },
     __sky: {
       get enabled(): boolean {
         return backdrop.enabled;
@@ -1172,6 +1160,18 @@ if (DEBUG_PROBE) {
       prev: () => sky.cycle(-1),
       unpin: () => sky.unpin(),
       describe: () => sky.describe(),
+    },
+    /**
+     * The comet's pure geometry, exposed the same way `__loom` exposes the
+     * weave: nothing here has a renderer or session wiring yet (that is
+     * Tasks 2-4), so what a harness can test today is the tail-volume rule
+     * itself. `plan` fixes `sunAzimuth` at `null` because nothing in the game
+     * calls `planFixture` with a real one yet either — see `game/comet.ts`.
+     */
+    __comet: {
+      interferenceAt,
+      plan: (seed: number, sector: number) => planFixture(seed, sector, null),
+      constants: COMET,
     },
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.

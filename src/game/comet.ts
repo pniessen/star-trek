@@ -100,10 +100,11 @@ export const COMET = {
   /**
    * The interference value above which fire-control and cloaks are treated
    * as *inside*, not merely degraded — the boundary consequences in §2 of the
-   * design key off. Set at the halfway point of the range `interferenceAt`
-   * returns, mirroring the halfway-point shape of `hostiles.ts`'s own
-   * `HIDDEN_AT` threshold on `cloak`. Unused until Task 2 wires the hostile
-   * side of the rule.
+   * design key off. Set at the halfway point of the 0-1 range `interferenceAt`
+   * returns — a plain midpoint guess, not derived from `hostiles.ts`'s own
+   * `HIDDEN_AT` threshold on `cloak` (0.4), which is a different number for a
+   * different question and is not meant to match this one. Unused until
+   * Task 2 wires the hostile side of the rule.
    */
   stripAt: 0.5,
 
@@ -247,22 +248,40 @@ export function interferenceAt(plan: CometPlan | null, x: number, z: number): nu
   return Math.min(1, across * Math.max(COMET.tipFloor, fade) * COMET.strength);
 }
 
-/** Unit vector for a world bearing, matching `Planet.ts`'s own `sin`/`cos` pairing. */
-function bearingVector(bearing: number): Vector3 {
-  return new Vector3(Math.sin(bearing), 0, Math.cos(bearing));
+/**
+ * Degrees to radians, matching `Backdrop.ts`'s own `DEG` — needed because
+ * `sunAzimuth` below is degrees (see `tailDirection`) while every bearing this
+ * file computes for itself (`planFixture`'s placement and drift, a seeded
+ * fallback) is radians, the same mix `Backdrop.ts` lives with throughout.
+ */
+const DEG = Math.PI / 180;
+
+/** Unit vector for a world bearing in radians, matching `Planet.ts`'s own `sin`/`cos` pairing. */
+function bearingVector(bearingRadians: number): Vector3 {
+  return new Vector3(Math.sin(bearingRadians), 0, Math.cos(bearingRadians));
 }
 
 /**
- * The tail's own axis: away from the sun. `sunAzimuth` is a true world
- * bearing — `Backdrop`'s bodies carry one, `atan2(x, z)`, azimuth 0 is dead
- * ahead at heading 0 — so pointing the tail at its opposite bearing is
- * pointing it away from that sun. A sky with no sun (`sunAzimuth === null`)
- * has nothing to point away from, so a seeded bearing stands in; nothing
- * calls this with a real azimuth yet, that wiring is Task 4.
+ * The tail's own axis: away from the sun.
+ *
+ * `sunAzimuth`, when given, is **degrees**, not radians — it is only ever
+ * going to be `SkyBodyReport.azimuth` (`render/Backdrop.ts`), which is
+ * documented there as degrees clockwise from +Z (`atan2(x, z)`, azimuth 0 is
+ * dead ahead at heading 0) and is converted through that file's own `DEG`
+ * at every use. Taking degrees here means Task 4 can pass
+ * `sunAzimuthOf(sky)` straight through with nothing to convert and nothing
+ * to get wrong; taking radians would have made every wired-up tail point at
+ * a wrong bearing with nothing to throw and catch it.
+ *
+ * Pointing the tail at the sun's opposite bearing is pointing it away from
+ * the sun. A sky with no sun (`sunAzimuth === null`) has nothing to point
+ * away from, so a seeded bearing (already radians — this file's own, not
+ * the sky's) stands in. Nothing calls this with a real azimuth yet; that
+ * wiring is Task 4.
  */
 function tailDirection(rng: { next(): number }, sunAzimuth: number | null): Vector3 {
-  const bearing = sunAzimuth === null ? rng.next() * Math.PI * 2 : sunAzimuth + Math.PI;
-  return bearingVector(bearing);
+  if (sunAzimuth === null) return bearingVector(rng.next() * Math.PI * 2);
+  return bearingVector((sunAzimuth + 180) * DEG);
 }
 
 /**
@@ -275,6 +294,9 @@ function tailDirection(rng: { next(): number }, sunAzimuth: number | null): Vect
  * its ringed planet, so the same square always paired the same two things,
  * which is exactly the furniture problem `planPlanet`'s own comment warns
  * against for a planet alone.
+ *
+ * `sunAzimuth` is degrees, not radians — see `tailDirection` for why that is
+ * the unit and not a stylistic choice.
  */
 export function planFixture(seed: number, sector: number, sunAzimuth: number | null): CometPlan | null {
   const rng = makeRng((sector * 2246822519 + seed * 3266489917 + 668265263) >>> 0);
@@ -309,6 +331,9 @@ export function planFixture(seed: number, sector: number, sunAzimuth: number | n
  * other — `wandererEntry` out on each side, covered in `wandererDuration`
  * seconds, which is what makes `drift` a constant velocity rather than
  * something a caller has to re-aim mid-flight.
+ *
+ * `sunAzimuth` is degrees, not radians — see `tailDirection` for why that is
+ * the unit and not a stylistic choice.
  */
 export function planWanderer(around: Vector3, sunAzimuth: number | null, rng: () => number): CometPlan {
   const travelBearing = rng() * Math.PI * 2;
