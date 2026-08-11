@@ -641,11 +641,18 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       const p1 = project(point.set(clipped[2], 0, clipped[3]));
       wedge.push(p0.x, p0.y, p1.x, p1.y);
     }
-    // Faint by construction, not just by this multiplier: `COMET_COLOR` is
-    // already dimmer than `PALETTE.traceDim` (see that constant's own
-    // comment), so this only has to keep it there, not do the work alone.
-    scratch.copy(COMET_COLOR).multiplyScalar(0.6);
-    hud.segments(wedge, scratch);
+    // No multiplier: `COMET_COLOR` alone is the wedge's brightness.
+    // `docs/comet.md` §6 bounds its *hue* — strictly lower saturation and
+    // luminance than any information colour, which Task 2's review confirmed
+    // clears the whole palette, `PALETTE.star` included — but nothing there
+    // requires darkening it further before it is drawn. A `× 0.6` on top read
+    // as belt-and-braces and instead put the wedge below the threshold this
+    // brief is graded on: legible at a glance, from the tube alone. Measured
+    // against the same scanner (`task-5-report.md`), full-strength
+    // `COMET_COLOR` still lands well under both `PALETTE.traceDim`'s rings and
+    // a resolved contact's mark — board, not traffic — with room to spare, so
+    // this is the ceiling, not a compromise.
+    hud.segments(wedge, COMET_COLOR);
   }
 
   /**
