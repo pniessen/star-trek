@@ -6,6 +6,7 @@ import { BRACE, FACINGS, type Ship } from "../game/Ship.js";
 import { ALTITUDE, flight } from "../game/altitude.js";
 import type { Session } from "../game/session.js";
 import { HOSTILE_COLORS, HOSTILE_NAMES, type Fleet, type Hostile } from "../game/hostiles.js";
+import { COMET_COLOR } from "../game/comet.js";
 import type { Presentation } from "../game/presentation.js";
 import { SCANNER, ScannerModel } from "./scanner.js";
 import { drawBriefing } from "./briefing.js";
@@ -93,6 +94,42 @@ function arc(
       cy + Math.sin(a1) * radius,
     );
   }
+}
+
+/**
+ * The portion of segment `(x0,z0)-(x1,z1)` inside the circle of radius `r`
+ * centred on `(cx,cz)`, or `null` if none of it is — the comet wedge's own
+ * clip, run in world space rather than on the projected screen. Clamping a
+ * projected endpoint to the tube's rim (the way an ordinary contact pins
+ * there) would bend a straight edge into a curve hugging the dial, and the
+ * wedge's edges are straight in world space (`nearRadius`/`farRadius`
+ * interpolate linearly along the tail, the same interpolation
+ * `interferenceAt` runs), so clipping has to happen before that shape is lost.
+ */
+function clipSegmentToCircle(
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  cx: number,
+  cz: number,
+  r: number,
+): [number, number, number, number] | null {
+  const dx = x1 - x0;
+  const dz = z1 - z0;
+  const fx = x0 - cx;
+  const fz = z0 - cz;
+  const a = dx * dx + dz * dz;
+  const b = 2 * (fx * dx + fz * dz);
+  const c = fx * fx + fz * fz - r * r;
+  if (a < 1e-9) return c <= 0 ? [x0, z0, x1, z1] : null;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return null;
+  const sqrtDisc = Math.sqrt(disc);
+  const t0 = Math.max(0, (-b - sqrtDisc) / (2 * a));
+  const t1 = Math.min(1, (-b + sqrtDisc) / (2 * a));
+  if (t0 > t1) return null;
+  return [x0 + dx * t0, z0 + dz * t0, x0 + dx * t1, z0 + dz * t1];
 }
 
 function pad(value: number, width: number): string {
@@ -557,6 +594,59 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
       scratch,
     );
   };
+
+  /**
+   * The comet's tail: a faint wedge, drawn before any contact so the fixture
+   * reads as board rather than traffic — `docs/comet.md` §6. Without this the
+   * degraded returns `paintGhost` already draws inside the tail (`vague =
+   * max(cloak, interference)`) would be unexplained noise; the wedge is why
+   * they are honest rather than a phantom.
+   *
+   * The frustum's two long edges are straight lines in world space —
+   * `nearRadius`/`farRadius` interpolate linearly along `direction`, the same
+   * interpolation `interferenceAt` itself runs to decide what jams — so each
+   * edge is one line segment, not a sampled curve, and it already traces
+   * exactly the boundary that test uses. `clipSegmentToCircle` cuts all four
+   * edges to the scanner's own range in world space before they are
+   * projected, which is what keeps a wedge that runs off the tube (most of
+   * them, at `COMET.fixtureLength`) ending cleanly at the rim instead of
+   * pinning to it the way an ordinary contact does.
+   */
+  const plan = session.comet.plan;
+  if (plan) {
+    const rightX = -plan.direction.z;
+    const rightZ = plan.direction.x;
+    const farX = plan.nucleus.x + plan.direction.x * plan.length;
+    const farZ = plan.nucleus.z + plan.direction.z * plan.length;
+
+    const nearLeft = { x: plan.nucleus.x + rightX * plan.nearRadius, z: plan.nucleus.z + rightZ * plan.nearRadius };
+    const nearRight = { x: plan.nucleus.x - rightX * plan.nearRadius, z: plan.nucleus.z - rightZ * plan.nearRadius };
+    const farLeft = { x: farX + rightX * plan.farRadius, z: farZ + rightZ * plan.farRadius };
+    const farRight = { x: farX - rightX * plan.farRadius, z: farZ - rightZ * plan.farRadius };
+
+    // Near cap first (the coma boundary, where the wedge begins), then both
+    // long edges, then the far cap — which only ever survives the clip on a
+    // tail short enough, or close enough, for its tip to sit inside the tube.
+    const edges: [{ x: number; z: number }, { x: number; z: number }][] = [
+      [nearLeft, nearRight],
+      [nearLeft, farLeft],
+      [nearRight, farRight],
+      [farLeft, farRight],
+    ];
+    const wedge: number[] = [];
+    for (const [a, b] of edges) {
+      const clipped = clipSegmentToCircle(a.x, a.z, b.x, b.z, player.position.x, player.position.z, SCANNER.range);
+      if (!clipped) continue;
+      const p0 = project(point.set(clipped[0], 0, clipped[1]));
+      const p1 = project(point.set(clipped[2], 0, clipped[3]));
+      wedge.push(p0.x, p0.y, p1.x, p1.y);
+    }
+    // Faint by construction, not just by this multiplier: `COMET_COLOR` is
+    // already dimmer than `PALETTE.traceDim` (see that constant's own
+    // comment), so this only has to keep it there, not do the work alone.
+    scratch.copy(COMET_COLOR).multiplyScalar(0.6);
+    hud.segments(wedge, scratch);
+  }
 
   /**
    * Starbase: the thing you are gambling against reaching, and the one contact
