@@ -341,7 +341,17 @@ export class Hostile {
     // simply cannot pull the trigger from outside a jammed, near-visual range
     // — the interpolation collapses toward `COMET.visualRange` as
     // `interference` climbs, and is the old `fireRange` exactly when it is 0.
-    const reach = MathUtils.lerp(this.spec.fireRange, COMET.visualRange, this.interference);
+    //
+    // Clamped to never exceed `fireRange` itself, because a lerp toward a
+    // floor only suppresses when the floor is below where you started. It is
+    // for every class but the Harrow, whose `fireRange: 0` is the one already
+    // below `COMET.visualRange` — without the clamp, jamming would be the one
+    // thing that could make it shoot, which is exactly the duel `fireRange: 0`
+    // exists to rule out.
+    const reach = Math.min(
+      this.spec.fireRange,
+      MathUtils.lerp(this.spec.fireRange, COMET.visualRange, this.interference),
+    );
     if (this.cooldown <= 0 && !this.hidden && distance < reach && aimError < 0.4) {
       this.cooldown = this.spec.fireInterval;
       // Lead the target — a bolt aimed where you are is a bolt you outrun. The
