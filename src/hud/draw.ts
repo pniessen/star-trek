@@ -720,6 +720,71 @@ function drawScanner(hud: Hud, view: HudView, cx: number, cy: number): void {
     // `task-5-report.md` recorded before the world colour changed.
     scratch.copy(COMET_COLOR).multiplyScalar(0.42);
     hud.segments(wedge, scratch);
+
+    /**
+     * The head, homed the way the starbase is — and for the same reason, one
+     * step further out.
+     *
+     * The wedge only exists where the tail crosses the tube. A fixture's nucleus
+     * sits 150-230 units out against `SCANNER.range` of 150, and its tail points
+     * along a seeded bearing that is as often away from you as toward you, so
+     * the common case is a sector that contains a comet and a scanner with
+     * nothing on it. Test play hit that four separate times and every answer was
+     * a console command.
+     *
+     * So this borrows the fix the starbase already proved: a mark that survives
+     * the clamp to the rim, a course line under it, and brightness that *rises*
+     * with distance — clearest when the thing is off the edge and needed, gone
+     * when it is comfortably in view and not. The inversion is the point.
+     *
+     * The glyph is a tadpole: a ring for the nucleus and a stroke leaving it
+     * along the tail's own projected bearing. Deliberately not a ring alone,
+     * which is an unresolved contact, and not the starbase's ring-and-cross. The
+     * stroke is doing real work rather than decorating — it says which way the
+     * tail lies, which is the difference between flying to the head and flying
+     * into the jamming from the wrong end.
+     */
+    const nucleus = project(point.set(plan.nucleus.x, 0, plan.nucleus.z));
+    const headRange = Math.hypot(
+      plan.nucleus.x - player.position.x,
+      plan.nucleus.z - player.position.z,
+    );
+    const far = MathUtils.clamp(headRange / SCANNER.range, 0, 1) ** 1.6;
+
+    if (far > 0.02) {
+      const dx = nucleus.x - cx;
+      const dy = nucleus.y - cy;
+      const length = Math.hypot(dx, dy) || 1;
+      const to = Math.max(0, length - 10) / length;
+      scratch.copy(COMET_COLOR).multiplyScalar(0.16 + 0.3 * far);
+      hud.segments([cx + dx * 0.3, cy + dy * 0.3, cx + dx * to, cy + dy * to], scratch);
+    }
+
+    // The tail's bearing on the tube, taken from a point along it rather than
+    // from `direction` directly, so the stroke inherits the same heading-up
+    // rotation every contact does instead of needing its own copy of it.
+    const downTail = project(
+      point.set(
+        plan.nucleus.x + plan.direction.x * plan.length,
+        0,
+        plan.nucleus.z + plan.direction.z * plan.length,
+      ),
+    );
+    const tx = downTail.x - nucleus.x;
+    const ty = downTail.y - nucleus.y;
+    const span = Math.hypot(tx, ty) || 1;
+    const stalk = nucleus.clamped ? 8 : 11;
+
+    const head: number[] = [];
+    arc(head, nucleus.x, nucleus.y, nucleus.clamped ? 3 : 4, 0, Math.PI * 2, 7);
+    head.push(
+      nucleus.x + (tx / span) * 3,
+      nucleus.y + (ty / span) * 3,
+      nucleus.x + (tx / span) * stalk,
+      nucleus.y + (ty / span) * stalk,
+    );
+    scratch.copy(COMET_COLOR).multiplyScalar(0.4 + 0.55 * far);
+    hud.segments(head, scratch);
   }
 
   /**

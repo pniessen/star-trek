@@ -1,4 +1,5 @@
 import { canDock, countControl, type Campaign } from "../chart/campaign.js";
+import { planFixture } from "./comet.js";
 import { jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode, stationName } from "../chart/naming.js";
 import { sound } from "../audio/sound.js";
@@ -158,6 +159,30 @@ function compose(campaign: Campaign, teach: boolean): [string, CrawlTone][] {
   out.push([`COMMAND PUTS US AT ${sectorCode(here)}`, "body"]);
   out.push([`IN THE ${regionName(campaign.seed, here)}`, "body"]);
   out.push([`THREAT ${sector.threat}   PAYS X${1 + sector.yield}`, "note"]);
+
+  /**
+   * Whether a comet stands here — and this line is the whole reason the log
+   * knows about comets at all.
+   *
+   * A fixture's nucleus sits 150-230 units out against a scanner that reaches
+   * 150, and its tail often points away, so a sector can contain one with
+   * nothing on the tube to say so. Test play found exactly that, four times
+   * over, and every answer was a console command. `docs/comet.md` §6 is blunt
+   * about what that means: "a region you cannot navigate to is a region that
+   * does not exist."
+   *
+   * Read off `planFixture` rather than off the live `Comet`, because the log is
+   * composed before the run places anything — and passing `null` for the sun is
+   * correct here, since that argument only sets the tail's *bearing* and this
+   * line only asks whether there is one.
+   *
+   * The fact is stated on every run; the rule only on the first of a war, which
+   * is the split the whole log is built on.
+   */
+  if (planFixture(campaign.seed, here, null)) {
+    out.push(["A COMET RUNS THROUGH THIS SECTOR", "body"]);
+    if (teach) out.push(["NOTHING RESOLVES INSIDE ITS TAIL", "note"]);
+  }
   gap();
 
   // A won board has no enemy to describe and no ground to take, so the whole

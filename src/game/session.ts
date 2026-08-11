@@ -17,7 +17,14 @@ import {
 } from "./weapons.js";
 import { flight } from "./altitude.js";
 import { LOOM, Loom, encounters, type Spinner } from "./loom.js";
-import { COMET, Comet, interferenceAt, planFixture, planWanderer } from "./comet.js";
+import {
+  COMET,
+  Comet,
+  interferenceAt,
+  planFixture,
+  planWanderer,
+  type CometPlan,
+} from "./comet.js";
 import { sunAzimuthOf } from "../render/Backdrop.js";
 import { Dispatches } from "./dispatch.js";
 import { MINE, Minefield } from "./mines.js";
@@ -1189,9 +1196,18 @@ export class Session {
    * `window.__comet.seed()`. Refused when the switch is off, the same guard
    * `Loom.open` makes for itself.
    */
-  seedComet(player: Ship): void {
-    if (!encounters.comet) return;
+  /**
+   * @returns the plan it placed, or null if the switch is off — so the console
+   *   shows the comet instead of `undefined`. A debug affordance that cannot
+   *   tell you whether it worked is one you cannot trust, and this one cost a
+   *   real round trip: `seed()` returning void printed `undefined` next to a
+   *   `net::ERR_CONNECTION_REFUSED`, which reads as a failed call and is not.
+   *   `__loom.seed()` has the same shape and the same problem.
+   */
+  seedComet(player: Ship): CometPlan | null {
+    if (!encounters.comet) return null;
     this.placeWanderer(player);
+    return this.comet.plan;
   }
 
   /**

@@ -1407,6 +1407,56 @@ check(
   `saved ${chosen} -> ${rebooted.era}${rebooted.fault ? " FAULT" : ""}`,
 );
 
+// ── finding a comet without a console ───────────────────────────────────────
+// A fixture's nucleus sits past `SCANNER.range` more often than not and its tail
+// points along a seeded bearing, so a sector could contain one with nothing at
+// all on the tube to say so — four separate test-play sessions ended in a console
+// command. These pin the two answers that fixed it. Last in the file because the
+// first walks the campaign's own `front` to reach chosen sectors.
+const found = await page.evaluate(() => {
+  const c = window.__campaign;
+  const has = (i) => !!window.__comet.plan(c.seed, i);
+  const all = [...Array(64).keys()];
+  const read = (sector) => {
+    c.front = sector;
+    c.current = sector;
+    window.__presentation.enter("title");
+    window.__presentation.startRun();
+    const at = window.__campaign.current;
+    return {
+      at,
+      has: has(at),
+      named: window.__presentation.briefing.lines.some((l) => l.text.includes("COMET")),
+    };
+  };
+  return {
+    with: read(all.find(has)),
+    without: read(all.find((i) => !has(i))),
+    // A debug hook that cannot say whether it worked is one you cannot trust:
+    // this used to return void, so the console printed `undefined` and read as
+    // a failed call.
+    seeded: (() => {
+      const plan = window.__comet.seed();
+      return plan ? plan.kind : null;
+    })(),
+  };
+});
+check(
+  "the deck log names a comet in a sector that has one",
+  found.with.has && found.with.named,
+  `sector ${found.with.at} has=${found.with.has} named=${found.with.named}`,
+);
+check(
+  "...and stays quiet in a sector that does not",
+  !found.without.has && !found.without.named,
+  `sector ${found.without.at} has=${found.without.has} named=${found.without.named}`,
+);
+check(
+  "seeding a comet hands back the plan rather than undefined",
+  found.seeded === "wanderer",
+  `returned ${found.seeded}`,
+);
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 await browser.close();
 process.exit(problems.length ? 1 : 0);
