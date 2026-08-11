@@ -16,7 +16,9 @@ import {
   sweepHits,
 } from "./weapons.js";
 import { flight } from "./altitude.js";
-import { LOOM, Loom, type Spinner } from "./loom.js";
+import { LOOM, Loom, encounters, type Spinner } from "./loom.js";
+import { COMET, Comet, interferenceAt, planFixture, planWanderer } from "./comet.js";
+import { sunAzimuthOf } from "../render/Backdrop.js";
 import { Dispatches } from "./dispatch.js";
 import { MINE, Minefield } from "./mines.js";
 import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
@@ -248,6 +250,14 @@ export class Session {
      * not know how to make one.
      */
     readonly loom: Loom,
+    /**
+     * The comet. Public for the same reason `loom` is — the HUD and a headless
+     * harness both need to read `.plan`, and it owns a `VectorObject` this file
+     * does not know how to build. Unlike `Loom`, it takes no shape factory:
+     * `Comet` builds and disposes its own rock inside `show()`, because it has
+     * exactly one of them at a time rather than a pool to reuse.
+     */
+    readonly comet: Comet,
     starbase: Vector3,
     private playerShape: VectorObject,
     private campaign: Campaign,
@@ -255,6 +265,9 @@ export class Session {
     this.docking = new Docking(starbase);
     this.nameStation();
   }
+
+  /** Seconds since the standing comet started as a wanderer. See `stepComet`. */
+  private wandererAge = 0;
 
   /** The Warden currently in the sector, if any. Read by the HUD and the scanner. */
   get escort(): Escort | null {
@@ -337,6 +350,11 @@ export class Session {
       // does can matter now — the breach callback is a no-op, and `kill()` has
       // already taken everything a breach would have cost.
       this.loom.update(dt, player, () => {});
+      // And the comet: the tail keeps streaming and the nucleus keeps
+      // drifting for the same reason. No interference or drain below this
+      // line — there is no one left for either to matter to.
+      if (this.comet.plan) this.comet.plan.nucleus.addScaledVector(this.comet.plan.drift, dt);
+      this.comet.update(dt);
       this.debris.update(dt);
 
       const before = this.death.phase;
@@ -370,6 +388,12 @@ export class Session {
 
     this.handleBrace(player, input);
     this.handlePlayerFire(dt, player, input);
+
+    // Ahead of the hostile loop: `hostile.interference` has to be this frame's
+    // reading before `hostile.update` reads it for cloak suppression and the
+    // fire-control reach clamp, the same way `condition` above is computed
+    // before anything moves this frame.
+    this.stepComet(dt, player);
 
     for (const hostile of this.fleet.hostiles) {
       hostile.update(dt, player, this.ordnance, this.mines);
@@ -497,6 +521,10 @@ export class Session {
     // over the top of the card rather than being shouted down by it.
     this.arrivalCard = ARRIVAL_CARD;
     this.nameStation();
+    // `campaign.current` just moved to wherever this jump was headed, so the
+    // comet standing here is replanned for the same reason the station's name
+    // is — see `showComet`.
+    this.showComet();
     sound.hyperwarpArrive();
   }
 
@@ -1028,6 +1056,110 @@ export class Session {
     this.say("WEAVE COLLAPSING");
   }
 
+  // ── the comet ────────────────────────────────────────────────────────────
+
+  /**
+   * One step of the comet: drifts the nucleus, streams the tail, feeds the one
+   * number the tail-volume test produces into `Hostile.interference` — the
+   * seam `hostiles.ts` already consumes for cloak suppression and the
+   * fire-control reach clamp — and drains the reserve while the player stands
+   * in it. `docs/comet.md` §2 and §5 are the rule; everything the comet *is*
+   * lives in `comet.ts`, the same split `stepLoom` takes with `loom.ts`.
+   *
+   * `max` of the player's own reading and each hostile's own is what "nothing
+   * locks across the boundary" means: either end standing in the tail is
+   * enough to blind a lock between them, so a hostile safely outside still
+   * cannot resolve a player who is inside, and the reverse.
+   */
+  private stepComet(dt: number, player: Ship): void {
+    const plan = this.comet.plan;
+    // The nucleus's own drift, integrated here rather than in `Comet.update` —
+    // `comet.ts`'s own header says as much: a plan is a snapshot of numbers,
+    // and moving `nucleus` by `drift` every frame is a session rule, not a
+    // rendering one. `Comet.update` only ever reads the position it is given.
+    if (plan) plan.nucleus.addScaledVector(plan.drift, dt);
+    this.comet.update(dt);
+
+    // A wanderer's own clock. Kept here rather than in `CometPlan` — nothing
+    // else on that type is a running total — so `Session` is what notices a
+    // wanderer has crossed and clears it back to nothing, the same way it is
+    // what notices a wave is empty and calls it clear. A fixture never expires
+    // this way; only `kind === "wanderer"` is timed.
+    if (plan?.kind === "wanderer") {
+      this.wandererAge += dt;
+      if (this.wandererAge >= COMET.wandererDuration) {
+        this.comet.show(null);
+        this.wandererAge = 0;
+        return;
+      }
+    } else {
+      this.wandererAge = 0;
+    }
+
+    const here = interferenceAt(this.comet.plan, player.position.x, player.position.z);
+    for (const hostile of this.fleet.hostiles) {
+      hostile.interference = Math.max(
+        here,
+        interferenceAt(this.comet.plan, hostile.position.x, hostile.position.z),
+      );
+    }
+    // Priced well under `ALTITUDE.drain` (0.038) — see `COMET.drain`'s own
+    // comment for why a place a whole engagement might be held in has to cost
+    // an order more forgiving than a burst a few seconds of a pass holds.
+    if (here > 0) player.energy = Math.max(0, player.energy - COMET.drain * here * dt);
+  }
+
+  /**
+   * The sector's comet, replanned at the same two moments `nameStation` is —
+   * `campaign.current` only ever moves at a restart and a hyperwarp arrival,
+   * so those are the only two places a new fixture is ever needed. Gated on
+   * `encounters.comet` here rather than inside `comet.ts`'s schedulers, which
+   * are pure functions with no switch of their own — the same split
+   * `Loom.open` takes with `encounters.loom`.
+   *
+   * `sunAzimuthOf` is planned fresh from `seed`/`sector` rather than read off
+   * whichever sky the live `Backdrop` currently has built — see its own
+   * comment in `render/Backdrop.ts` for why a live read is wrong on exactly
+   * the two frames this method is ever called on.
+   */
+  private showComet(): void {
+    const plan = encounters.comet
+      ? planFixture(
+          this.campaign.seed,
+          this.campaign.current,
+          sunAzimuthOf(this.campaign.seed, this.campaign.current),
+        )
+      : null;
+    this.comet.show(plan);
+    this.wandererAge = 0;
+  }
+
+  /**
+   * A wanderer around the player, on demand — the same convenience `seedLoom`
+   * gives a harness or a person tuning `COMET.wandererChance`, who would
+   * otherwise wait for a rare roll past `COMET.earliest`. See
+   * `window.__comet.seed()`. Refused when the switch is off, the same guard
+   * `Loom.open` makes for itself.
+   */
+  seedComet(player: Ship): void {
+    if (!encounters.comet) return;
+    this.placeWanderer(player);
+  }
+
+  /** The one place `planWanderer` is actually called — the roll in
+   * `spawnWave` and the on-demand `seedComet` both land here so the two
+   * cannot drift out of sync with each other. */
+  private placeWanderer(player: Ship): void {
+    this.comet.show(
+      planWanderer(
+        player.position,
+        sunAzimuthOf(this.campaign.seed, this.campaign.current),
+        Math.random,
+      ),
+    );
+    this.wandererAge = 0;
+  }
+
   private kill(player: Ship): void {
     this.state = "dead";
     // Told before the state is read anywhere else, so its farewell lands over
@@ -1179,6 +1311,22 @@ export class Session {
       // weave is the thing that just changed about it.
     }
 
+    // The comet's wanderer, at the break beside the Loom's roll and on the
+    // same reasoning — a comet that flickered into being around a fight
+    // already in progress would be something that happened *to* the player.
+    // `!this.comet.plan` is both halves of the design's own gate: it refuses
+    // over a sector that already has a fixture standing in it, and it refuses
+    // while a previous wanderer is still mid-crossing, because both read as
+    // "a comet is already here" through the one field that says so.
+    if (
+      encounters.comet &&
+      !this.comet.plan &&
+      n >= COMET.earliest &&
+      Math.random() < COMET.wandererChance
+    ) {
+      this.placeWanderer(player);
+    }
+
     sound.wave(this.wave);
     this.say(`WAVE ${this.wave}`);
 
@@ -1218,6 +1366,10 @@ export class Session {
     // into"; a run beginning is exactly when that promise has to be kept.
     this.campaign.current = this.campaign.front;
     this.nameStation();
+    // `campaign.current` just moved to the front, so the comet standing here
+    // is replanned for the same reason the station's name is — see
+    // `showComet`.
+    this.showComet();
     // Refits persist through death, so they are read here rather than banked
     // anywhere: the loadout is whatever the chart last agreed to, applied
     // before `reset()` so torpedo racks are already fitted when the tubes fill.
