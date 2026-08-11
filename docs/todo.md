@@ -234,7 +234,22 @@ at all*, not merely how it looks:
   too large and a comet jams a sphere well before the tail proper begins.
 - **`fixtureRangeMin/Max` (150–230, brought in from 150–340 by the final-fix
   pass — see `comet.ts`'s own comment)** and **`fixtureDrift = 1.6`** — how far
-  out a fixture sits and how fast it sweeps the sector over a run. **`wandererDuration
+  out a fixture sits and how fast it sweeps the sector over a run.
+  **Discoverability itself is still unverified.** 230 is closer to
+  `SCANNER.range` (150) than 340 was and sits inside the fog far plane with
+  margin, but whether it is actually *close enough* — as opposed to merely
+  closer — depends on how near the player tends to be to sector centre when
+  a fixture might be found, and nothing in this codebase tracks that:
+  `Session.spawnWave` recentres each wave's own spawn ring on the player's
+  *current* position, not on the origin, so the player is not bounded near
+  centre by anything the game enforces. A playtest assertion claiming to
+  check this was cut from `tools/playtest.mjs` in the same fix pass — it
+  compared `fixtureRangeMax` against `SCANNER.range` plus a hand-picked
+  "combat radius" constant it defined itself, which is an arithmetic
+  identity among its own numbers and could not have failed. This wants a
+  human at the keyboard, flying fixtures near both ends of the band and
+  judging whether they are actually found, not a further code change.
+  **`wandererDuration
   = 110`**, **`wandererEntry = 260`** (together fixing the wanderer's ~4.7
   units/s crossing speed) and **`wandererLength/nearRadius/farRadius`** (190 /
   14 / 46) — all "smaller, denser, shorter" by the design's own words (§4),

@@ -147,45 +147,6 @@ check(
   JSON.stringify(fixtureSeeded),
 );
 
-// ── the fixture is discoverable ─────────────────────────────────────────────
-// Final-branch review, finding 2: at the old ceiling (`fixtureRangeMax: 340`)
-// a fixture's tail could point straight back out along its own placement ray
-// — `tailDirection` picks a bearing independently of where the nucleus was
-// placed — leaving the nucleus itself, not any part of the tail, as the
-// closest the whole fixture ever gets to the sector centre. `docs/comet.md`
-// §6: a region no instrument can reach is one that does not exist. Checked
-// against `planFixture`'s real output across many seeds rather than trusting
-// `COMET.fixtureRangeMax` alone — a bug in the distance math would slip past
-// a check on the constant but not past this.
-//
-// 100 is the design brief's own stated approximation for how far combat
-// actually ranges from sector centre; there is no named constant for it, so
-// it is inlined here rather than imported.
-const discoverable = await page.evaluate(async () => {
-  const { plan, constants } = window.__comet;
-  const { SCANNER } = await import("/src/hud/scanner.ts");
-  const COMBAT_RADIUS = 100;
-  let checked = 0;
-  let worst = -Infinity;
-  for (let seed = 0; seed < 40; seed++) {
-    for (let sector = 0; sector < 64; sector++) {
-      const fixture = plan(seed, sector);
-      if (!fixture) continue;
-      checked++;
-      const distance = Math.hypot(fixture.nucleus.x, fixture.nucleus.z);
-      // Worst case: the tail points straight away, so only the nucleus counts
-      // toward how close a player who has closed `COMBAT_RADIUS` can get.
-      worst = Math.max(worst, distance - COMBAT_RADIUS);
-    }
-  }
-  return { checked, worst, range: SCANNER.range, ceiling: constants.fixtureRangeMax };
-});
-check(
-  "every seeded fixture's nucleus is within scanner reach of ordinary combat, worst case",
-  discoverable.checked > 20 && discoverable.worst <= discoverable.range,
-  JSON.stringify(discoverable),
-);
-
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
 // — the same contract `Y` has. Checked before the first run, which is also the

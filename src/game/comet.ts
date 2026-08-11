@@ -164,14 +164,21 @@ export const COMET = {
    * `docs/comet.md` §6 is explicit that a region no instrument can reach is
    * one that does not exist.
    *
-   * 230 keeps that same worst case inside reach of ordinary play rather than
-   * a blind hunt: the player starts at the centre and a wave's own combat
-   * keeps them within roughly 100 units of it, so closing that 100 units
-   * toward a worst-case fixture leaves 230-100=130 units to the nucleus,
-   * comfortably inside `SCANNER.range` (150) with margin rather than pinned
-   * to its edge. The floor is untouched — it was never the problem — so the
-   * band is 150-230, narrower than before but every fixture in it is now
-   * findable regardless of which way its tail happens to point.
+   * 230 keeps that same worst case closer to reach than 340 did, without
+   * pretending to a precision this file does not have: nothing bounds where
+   * the player actually is when a fixture might be found —
+   * `Session.spawnWave` recentres each wave's ring on the player's *current*
+   * position, not on sector centre, so "how close does the player tend to be
+   * to the origin" is not a number this codebase tracks anywhere. What is
+   * true without assuming that: 230 sits inside the 260-unit fog far plane
+   * with margin, where 340 did not, and it is close enough to
+   * `SCANNER.range` (150) that a player who has closed even a modest
+   * distance toward it — rather than the whole 190-unit gap the old ceiling
+   * left — reaches scanner range. The floor is untouched — it was never the
+   * problem. Whether 230 is actually close enough for a fixture to be found
+   * in ordinary play, as opposed to merely closer, is unverified and belongs
+   * with the rest of `COMET`'s constants in `docs/todo.md` — see the
+   * discoverability entry there.
    */
   fixtureRangeMin: 150,
   fixtureRangeMax: 230,
