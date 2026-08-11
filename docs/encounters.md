@@ -168,6 +168,16 @@ Turns altitude from an escape into a maze wall.
 close. Nearly free — a post-chain change in a renderer that already has the
 whole chain.
 
+**The Comet.** *(Balance of Terror.)* A nucleus and a long ion tail. Inside the
+tail no instrument works: cloaks fail, nothing locks across the boundary, and the
+scanner stops resolving. *Asks: how much of your play was the scanner — and is a
+place worth more than a position?* The Dark, bounded in space instead of run-wide,
+married to the cloak reveal that gives the Shroud its first counter. **Designed
+and approved, not built — see [comet.md](comet.md).** It is the only candidate
+here that makes somewhere on the board worth fighting *in* rather than avoiding,
+which is also the reason it reaches the chart: a sector with a comet is a sector
+you would choose to intercept in.
+
 ---
 
 ## H. Rule-benders — attacks on the game's own grammar
