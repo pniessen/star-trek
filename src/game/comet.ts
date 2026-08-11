@@ -205,23 +205,37 @@ export const COMET = {
    * own scaling (`Session.stepComet` divides by `fit.energyReserve`, the same
    * way every other draw on the pool does). §5 of the design is explicit
    * about the job this number has: without a cost the tail is a safe room,
-   * because nothing can lock you inside it, and the drain is the *entire*
-   * brake on camping it.
+   * because nothing can lock you inside it, and the drain is the brake on
+   * camping it — but it is no longer the *whole* brake, which is what let
+   * this number come back down.
    *
-   * The constant this was first priced against — `ALTITUDE.drain` (0.038) —
-   * turned out to be the wrong neighbour. Altitude is a burst held for a few
-   * seconds of a pass; this needing to be "an order more forgiving" than that
-   * left it at 0.015, which is *below* `Ship.RESERVE_REGEN` (0.016 at
-   * baseline) — so a ship sitting still at full interference nets **positive**
-   * energy, the exact behaviour §5 says the drain exists to prevent. The
-   * binding constraint was never altitude at all: it is that at rest, inside
-   * the tail, net energy has to fall. 0.030 clears `RESERVE_REGEN` by 0.014/s
-   * at baseline — a full reserve bleeds out in a little over a minute of
-   * sitting still, a real clock rather than a rounding error, and still
-   * comfortably under altitude's 0.038 so the two costs stay ordered the way
-   * the design intends.
+   * Two things this was priced against and rejected, in order. First,
+   * `ALTITUDE.drain` (0.038) — the wrong neighbour: altitude is a burst held
+   * for a few seconds of a pass, and "an order more forgiving" than that
+   * left an earlier draft at 0.015, *below* `Ship.RESERVE_REGEN` (0.016), so
+   * a stationary ship at full interference netted positive energy — the
+   * exact camping the drain exists to prevent. Raised to 0.03 to clear
+   * regen, that held for the baseline loadout and broke again at the
+   * top of the refit tree: Galaxy era (1.4×) stacked with a capacitor
+   * bank and a dilithium matrix reaches `energyReserve` 2.8× while
+   * `reserveRegen` falls to 0.65×, and `0.03 / 2.8 − 0.016 × 0.65 ≈
+   * +0.0003`/s — net positive again, for exactly the late-campaign
+   * player best equipped to find it. No single value of this constant
+   * can hold across every loadout, because the drain scales by
+   * `energyReserve` and regen scales by `fit.reserveRegen` — two
+   * independent multipliers with no fixed relationship between them.
+   *
+   * So the drain stopped being the only mechanism: `Ship.updateEnergy` now
+   * scales the reserve's own passive regen down by `interference`, to
+   * nothing at the ceiling — see that method's comment for why this is also
+   * the more honest reading of §2 ("no instrument works") rather than a
+   * second patch. With regen no longer in the race, this constant only has
+   * to be a real clock on its own: 0.02 gives roughly −0.02/s at rest at
+   * baseline (a full reserve in ~50s) and −0.0071/s at the 2.8× stack
+   * (~140s) — both real, both falling, and the ratio between them is just
+   * the tank ratio, which is the honest amount a reserve refit should help.
    */
-  drain: 0.03,
+  drain: 0.02,
   /**
    * Range inside the tail a hostile must close to before it may fire once
    * long-range lock fails — §2's second consequence. Set below

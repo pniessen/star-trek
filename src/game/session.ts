@@ -1060,11 +1060,13 @@ export class Session {
 
   /**
    * One step of the comet: drifts the nucleus, streams the tail, feeds the one
-   * number the tail-volume test produces into `Hostile.interference` — the
-   * seam `hostiles.ts` already consumes for cloak suppression and the
-   * fire-control reach clamp — and drains the reserve while the player stands
-   * in it. `docs/comet.md` §2 and §5 are the rule; everything the comet *is*
-   * lives in `comet.ts`, the same split `stepLoom` takes with `loom.ts`.
+   * number the tail-volume test produces into `Hostile.interference` and
+   * `Ship.interference` — the seams `hostiles.ts` and `Ship.updateEnergy`
+   * consume for cloak suppression, the fire-control reach clamp, and now the
+   * reserve's own recharge — and drains the reserve on top of that while the
+   * player stands in the tail. `docs/comet.md` §2 and §5 are the rule;
+   * everything the comet *is* lives in `comet.ts`, the same split `stepLoom`
+   * takes with `loom.ts`.
    *
    * `max` of the player's own reading and each hostile's own is what "nothing
    * locks across the boundary" means: either end standing in the tail is
@@ -1090,6 +1092,12 @@ export class Session {
       if (this.wandererAge >= COMET.wandererDuration) {
         this.comet.show(null);
         this.wandererAge = 0;
+        // The tail is gone this frame, so the player's own reading goes with
+        // it rather than holding whatever it last read. `hostile.interference`
+        // is not corrected here the same way — a known, deferred minor, since
+        // a hostile that was inside stays briefly stale for one frame rather
+        // than reading a position that no longer has anything to test against.
+        player.interference = 0;
         return;
       }
     } else {
@@ -1097,22 +1105,25 @@ export class Session {
     }
 
     const here = interferenceAt(this.comet.plan, player.position.x, player.position.z);
+    // Read by `Ship.updateEnergy` next frame — `player.update()` runs ahead of
+    // `Session.update()` in `main.ts`'s own frame loop, so this is one frame
+    // behind the position it describes, same as `Hostile.interference` is
+    // behind the hostile that carries it. Imperceptible at 60fps and not worth
+    // reordering two files over.
+    player.interference = here;
     for (const hostile of this.fleet.hostiles) {
       hostile.interference = Math.max(
         here,
         interferenceAt(this.comet.plan, hostile.position.x, hostile.position.z),
       );
     }
-    // Priced against passive regen, not against `ALTITUDE.drain` — see
-    // `COMET.drain`'s own comment. Its job is to stop the tail being
-    // somewhere a ship parks, and that only holds if sitting still inside it
-    // actually loses energy, not merely loses it slower than everywhere else.
-    // Scaled by the reserve exactly as thrust (`Ship.ts` `THRUST_DRAIN`) and
-    // altitude (`ALTITUDE.drain`) are: a bigger capacitor bank makes every
-    // other draw on the pool cost proportionally less, and this is a draw on
-    // the same pool — without the scaling a Galaxy's deep reserve would make
-    // the tail relatively *more* expensive than everything else in the game,
-    // which is the one thing "one energy pool" is supposed to rule out.
+    // The drain is no longer the tail's only cost — see `Ship.updateEnergy`
+    // for the regen suppression that now runs alongside it, and `COMET.drain`'s
+    // own comment for why splitting the job between the two was necessary
+    // rather than a second style choice. Scaled by the reserve exactly as
+    // thrust (`Ship.ts` `THRUST_DRAIN`) and altitude (`ALTITUDE.drain`) are: a
+    // bigger capacitor bank makes every other draw on the pool cost
+    // proportionally less, and this is a draw on the same pool.
     if (here > 0) {
       player.energy = Math.max(
         0,
