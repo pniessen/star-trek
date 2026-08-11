@@ -226,12 +226,21 @@ at all*, not merely how it looks:
   24.9° — still readable, but visibly stubbier than the design's "hundreds
   long" shape implies. Worth a look together with `fixtureLength` rather than
   assuming the length was the only number the fog range constrained.
+  **`fixtureNucleusRadius = 11`** sets how big the rock itself reads at a
+  distance, but it is not only cosmetic: `interferenceAt` treats the region
+  sunward of the nucleus as a coma sphere of exactly this radius, so it is
+  also the only part of the jamming volume that sits *ahead* of the tail —
+  too small and the coma is invisible against the cone it sits in front of,
+  too large and a comet jams a sphere well before the tail proper begins.
 - **`fixtureRangeMin/Max` (150–340)** and **`fixtureDrift = 1.6`** — how far
   out a fixture sits and how fast it sweeps the sector over a run. **`wandererDuration
   = 110`**, **`wandererEntry = 260`** (together fixing the wanderer's ~4.7
   units/s crossing speed) and **`wandererLength/nearRadius/farRadius`** (190 /
   14 / 46) — all "smaller, denser, shorter" by the design's own words (§4),
-  none checked against a stopwatch.
+  none checked against a stopwatch. **`wandererNucleusRadius = 6`** is the same
+  trade as the fixture's own nucleus radius above, scaled down to match: how
+  big the rock reads, and how far the coma's sphere of full interference
+  reaches ahead of a tail that is itself already the shorter of the two.
 - **`solidFraction = 0.65`**, **`tipFloor = 0.2`**, **`strength = 1`** — the
   shape of the fade along the tail. Reasoned against the boundary having to
   *look* interfered with (§3 of the design) rather than measured against a
