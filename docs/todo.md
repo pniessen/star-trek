@@ -183,6 +183,87 @@ escort holding station 34 units off your quarter is company or clutter in a
 wave-eight fight. Its comms land on the same HUD row as `WAVE 8` and
 `HULL BREACH` and will sometimes step on one.
 
+**The comet** — every constant in `COMET` (`src/game/comet.ts`), and like the
+Loom's and the brace's own blocks, this is entirely reasoned about and none of
+it has been flown. Led with the ones that decide whether the encounter *works
+at all*, not merely how it looks:
+
+- **`drain = 0.02`** a second, scaled by the reserve. This is the whole brake
+  on camping the tail now that fire-control and cloaks are also suppressed
+  there — §5 of `docs/comet.md` originally priced this alone against
+  `ALTITUDE.drain`, then had to be revised once (see `comet.ts`'s own comment)
+  when a deep-reserve, slow-regen refit stack made a single drain constant
+  net-positive. The regen suppression added alongside it (`Ship.updateEnergy`)
+  closes that at the root, but whether the *combined* cost still reads as a
+  real brake rather than either a non-event or a room nobody can afford to
+  enter is exactly risk 1 below, unmeasured until someone sits in the tail
+  with the clock running.
+- **`stripAt = 0.5`** — the interference level above which fire-control and
+  cloaks treat a contact as fully *inside* rather than merely degraded. A
+  plain midpoint guess (see its own comment in `comet.ts`), not derived from
+  `HIDDEN_AT` (0.4) on `cloak`, which answers a different question. Too low
+  and the tail strips a cloak from the doorway; too high and a player who
+  looks jammed on the scanner is not actually getting the payoff yet.
+- **`visualRange = 22`**, the range a hostile must close to once its lock
+  fails inside the tail. Set below `PHASER.falloffStart` (26) so a fight in
+  the tail reads as visibly closer than the open-sector norm — too close and
+  nothing inside the tail can ever actually shoot back, which would make
+  "drawn, and huntable" (§2 of the design) one-sided.
+- **`fixtureChance = 0.25`** and **`wandererChance = 0.06`** — how often a run
+  meets either schedule at all. These decide whether the comet is furniture
+  (too common) or a curiosity nobody plans around (too rare), and they are the
+  two numbers hardest to judge from a single sitting because the sample size
+  *is* the number of runs played.
+- **`earliest = 3`**, the escalation floor below which a wanderer never rolls.
+  Lower than the Loom's 4 on the reasoning that this is an opportunity rather
+  than a hazard — untested against an actual early run.
+- **`fixtureLength = 170`** (`fixtureScaleJitter` ranges it 119–221) against
+  **`fixtureNearRadius = 26`** / **`fixtureFarRadius = 105`**, which stayed put
+  when the length came down from an original 420 (see `comet.ts`: the longer
+  tail sat mostly in `Stage.ts`'s own fog range and was never visible from any
+  distance a player would stand at). The radii were never re-derived against
+  the new length, so the cone's own half-angle went from about 10.6° to about
+  24.9° — still readable, but visibly stubbier than the design's "hundreds
+  long" shape implies. Worth a look together with `fixtureLength` rather than
+  assuming the length was the only number the fog range constrained.
+- **`fixtureRangeMin/Max` (150–340)** and **`fixtureDrift = 1.6`** — how far
+  out a fixture sits and how fast it sweeps the sector over a run. **`wandererDuration
+  = 110`**, **`wandererEntry = 260`** (together fixing the wanderer's ~4.7
+  units/s crossing speed) and **`wandererLength/nearRadius/farRadius`** (190 /
+  14 / 46) — all "smaller, denser, shorter" by the design's own words (§4),
+  none checked against a stopwatch.
+- **`solidFraction = 0.65`**, **`tipFloor = 0.2`**, **`strength = 1`** — the
+  shape of the fade along the tail. Reasoned against the boundary having to
+  *look* interfered with (§3 of the design) rather than measured against a
+  screen.
+- **`flow = 18`** and **`strokes = 500`** — purely cosmetic, the tail's own
+  animation rate and density. `strokes` was already raised once from 40 before
+  ever being flown, on the strength of the backdrop's own star-count history
+  (see `comet.ts`); still unverified against a real frame.
+
+Three more came out of building and reviewing it, not out of the original
+design, and are recorded here rather than only in code comments because they
+are exactly the kind of thing a tuning session would otherwise rediscover by
+surprise:
+
+- **A frozen Shroud can sit outside its own suppressed reach.** `updateCloak`
+  freezes the strike-cycle phase clock while `interference > COMET.stripAt`
+  rather than letting it keep running, so a Shroud caught mid-veil at its 3.4×
+  "veiling" standoff (`preferredRange * 3.4`, ~74.8 units for the class's own
+  22-unit `preferredRange`) can be pinned there — outside `COMET.visualRange`
+  (22), the range its own fire-control is clamped to while jammed. Whether
+  that reads as "the tail parks the Shroud somewhere safe to approach" or as a
+  dead zone is unflown.
+- **One frame of stale `hostile.interference` on the frame a wanderer
+  expires.** `Session.stepComet` zeroes the player's own reading the instant a
+  wanderer's duration runs out, but a hostile's `interference` is left holding
+  whatever it last read rather than corrected in the same frame — a known,
+  deferred minor (see the comment in `session.ts`), imperceptible at 60fps
+  but worth confirming it stays that way once the tail is actually watched
+  closely at a wanderer's exit.
+- **The half-angle drift** noted under `fixtureLength` above — not a bug, but
+  a mismatch between two numbers that used to agree and now do not.
+
 ---
 
 ## 3. Design questions — open, and not answerable by a constant
@@ -232,6 +313,28 @@ yield-3 sector pays 4× rather than the documented 3×.
 Turning the ship is currently how you present a fresh shield quarter. Mouse aim
 decouples those, and might hollow out the defensive skill the four facings
 exist to create.
+
+### 3.8 The comet's own open risks
+
+Carried across from `docs/comet.md` §8, written before implementation and not
+yet resolved by it:
+
+1. **The tail may be strictly better than the open sector.** The drain (§2
+   above) is the brake and it is a first-draft guess like every other constant
+   here. If it is too cheap, the answer to every wave becomes "go to the
+   comet", and the encounter has eaten the game rather than enriched it.
+2. **The wanderer may read as a second Loom.** Both are "rare thing that
+   arrives at a wave break"; the wanderer is differentiated on paper by being
+   an opportunity rather than a clock, but that distinction is unflown. If it
+   reads as the same event, it is the half of this feature to cut.
+3. **Hunting by eye may simply not be fun** with no pitch input and a 31°
+   half-FOV. This is the assumption the whole design rests on and it cannot be
+   settled from the source — it is the first thing to fly.
+4. **Draw cost.** The tail is a per-frame stroke field on top of a post chain
+   that already costs half a second a frame under software GL (see the
+   headless-Chromium gotcha in §6). The playtest harness runs post disabled
+   for exactly this reason, and `COMET.strokes` has to be set against a real
+   machine, not the harness.
 
 ---
 
