@@ -1103,10 +1103,22 @@ export class Session {
         interferenceAt(this.comet.plan, hostile.position.x, hostile.position.z),
       );
     }
-    // Priced well under `ALTITUDE.drain` (0.038) — see `COMET.drain`'s own
-    // comment for why a place a whole engagement might be held in has to cost
-    // an order more forgiving than a burst a few seconds of a pass holds.
-    if (here > 0) player.energy = Math.max(0, player.energy - COMET.drain * here * dt);
+    // Priced against passive regen, not against `ALTITUDE.drain` — see
+    // `COMET.drain`'s own comment. Its job is to stop the tail being
+    // somewhere a ship parks, and that only holds if sitting still inside it
+    // actually loses energy, not merely loses it slower than everywhere else.
+    // Scaled by the reserve exactly as thrust (`Ship.ts` `THRUST_DRAIN`) and
+    // altitude (`ALTITUDE.drain`) are: a bigger capacitor bank makes every
+    // other draw on the pool cost proportionally less, and this is a draw on
+    // the same pool — without the scaling a Galaxy's deep reserve would make
+    // the tail relatively *more* expensive than everything else in the game,
+    // which is the one thing "one energy pool" is supposed to rule out.
+    if (here > 0) {
+      player.energy = Math.max(
+        0,
+        player.energy - (COMET.drain * here * dt) / player.loadout.energyReserve,
+      );
+    }
   }
 
   /**

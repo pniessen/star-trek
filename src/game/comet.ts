@@ -201,14 +201,27 @@ export const COMET = {
   // ── the cost and the render (§5, §6 of the design; Tasks 2 and 4) ────────
 
   /**
-   * Reserve drained per second while inside the tail. Priced well under
-   * `ALTITUDE.drain` (0.038) on purpose — altitude is a burst you hold for a
-   * few seconds of a pass, and the tail is a place a player might hold for a
-   * whole engagement, so the per-second cost has to be an order more
-   * forgiving or camping it is never a real trade. Unused until Task 3 wires
-   * the drain into `Session`.
+   * Reserve drained per second while inside the tail, before the reserve's
+   * own scaling (`Session.stepComet` divides by `fit.energyReserve`, the same
+   * way every other draw on the pool does). §5 of the design is explicit
+   * about the job this number has: without a cost the tail is a safe room,
+   * because nothing can lock you inside it, and the drain is the *entire*
+   * brake on camping it.
+   *
+   * The constant this was first priced against — `ALTITUDE.drain` (0.038) —
+   * turned out to be the wrong neighbour. Altitude is a burst held for a few
+   * seconds of a pass; this needing to be "an order more forgiving" than that
+   * left it at 0.015, which is *below* `Ship.RESERVE_REGEN` (0.016 at
+   * baseline) — so a ship sitting still at full interference nets **positive**
+   * energy, the exact behaviour §5 says the drain exists to prevent. The
+   * binding constraint was never altitude at all: it is that at rest, inside
+   * the tail, net energy has to fall. 0.030 clears `RESERVE_REGEN` by 0.014/s
+   * at baseline — a full reserve bleeds out in a little over a minute of
+   * sitting still, a real clock rather than a rounding error, and still
+   * comfortably under altitude's 0.038 so the two costs stay ordered the way
+   * the design intends.
    */
-  drain: 0.015,
+  drain: 0.03,
   /**
    * Range inside the tail a hostile must close to before it may fire once
    * long-range lock fails — §2's second consequence. Set below
