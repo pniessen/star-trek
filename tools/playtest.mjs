@@ -74,6 +74,33 @@ await page.evaluate(() => {
   window.__stage.crt.enabled = false;
 });
 
+// ── the comet's tail-volume test ────────────────────────────────────────────
+// `interferenceAt` is a pure function with no game state behind it, so it is
+// asserted here, before a run even exists, rather than waiting for the
+// renderer and session wiring the later comet tasks add.
+const vol = await page.evaluate(() => {
+  const { interferenceAt } = window.__comet;
+  const plan = {
+    nucleus: { x: 0, y: 0, z: 0 },
+    direction: { x: 0, y: 0, z: 1 },
+    length: 400, nearRadius: 20, farRadius: 90, nucleusRadius: 8,
+  };
+  return {
+    onAxis: interferenceAt(plan, 0, 200),
+    sunward: interferenceAt(plan, 0, -200),
+    beyond: interferenceAt(plan, 0, 600),
+    outside: interferenceAt(plan, 400, 200),
+    edge: interferenceAt(plan, 54, 200),
+    none: interferenceAt(null, 0, 200),
+  };
+});
+check("the tail jams on its axis", vol.onAxis > 0.5, `v=${vol.onAxis}`);
+check("...and not sunward of the nucleus", vol.sunward === 0, `v=${vol.sunward}`);
+check("...and not past its end", vol.beyond === 0, `v=${vol.beyond}`);
+check("...and not off to the side", vol.outside === 0, `v=${vol.outside}`);
+check("...and fades toward the edge", vol.edge > 0 && vol.edge < vol.onAxis, `edge=${vol.edge} axis=${vol.onAxis}`);
+check("no comet, no interference", vol.none === 0, `v=${vol.none}`);
+
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
 // — the same contract `Y` has. Checked before the first run, which is also the

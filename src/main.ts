@@ -25,6 +25,7 @@ import { drawBeacons } from "./game/beacons.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
 import { LOOM, Loom, encounters } from "./game/loom.js";
+import { COMET, interferenceAt, planFixture } from "./game/comet.js";
 import { Session } from "./game/session.js";
 import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
@@ -1147,6 +1148,18 @@ if (DEBUG_PROBE) {
      *
      *   __sky.pin(1, 0); __sky.next(); __sky.enabled = false; __sky.unpin();
      */
+    /**
+     * The comet's pure geometry, exposed the same way `__loom` exposes the
+     * weave: nothing here has a renderer or session wiring yet (that is
+     * Tasks 2-4), so what a harness can test today is the tail-volume rule
+     * itself. `plan` fixes `sunAzimuth` at `null` because nothing in the game
+     * calls `planFixture` with a real one yet either — see `game/comet.ts`.
+     */
+    __comet: {
+      interferenceAt,
+      plan: (seed: number, sector: number) => planFixture(seed, sector, null),
+      constants: COMET,
+    },
     __sky: {
       get enabled(): boolean {
         return backdrop.enabled;
