@@ -126,7 +126,12 @@ export class ScannerModel {
       if (!crossed(previous, this.arm, bearing)) continue;
 
       this.painted.set(hostile, 0);
-      if (hostile.cloak > 0.05) this.paintGhost(hostile, range);
+      // Two sources of the same question — is this contact resolvable — and
+      // the tube only ever cares about the worse of them: a Shroud mid-veil
+      // inside a comet's tail is exactly as unresolved as either cause alone
+      // would make it, never more.
+      const vague = Math.max(hostile.cloak, hostile.interference);
+      if (vague > 0.05) this.paintGhost(hostile, range, vague);
     }
   }
 
@@ -146,15 +151,16 @@ export class ScannerModel {
     this.painted.clear();
   }
 
-  private paintGhost(hostile: Hostile, range: number): void {
+  private paintGhost(hostile: Hostile, range: number, vague: number): void {
     if (this.ghosts.length >= MAX_GHOSTS) this.ghosts.shift();
 
     // Error falls with range — a Shroud on top of you paints a tight ring, which
-    // is the last warning before it materialises — and with cloak strength, so
-    // the wind-up itself is visible on the tube as the ring snapping shut.
+    // is the last warning before it materialises — and with how unresolved the
+    // contact is, so the wind-up itself is visible on the tube as the ring
+    // snapping shut. `vague` is `max(cloak, interference)`: whichever cause is
+    // worse decides how tight the honest circle gets, never both stacked.
     const t = range / SCANNER.range;
-    const spread =
-      (SCANNER.errorNear + (SCANNER.errorFar - SCANNER.errorNear) * t) * hostile.cloak;
+    const spread = (SCANNER.errorNear + (SCANNER.errorFar - SCANNER.errorNear) * t) * vague;
 
     // Offset inside the disc rather than anywhere on it, so the drawn circle
     // always contains the truth.
