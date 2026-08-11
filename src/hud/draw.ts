@@ -12,6 +12,7 @@ import { drawBriefing } from "./briefing.js";
 import { GLYPH_ADVANCE } from "./strokeFont.js";
 import { CONTROL_COLOR, drawChart, drawCommand, sectorFacts, sectorFlags } from "../chart/ChartView.js";
 import { HYPERWARP } from "../game/hyperwarp.js";
+import { DISPATCH } from "../game/dispatch.js";
 import { jumpCharge, jumpEnergy, jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode } from "../chart/naming.js";
 import { canDock, type Campaign } from "../chart/campaign.js";
@@ -200,6 +201,8 @@ export function drawHud(hud: Hud, view: HudView): void {
     const scale = session.state === "dead" ? 5.5 : 3.6;
     centred(hud, session.message, width / 2, height / 2 + 96, scale, scratch);
   }
+
+  drawDispatch(hud, session, width / 2, height / 2 + 52);
 
   if (presentation.mode === "attract") drawAttractBanner(hud, view, width);
 
@@ -875,6 +878,40 @@ function drawLoomState(hud: Hud, view: HudView, cx: number, y: number): void {
   const label = closing ? "WEAVE CLOSING" : loom.sealed ? "WEAVE SEALED" : "WEAVE OPEN";
   scratch.copy(PALETTE.harrow).multiplyScalar(loom.sealed || closing ? 1 : 0.6);
   hud.text(label, cx - (label.length * 4.2 * 1.6) / 2, y - 20, 1.6, scratch);
+}
+
+/**
+ * HQ's channel — one line, under the message row and never on it.
+ *
+ * A row of its own is the whole reason a dispatch can arrive mid-wave at all.
+ * These are sentences with a place name in them, and the message line above is
+ * where `HULL BREACH` lives; making them share meant HQ had to wait for a gap,
+ * and waiting for a gap is what made the feature scenery. Now both can be up at
+ * once and neither queues behind the other.
+ *
+ * Small and dim, deliberately. It has to be *noticeable* without competing with
+ * the alarm band a foot above it — this is news, not an alert, and a player who
+ * chooses to keep shooting and read it later has made the decision the dispatch
+ * exists to offer. The rule at the top and bottom is what says "channel" rather
+ * than "another warning": a line of text alone at this size reads as a caption.
+ */
+function drawDispatch(hud: Hud, session: Session, cx: number, y: number): void {
+  const { line, timer } = session.dispatches;
+  if (!line || timer <= 0) return;
+
+  // Faded at both ends rather than only at the tail: HQ cutting in should look
+  // like a channel opening, and something that snaps to full brightness in one
+  // frame reads as a fault in the panel.
+  const fade = Math.min(1, timer / 0.5, (DISPATCH.hold - timer) / 0.35);
+  const scale = 1.7;
+  scratch.copy(PALETTE.trace).multiplyScalar(0.25 + fade * 0.5);
+  centred(hud, line, cx, y, scale, scratch);
+
+  const half = (line.length * GLYPH_ADVANCE * scale) / 2 + 10;
+  scratch.multiplyScalar(0.45);
+  for (const dy of [12, -9]) {
+    hud.segments([cx - half, y + dy, cx + half, y + dy], scratch);
+  }
 }
 
 /** The Harrow's glyph, and its mines at a third the size. */

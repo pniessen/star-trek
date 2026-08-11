@@ -22,11 +22,26 @@ import { regionName, sectorCode } from "../chart/naming.js";
  * have. So HQ tells you what it knows and what it would like; it never tells you
  * what to do, and nothing anywhere checks whether you complied.
  *
+ * **It arrives mid-wave, and that is the point.** The first version spoke only at
+ * wave breaks, on the reasoning that the message row is shared with `HULL BREACH`
+ * and the Warden and a paragraph from HQ arriving mid-pass would step on the one
+ * line that matters. That reasoning protected the row and threw away the feature:
+ * a signal that only ever lands in the quiet gap between waves is scenery, read
+ * at leisure, costing nothing to receive. News from the war is supposed to arrive
+ * while you are busy — the interruption *is* the content, because deciding
+ * whether to look away from a fight is the only decision a dispatch can offer.
+ *
+ * So the collision was solved instead of avoided: **HQ has its own row.** It sits
+ * below the message line, smaller and dimmer, and the two are legible together —
+ * `HULL BREACH` still owns the alarm band and never has to queue behind a
+ * sentence about a sector three squares away. That also means this file owns its
+ * own display clock rather than borrowing `Session.messageTimer`, which is what
+ * made the old version have to wait for a gap in the first place.
+ *
  * Three rules keep it from becoming noise:
  *
- *  - **Only at a wave break.** The message row is shared with `HULL BREACH` and
- *    the Warden, and a paragraph from HQ arriving mid-pass would step on the one
- *    line that actually matters. `Session.spawnWave` is the seam.
+ *  - **Only while something is alive.** Gated on a live wave, so it lands inside
+ *    a fight rather than in the break — the opposite of where it used to land.
  *  - **Never twice about the same thing.** A dispatch repeats only if the board
  *    has changed, so "STRIKE INBOUND" is news rather than a ticker.
  *  - **Read-only, always.** This never writes to the campaign — which is also
@@ -41,53 +56,87 @@ export const DISPATCH = {
    * situation is the last thing wanted there.
    */
   earliest: 3,
-  /** Chance per wave break, once past `earliest`. */
-  chance: 0.4,
-  /** Wave breaks that must pass between two dispatches, whatever the rolls say. */
-  cooldown: 3,
+  /** Chance per attempt. Below 1 so the cadence is not a metronome. */
+  chance: 0.55,
   /**
-   * Seconds the line holds. Longer than `Session.say`'s own 2.2, because these
-   * are sentences rather than two words — `HULL BREACH` is read at a glance and
-   * this has a place name in it.
+   * Seconds of live combat before the first attempt of a run, and between
+   * attempts after that.
+   *
+   * Combat seconds, not wall seconds: the clock only runs while a wave is up, so
+   * a player who docks for half a minute does not come back to a backlog, and one
+   * who fights continuously hears from HQ at a rate set by how much fighting they
+   * have actually done. About one or two a run at these numbers.
    */
-  hold: 4.4,
+  first: 11,
+  cooldown: 24,
+  /**
+   * Seconds the line holds. Long, because it is a sentence with a place name in
+   * it and it now has to be read *while dodging* — the old 4.4 was measured
+   * against a wave break, where a player has nothing else to do.
+   */
+  hold: 6.2,
 } as const;
 
 /** What HQ is prepared to talk about, in the order it prefers. */
 type Topic = "hold" | "intercept" | "losing" | "winning";
 
 export class Dispatches {
-  /** Wave breaks since the last dispatch, so `cooldown` can be enforced. */
-  private since: number = DISPATCH.cooldown;
+  /**
+   * What HQ is saying right now, and for how much longer. Public because this is
+   * its own HUD row — see the header on why it stopped borrowing the message
+   * line.
+   */
+  line: string | null = null;
+  timer = 0;
+
+  /** Combat seconds until the next attempt. */
+  private next: number = DISPATCH.first;
   /** What the last one was about, so the same news is not repeated. */
   private last: string | null = null;
 
   /**
-   * Consider sending one. Returns the line, or null for silence — which is the
-   * common case and deliberately so.
+   * Run the clock and, sometimes, speak.
    *
    * `escalation` is `wave + threat - 1`, the same figure the roster and the Loom
    * read, so HQ starts talking at the same point the sector starts getting hard
    * rather than on a clock of its own.
+   *
+   * `engaged` is the mid-wave gate and the whole change: false between waves,
+   * while docked, and once the run is over. The countdown does not run then
+   * either, so the interval measures fighting rather than elapsed time.
+   *
+   * @returns true on the frame a new dispatch arrives, so the caller can chirp.
    */
-  consider(campaign: Campaign, escalation: number, roll: number): string | null {
-    this.since += 1;
-    if (escalation < DISPATCH.earliest) return null;
-    if (this.since < DISPATCH.cooldown) return null;
-    if (roll > DISPATCH.chance) return null;
+  update(dt: number, campaign: Campaign, escalation: number, engaged: boolean, roll: number): boolean {
+    this.timer = Math.max(0, this.timer - dt);
+    if (this.timer === 0) this.line = null;
 
-    const line = this.compose(campaign);
-    if (!line || line.key === this.last) return null;
+    if (!engaged || escalation < DISPATCH.earliest) return false;
 
-    this.since = 0;
-    this.last = line.key;
-    return line.text;
+    this.next -= dt;
+    if (this.next > 0) return false;
+
+    // Rearmed whatever the roll said, so a failed roll costs a full interval
+    // rather than retrying every frame until it passes — which would make
+    // `chance` a no-op dressed up as randomness.
+    this.next = DISPATCH.cooldown;
+    if (roll > DISPATCH.chance) return false;
+
+    const composed = this.compose(campaign);
+    if (!composed || composed.key === this.last) return false;
+
+    this.last = composed.key;
+    this.line = composed.text;
+    this.timer = DISPATCH.hold;
+    return true;
   }
 
   /** Reset between runs, so a new run is not silenced by the last one's news. */
   reset(): void {
-    this.since = DISPATCH.cooldown;
+    this.next = DISPATCH.first;
     this.last = null;
+    this.line = null;
+    this.timer = 0;
   }
 
   /**

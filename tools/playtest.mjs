@@ -366,6 +366,61 @@ await page.keyboard.press("y");
 state = await waitFor((s) => s.flight3d === true, 3000);
 check("Y switches it back on", state.flight3d === true, `flight3d=${state.flight3d}`);
 
+// ── HQ, mid-wave ────────────────────────────────────────────────────────────
+// The property that matters is *when*: a dispatch has to arrive with hostiles
+// alive, not in the gap between waves, because landing in the gap is what made
+// the first version scenery. So this asserts the gate directly rather than
+// waiting out the real interval.
+//
+// Driven by winding the private clock down rather than by sleeping through
+// `DISPATCH.first` — the escalation gate would need wave 3+ as well, and a
+// harness that waits out both is testing the constants instead of the seam.
+const hq = await page.evaluate(async () => {
+  const s = window.__session;
+  const d = s.dispatches;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Silent between waves, however ready the clock is. `next` is wound to zero
+  // and the roll forced to always pass, so the only thing that can hold HQ back
+  // here is the gate itself.
+  window.__fleet.clear();
+  await wait(200);
+  d.reset();
+  d.next = 0;
+  const between = { line: d.line, hostiles: window.__fleet.hostiles.length };
+
+  // And speaks once a wave is up. The wave arrives on its own after the break.
+  s.wave = 6;
+  for (let i = 0; i < 120 && !d.line; i++) {
+    d.next = 0;
+    await wait(50);
+  }
+  return {
+    between,
+    line: d.line,
+    timer: d.timer,
+    hostiles: window.__fleet.hostiles.length,
+  };
+});
+check(
+  "HQ stays quiet between waves even with the clock run out",
+  hq.between.line === null && hq.between.hostiles === 0,
+  JSON.stringify(hq.between),
+);
+check(
+  "...and cuts in during one",
+  typeof hq.line === "string" && hq.line.startsWith("HQ:") && hq.hostiles > 0,
+  `line=${hq.line} hostiles=${hq.hostiles}`,
+);
+// Its own row, its own clock: the message line is free to carry something else
+// at the same time, which is the change that let this land mid-fight at all.
+check(
+  "...on its own clock rather than the message row's",
+  hq.timer > 0,
+  `timer=${hq.timer}`,
+);
+await page.screenshot({ path: `${OUT}/dispatch.png` });
+
 // ── the brace: strip and stack ──────────────────────────────────────────────
 // Z taps rather than holds, costs no energy, and overcharges the bow past full.
 // All three of those are the decision (see `BRACE` in `Ship.ts`), and the one

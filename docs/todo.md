@@ -144,6 +144,20 @@ from the source. Fly it against a Bastion, which is the one class slow enough to
 stay in front of you, and then against a pair of Raiders, which are the two that
 will not.
 
+**HQ's cadence** — `DISPATCH.first = 11`, `cooldown = 24`, `chance = 0.55`,
+`hold = 6.2`, all in combat seconds. Aimed at one or two a run. The two failure
+modes are opposite and both obvious at the keyboard: too rare and a player never
+learns the channel exists, too often and it becomes a ticker they stop reading.
+`hold` is its own question — six seconds is long for a HUD line, and it is long
+because these have to be read *while dodging*; whether that is enough or already
+too much is the sort of thing one sitting settles.
+
+Only one task type behind it, and that is a design gap rather than a constant:
+every dispatch is some version of *go there, clear a wave, break the strike*,
+because that is the only verb the campaign has to point at. A Warden in trouble
+(the state already exists) or a Loom sighting (which would also fix §6.1) would
+each add a second.
+
 **The mix** — `BUS_LEVELS`, the phaser's cadence and pitch pair, the alert's
 `FULL_THREAT`. Three to sit with first:
 

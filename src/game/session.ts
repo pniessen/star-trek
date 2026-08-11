@@ -17,7 +17,7 @@ import {
 } from "./weapons.js";
 import { flight } from "./altitude.js";
 import { LOOM, Loom, type Spinner } from "./loom.js";
-import { DISPATCH, Dispatches } from "./dispatch.js";
+import { Dispatches } from "./dispatch.js";
 import { MINE, Minefield } from "./mines.js";
 import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
@@ -203,8 +203,12 @@ export class Session {
 
   breakTimer = WAVE_BREAK;
   message = "STAND BY";
-  /** HQ's own channel, sharing this one message row. See `game/dispatch.ts`. */
-  private readonly dispatches = new Dispatches();
+  /**
+   * HQ's channel. It has its own row and its own clock — it used to borrow this
+   * message line, and that is exactly what confined it to wave breaks. See
+   * `game/dispatch.ts`.
+   */
+  readonly dispatches = new Dispatches();
   messageTimer = 2;
 
   /** Seconds until the next Warden. See `ESCORT`. */
@@ -296,6 +300,22 @@ export class Session {
     this.arrivalCard = Math.max(0, this.arrivalCard - realDt);
 
     this.messageTimer = Math.max(0, this.messageTimer - dt);
+
+    /**
+     * HQ, on its own channel and its own clock, mid-wave.
+     *
+     * Above the `dead` early-return so the line keeps counting down over a wreck
+     * rather than freezing on screen for the whole death sequence — and gated on
+     * a live wave with the player alive, so it arrives *into* a fight, which is
+     * the entire reason it moved off the wave break. Read-only against the
+     * campaign, which is what makes it safe while the demo flies the throwaway
+     * one.
+     */
+    const engaged = this.state === "fighting" && this.fleet.hostiles.length > 0;
+    if (this.dispatches.update(dt, this.campaign, this.escalation, engaged, Math.random())) {
+      sound.dispatch();
+    }
+
     // Ease the odometer toward the real score, framerate-independently.
     this.displayScore += (this.score - this.displayScore) * (1 - Math.pow(0.006, dt));
     if (Math.abs(this.score - this.displayScore) < 0.6) this.displayScore = this.score;
@@ -478,6 +498,20 @@ export class Session {
     this.arrivalCard = ARRIVAL_CARD;
     this.nameStation();
     sound.hyperwarpArrive();
+  }
+
+  /**
+   * How hard this sector is right now: the wave count, pulled forward by the
+   * threat of the square you are standing in. Threat 1 — a fresh campaign's
+   * starting sector — leaves it exactly at the wave number.
+   *
+   * One expression with two readers, which is why it is a getter rather than a
+   * local: the roster builds itself from it, and HQ starts talking at the same
+   * index so a dispatch arrives when the sector starts being hard rather than on
+   * a clock of its own. Two copies of this would drift.
+   */
+  private get escalation(): number {
+    return this.wave + (this.campaign.sectors[this.campaign.current].threat - 1);
   }
 
   /**
@@ -1102,8 +1136,7 @@ export class Session {
     // Threat 1 — the sector a fresh campaign drops you in — leaves this
     // exactly where it always sat; each point above that pulls every class
     // forward by roughly a wave, so a jump into the front escalates visibly.
-    const threat = this.campaign.sectors[this.campaign.current].threat;
-    const n = this.wave + (threat - 1);
+    const n = this.escalation;
     for (let i = 0; i < 2 + Math.floor(n * 0.7); i++) roster.push("swarmer");
     for (let i = 0; i < Math.max(0, Math.floor((n - 1) / 2)); i++) roster.push("sniper");
     for (let i = 0; i < Math.max(0, Math.floor((n - 3) / 3)); i++) roster.push("brawler");
@@ -1149,24 +1182,9 @@ export class Session {
     sound.wave(this.wave);
     this.say(`WAVE ${this.wave}`);
 
-    /**
-     * And HQ, sometimes, about the war the player cannot see from here.
-     *
-     * After `WAVE n` rather than before, so the two read in the order they
-     * matter: the wave is the situation in front of you, the dispatch is context
-     * for it. Held longer than a normal message because these are sentences with
-     * a place name in them — see `DISPATCH.hold`.
-     *
-     * `n` is the escalation index, the same figure the roster and the Loom read,
-     * so HQ starts talking when the sector starts being hard rather than on a
-     * clock of its own. Read-only against the campaign, which is what makes it
-     * safe while the demo is flying the throwaway one.
-     */
-    const dispatch = this.dispatches.consider(this.campaign, n, Math.random());
-    if (dispatch) {
-      this.message = dispatch;
-      this.messageTimer = DISPATCH.hold;
-    }
+    // HQ used to speak here, right after `WAVE n`. It does not any more — see
+    // the header of `dispatch.ts`: a signal that only ever lands in the gap
+    // between waves is scenery. It now runs on its own clock during the fight.
   }
 
   // ── misc ─────────────────────────────────────────────────────────────────

@@ -419,6 +419,44 @@ export class Sound {
   }
 
   /**
+   * A channel opening from HQ.
+   *
+   * Two quick clicks and a flat tone — a carrier being keyed, not a melody. It
+   * has to cut through a firefight while saying "read something", which is a
+   * different job from every other cue here: it must not sound like a threat, a
+   * reward, or the Warden.
+   *
+   * Deliberately *not* `allyHail`'s rising fifth. That is the one piece of good
+   * news the game has and it belongs to the Warden turning up; HQ is a voice on
+   * the radio and sometimes what it says is that you are losing. Flat and dry
+   * keeps the sentence itself carrying the meaning.
+   */
+  dispatch(): void {
+    for (const delay of [0, 0.07]) {
+      this.synth.play({
+        kind: "noise",
+        bus: "panel",
+        filter: "bandpass",
+        q: 16,
+        freq: 2050,
+        level: 0.045,
+        attack: 0.001,
+        decay: 0.03,
+        delay,
+      });
+    }
+    this.synth.play({
+      bus: "panel",
+      wave: "sine",
+      freq: 660,
+      level: 0.05,
+      attack: 0.01,
+      decay: 0.18,
+      delay: 0.15,
+    });
+  }
+
+  /**
    * Strip and stack. Three facings collapsing into one, so it is two motions in
    * opposite directions: a sweep down as they are emptied and a note up as the
    * bow takes the charge.

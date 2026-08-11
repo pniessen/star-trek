@@ -240,6 +240,21 @@ close and be squeezed until you kill one. Behind `encounters.loom` in
 `game/loom.ts`, defaulting on, with **no keyboard binding** — `window.__loom.seed()`
 on localhost summons one. See `game/loom.ts`.
 
+Also built: **HQ dispatches**, in `game/dispatch.ts`. The war has always been
+happening while you fly — the enemy commits attacks between runs, they land on
+named sectors, and reaching one and clearing it stops it — and none of it was
+ever *said* to you: it lived on the chart, behind `Tab`, as a number called
+`inbound`. Every line is a true statement about the board, read off the same
+campaign the chart reads, and **they are opportunities, never orders**: HQ never
+says go, and nothing anywhere checks compliance, because `intercept` is explicit
+that ignoring these costs territory and never costs you the run.
+**They arrive mid-wave, on their own clock and their own HUD row.** The first
+version spoke only at wave breaks, to protect the message line that `HULL BREACH`
+lives on — which threw the feature away, because a signal that only lands in the
+quiet gap is scenery. The collision was solved instead of avoided: HQ has a row
+of its own below the message line, smaller and dimmer, so both can be up at once.
+The clock counts *combat* seconds, so docking does not bank a backlog.
+
 Also built: **the Warden**, the one thing in the sector that is neither you nor
 trying to kill you. A patrol deployed in the sector you drop into flies in it
 for the whole run; anywhere else, one crosses the sector once in a long while,
