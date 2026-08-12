@@ -44,14 +44,28 @@ import { VectorObject } from "./VectorObject.js";
  * wants a seeded bearing for "one hero per sector" is exactly the kind of
  * choice `docs/environment.md` §6 defers past this one.
  *
- * **No live camera parameter.** `draw(trace)` takes only the buffer, per the
- * brief's interface, so "only draw the near hemisphere" (spec step 2) is
- * culled against `viewDir` — the direction from the body to the *player*,
- * cached by `follow` — rather than the camera. The two are always within a
- * few units of each other (`placeCamera`'s widest offset is chase mode's 12
- * units back) against a body hundreds of units away, so the approximation is
- * exact enough for a hemisphere test and it means `follow` never has to wait
- * for `placeCamera` to run first, unlike `Backdrop.follow(stage.camera)`.
+ * **Revised: the hemisphere cull now takes the camera, and the single-axis
+ * version it replaced is why task 3's first look read as a transparent
+ * balloon.** The original cull tested `dot(normal, viewDir) > 0` against one
+ * shared axis for the whole sphere — cheap, and correct only in the limit of
+ * a viewer infinitely far away. This body is deliberately never that: §3.5
+ * puts the viewer as close as `minRange` (520) against a radius of 260, where
+ * `R/d` is large enough that the true visible cap is a good deal smaller than
+ * a hemisphere (its half-angle is `acos(R/d)`, not 90°) — the single-axis
+ * test was measurably wrong, not just approximate, and instrumenting a live
+ * frame at an oblique angle found it passing strokes up to 109° off the true
+ * per-point camera direction. Depth test should have caught the rest — the
+ * shell does write depth, `TraceBuffer`'s material does read it — but the
+ * shell's own low tessellation (`shellSegments`/`shellRings`, kept low
+ * because "the shell is barely seen") leaves it faceted precisely in the
+ * grazing region the bad cull was dumping its false positives into, so nothing
+ * backstopped the leak where it mattered most. The fix is `draw(trace,
+ * cameraPos)`: an exact per-point test, `dot(normal, cameraPos - point) > 0`,
+ * needs no small-angle assumption and no depth-test backstop. `follow` still
+ * reads `player.position` alone for the leash and keeps a cached `viewDir`
+ * (player-relative) as the fallback the halo's billboard basis and any caller
+ * that omits `cameraPos` — the brief's own playtest harness among them — still
+ * use; only the belts' and storm's hemisphere test needed the exact version.
  */
 export const GIANT = {
   // ── placement and scale (§3.5) ────────────────────────────────────────────
@@ -60,21 +74,24 @@ export const GIANT = {
    * Distance from sector centre, dead ahead of spawn. Chosen, with `radius`,
    * so the body reads as roughly a third of the horizontal field of view
    * (`Stage.ts`'s 62° vertical FOV is ~88° horizontal at a 1280×800 aspect):
-   * `atan(radius / range) * 2` ≈ 32° here, against an 88° frame. Comfortably
-   * inside the 2000 far plane with the leash never engaging until the player
-   * genuinely closes distance.
+   * `atan(radius / range) * 2` ≈ 25° here, against an 88° frame. Pulled back
+   * from the first pass's 900/260 (≈32°) per task 3's own review — it read as
+   * swallowing the HUD rather than framing the ship — without giving up
+   * "dominates the frame". Comfortably inside the 2000 far plane with the
+   * leash never engaging until the player genuinely closes distance.
    */
-  range: 900,
+  range: 950,
   /**
    * How close the player may get before the body holds station — the same
    * dishonesty `Planet.ts` accepts and names: real parallax right up until
    * this point, then a held distance rather than a flight through the body.
-   * 520, giving ~400 units (44% of `range`) of genuine approach, enough for
+   * 550, giving ~400 units (42% of `range`) of genuine approach, enough for
    * the size change to read as real perspective rather than a tween.
    */
-  minRange: 520,
-  /** World radius. See `range` for the framing this is chosen against. */
-  radius: 260,
+  minRange: 550,
+  /** World radius. See `range` for the framing this is chosen against, and
+   * for why this shrank from the first pass's 260. */
+  radius: 215,
   /**
    * Height above the plane. 0, not `Planet.height`'s 210 — a body this large
    * needs no lift to clear the grid, and centring it on the horizon is what
@@ -83,10 +100,18 @@ export const GIANT = {
    * `PLANET.height`'s own comment is the fourth file to record it).
    */
   height: 0,
-  /** Latitude/longitude divisions on the shell. Low, on purpose — this is a
-   * stroke renderer and the shell is barely seen; the detail is on top of it. */
-  shellSegments: 20,
-  shellRings: 14,
+  /**
+   * Latitude/longitude divisions on the shell. Doubled from the first pass's
+   * 20×14 for a reason unrelated to how visible the shell itself is (still
+   * barely — the detail sits on top of it): a coarser facet sagitta was
+   * exactly where the old single-axis belt cull dumped its false positives
+   * (see the file header), so the depth test that was supposed to backstop
+   * that leak was itself faceted in the same grazing region. The per-point
+   * cull is the real fix; this is cheap insurance for whatever it still
+   * misses, and it costs nothing extra — still 2 draw calls.
+   */
+  shellSegments: 28,
+  shellRings: 20,
   /** Radians per second the body turns. First-draft guess, unflown, same
    * species as every other constant here — on the tuning list once there is
    * something on screen to judge it against. */
@@ -101,8 +126,14 @@ export const GIANT = {
    * walked. Same lesson the comet's rewrite recorded: 40 dashes read as
    * scatter, ~500 connected filaments read as gas. If this number can be
    * counted at a glance in the finished render, it is too low.
+   *
+   * Raised from the first pass's 70 — task 3's own review found that count
+   * still countable, still reading as "latitude lines on a globe, not
+   * weather". The buffer has the room: the first pass spent 2500-5000 of
+   * `skyTrace`'s 20000, so there was three-to-four times the headroom this
+   * spends.
    */
-  bandCount: 70,
+  bandCount: 130,
   /** Latitude band the belts are drawn across, radians either side of the
    * equator. Kept off the poles — a belt wrapped tight around a pole reads as
    * a cap, not a band. */
@@ -120,18 +151,18 @@ export const GIANT = {
    * (`filamentFadeIn`/`Out`), is what gave the comet's tail depth instead of
    * a bundle of straight lines, and the same fix applies here.
    */
-  filamentsPerBand: 5,
+  filamentsPerBand: 8,
   /** How much a band's filament count is allowed to jitter, seeded per band
    * — some bands read sparser than others, which is itself part of not
    * looking like a uniform grid. */
-  filamentCountJitter: 2,
+  filamentCountJitter: 3,
   /** Fraction of the full circumference (0-1, i.e. of 2π) one filament
    * spans, before the per-filament jitter below widens or narrows it. */
   filamentSpanMin: 0.18,
   filamentSpanMax: 0.4,
   /** Steps a single filament is walked in. Short — these are meant to be
    * short strokes, not the whole belt. */
-  filamentSteps: 15,
+  filamentSteps: 16,
   /** How much of a filament's own span fades in at its leading edge and out
    * at its trailing one, 0-1. The single most important number for whether
    * this reads as gas rather than wire — see `filamentsPerBand`'s comment
@@ -155,6 +186,29 @@ export const GIANT = {
   wobbleAmpMax: 0.09,
   wobbleFreqMin: 1.5,
   wobbleFreqMax: 4.5,
+  /**
+   * A second, finer wobble layered on top of the first at its own amplitude
+   * and frequency — one slow shear reads as a single smooth curve no matter
+   * how much it wanders; two frequencies beating against each other is what
+   * stops a filament reading as one clean stroke, the same reason real
+   * turbulence is a spectrum and not one sine wave.
+   */
+  wobbleAmp2Min: 0.006,
+  wobbleAmp2Max: 0.025,
+  wobbleFreq2Min: 9,
+  wobbleFreq2Max: 22,
+  /**
+   * Per-step brightness grain, 0-1 — how much a filament's level rides a
+   * fast, deterministic ripple along its own length rather than staying flat.
+   * "Edges that break up" per task 3's own finding: a filament that fades
+   * smoothly at both ends (`filamentFadeIn`/`Out`) but glows evenly along its
+   * middle still reads as a drawn line: this is what stops the middle from
+   * reading as flat too. Deterministic (a function of `theta0`, not of frame
+   * time) so it holds still rather than crawling — a body may never pulse or
+   * flash, and a re-rolled-every-frame grain would read as exactly that.
+   */
+  grainAmount: 0.35,
+  grainFreq: 19,
   /** How far a band's individual filaments scatter off its centre latitude,
    * radians — "a width" per the brief. Several filaments landing at
    * slightly different latitudes within this spread is what reads as a
@@ -207,21 +261,51 @@ export const GIANT = {
 
   // ── the limb halo (§3.2, "bloom is the atmosphere") ───────────────────────
 
-  /** Strokes around the silhouette. The whole ring is drawn — unlike the
-   * belts, the limb *is* the near-hemisphere boundary, so there is nothing to
-   * cull. */
-  limbCount: 150,
-  /** Radial steps each limb stroke fans outward through, densest near the
-   * body and fading out — this is the brightness distribution bloom turns
-   * into atmosphere; see the file header and spec §3.2. */
-  limbSteps: 3,
-  /** How far outside `radius` the halo reaches, as a fraction of it. */
+  /**
+   * **Rebuilt. The first pass drew this as `limbCount` radial spokes fanning
+   * straight outward from the surface — which is corona geometry, not halo
+   * geometry: `Backdrop.ts` already owns that exact shape for `kind: "sun";
+   * rays`, and `game/comet.ts`'s own `COMA_GLOW` comment records code review
+   * catching the identical mistake once already, on the comet's coma. Radial
+   * strokes read as spikes no matter how many there are; a halo is dense at
+   * the edge, not radiating from it.**
+   *
+   * The replacement is a scatter of short *tangential* strokes — oriented
+   * along the silhouette, not away from it — held in a shell just outside
+   * `radius`, biased toward the inner edge of that shell by `limbDepthBias`
+   * so the strokes thicken toward the true limb rather than forming clean
+   * concentric rings. Precomputed once in `show`, the way `belts` are, and
+   * only re-shaded and re-projected in `draw`.
+   */
+  limbStrokeCount: 640,
+  /** How far outside `radius` the halo shell reaches, as a fraction of it. */
   limbDepth: 0.22,
-  /** Peak brightness multiplier at the base of the halo, before `shadeAt`'s
-   * own falloff and the radial fade. Above 1 on purpose — bloom keys off
-   * intensity past a threshold, and this is the one place in the body meant
-   * to cross it. */
-  limbBrightness: 1.6,
+  /**
+   * Exponent applied to a uniform draw before it picks a stroke's depth
+   * within the shell (`depthFrac = rng() ** limbDepthBias`, biased toward 0).
+   * Above 1 crowds strokes toward the inner edge — the true limb — which is
+   * the "thickening toward the limb" the finding asked for; the same
+   * clustering trick `game/comet.ts`'s `COMA_GLOW` comment describes for the
+   * coma, applied to a shell instead of a cone.
+   */
+  limbDepthBias: 2.4,
+  /** Angular half-length of one tangential stroke, radians — short, so many
+   * short strokes overlap into a fuzzed band rather than a few long arcs
+   * that would read as rings. */
+  limbTangentSpanMin: 0.012,
+  limbTangentSpanMax: 0.03,
+  /** Per-stroke brightness variance, multiplying `limbBrightness` — texture,
+   * the same reason `hueJitterDeg` exists for the belts. */
+  limbBrightnessVarMin: 0.6,
+  limbBrightnessVarMax: 1.3,
+  /** Peak brightness multiplier at the shell's inner edge, before `shadeAt`'s
+   * own falloff, the depth taper and the per-stroke variance above. Above 1
+   * on purpose — bloom keys off intensity past a threshold, and this is the
+   * one place in the body meant to cross it. Lowered from the first pass's
+   * 1.6 — task 3's own review found bloom flattening the lit/unlit contrast
+   * rather than sharpening it, and a less blown-out halo leaves more of that
+   * contrast for the terminator to use. */
+  limbBrightness: 1.15,
 } as const;
 
 const UP = new Vector3(0, 1, 0);
@@ -247,6 +331,10 @@ interface Belt {
   wobbleAmp: number;
   wobbleFreq: number;
   phase: number;
+  /** The finer, second wobble layered on top — see `GIANT.wobbleAmp2Min`. */
+  wobbleAmp2: number;
+  wobbleFreq2: number;
+  phase2: number;
   brightness: number;
   color: Color;
   filaments: Filament[];
@@ -257,6 +345,20 @@ interface Storm {
   lon: number;
   brightness: number;
   color: Color;
+}
+
+/** One short tangential stroke of the limb halo — see `GIANT.limbStrokeCount`
+ * for why this replaced a fan of radial spokes. Fixed at `show` time; `draw`
+ * only re-projects and re-shades it. */
+interface LimbStroke {
+  /** Position around the silhouette, radians. */
+  angle: number;
+  /** 0-1, biased toward 0 by `GIANT.limbDepthBias` — how far out through the
+   * halo shell this stroke sits. */
+  depthFrac: number;
+  /** Angular half-length, radians — see `GIANT.limbTangentSpanMin`. */
+  tangentSpan: number;
+  brightnessVar: number;
 }
 
 /**
@@ -278,13 +380,17 @@ export class GasGiant {
   private light: SectorLight | null = null;
   private readonly belts: Belt[] = [];
   private storm: Storm | null = null;
+  private readonly limb: LimbStroke[] = [];
   private haloColor = new Color();
 
   /** Where the body sits before the leash. */
   private readonly anchor = new Vector3();
-  /** Direction from the body to the player, refreshed by `follow`. Defaults
-   * to "toward spawn" so a `draw` called before the first `follow` (should
-   * never happen in practice, but costs nothing to make safe) still culls
+  /** Direction from the body to the player, refreshed by `follow`. Used as
+   * the halo's billboard axis and as the belts'/storm's hemisphere-cull
+   * fallback for any caller that omits `draw`'s `cameraPos` — the brief's own
+   * playtest harness among them; see the file header for why the belts and
+   * storm prefer the exact per-point test when a camera is given. Defaults to
+   * "toward spawn" so a `draw` called before the first `follow` still culls
    * against something sane rather than the zero vector. */
   private readonly viewDir = new Vector3(0, 0, -1);
 
@@ -361,6 +467,9 @@ export class GasGiant {
         wobbleAmp: GIANT.wobbleAmpMin + rng.next() * (GIANT.wobbleAmpMax - GIANT.wobbleAmpMin),
         wobbleFreq: GIANT.wobbleFreqMin + rng.next() * (GIANT.wobbleFreqMax - GIANT.wobbleFreqMin),
         phase: rng.next() * Math.PI * 2,
+        wobbleAmp2: GIANT.wobbleAmp2Min + rng.next() * (GIANT.wobbleAmp2Max - GIANT.wobbleAmp2Min),
+        wobbleFreq2: GIANT.wobbleFreq2Min + rng.next() * (GIANT.wobbleFreq2Max - GIANT.wobbleFreq2Min),
+        phase2: rng.next() * Math.PI * 2,
         brightness: 0.55 + rng.next() * 0.45,
         color: new Color().setHSL((((beltHue % 360) + 360) % 360) / 360, saturation, 0.4 + rng.next() * 0.3, SRGBColorSpace),
         filaments,
@@ -376,6 +485,17 @@ export class GasGiant {
 
     this.haloColor = new Color().setHSL(hue / 360, Math.min(1, saturation + 0.15), 0.72, SRGBColorSpace);
 
+    for (let i = 0; i < GIANT.limbStrokeCount; i++) {
+      this.limb.push({
+        angle: rng.next() * Math.PI * 2,
+        depthFrac: rng.next() ** GIANT.limbDepthBias,
+        tangentSpan:
+          GIANT.limbTangentSpanMin + rng.next() * (GIANT.limbTangentSpanMax - GIANT.limbTangentSpanMin),
+        brightnessVar:
+          GIANT.limbBrightnessVarMin + rng.next() * (GIANT.limbBrightnessVarMax - GIANT.limbBrightnessVarMin),
+      });
+    }
+
     // Fixed bearing 0 (+Z, dead ahead of spawn heading) — see the file
     // header for why this body does not roll a seeded bearing the way
     // `Planet.ts` does.
@@ -388,10 +508,11 @@ export class GasGiant {
   }
 
   /**
-   * Hold station if the player has come too close, and cache the direction
-   * back to the player for `draw`'s hemisphere cull. See the file header for
-   * why this reads the player rather than the camera, and why that means it
-   * never has to wait for `placeCamera` the way `Backdrop.follow` does.
+   * Hold station if the player has come too close, and cache the
+   * player-relative `viewDir` — still the leash's own logic and still the
+   * fallback `draw`'s hemisphere cull uses when it is not given a camera
+   * position. See the file header for why the exact cull needed more than
+   * this, and `draw`'s own comment for what it uses instead.
    */
   follow(player: Vector3): void {
     if (!this.shell) return;
@@ -426,16 +547,43 @@ export class GasGiant {
    * `shadeAt` computes for that exact point and normal. Regenerated in full
    * every call and nothing here persists between them — the comet's own
    * contract (`game/comet.ts`'s `Comet.draw`).
+   *
+   * `cameraPos` is optional and, when given, is what the belts' and storm's
+   * hemisphere cull test against instead of the cached `viewDir` — see the
+   * file header for why the exact per-point test needed it. `main.ts` passes
+   * `stage.camera.position`, one frame stale (`placeCamera` has not run yet
+   * when this is called — see the call site's own comment), which is close
+   * enough that nothing about it is visible: the same tolerance the old
+   * player-position approximation already leaned on. Omitting it — the
+   * brief's own playtest harness does — falls back to `viewDir` and is
+   * exactly the old behaviour, imprecision included.
    */
-  draw(trace: TraceBuffer): void {
+  draw(trace: TraceBuffer, cameraPos?: Vector3): void {
     if (!this.shell || !this.light) return;
     const light = this.light;
     const center = this.object.position;
     const radius = GIANT.radius;
 
-    this.drawBelts(trace, light, center, radius);
-    this.drawStorm(trace, light, center, radius);
+    this.drawBelts(trace, light, center, radius, cameraPos);
+    this.drawStorm(trace, light, center, radius, cameraPos);
     this.drawHalo(trace, light, center, radius);
+  }
+
+  /**
+   * The exact per-point hemisphere test — `dot(normal, direction to
+   * camera) > 0` — when `cameraPos` is given, falling back to the cached
+   * `viewDir` axis otherwise. No allocation: `cameraPos` and the point are
+   * read as plain numbers, the same discipline `render/light.ts`'s own
+   * header holds `shadeAt` to and for the same reason — this runs once per
+   * belt/storm vertex, hundreds of times a frame.
+   */
+  private facingOf(nx: number, ny: number, nz: number, x: number, y: number, z: number, cameraPos?: Vector3): number {
+    if (!cameraPos) return nx * this.viewDir.x + ny * this.viewDir.y + nz * this.viewDir.z;
+    const tcx = cameraPos.x - x;
+    const tcy = cameraPos.y - y;
+    const tcz = cameraPos.z - z;
+    const len = Math.hypot(tcx, tcy, tcz) || 1;
+    return (nx * tcx + ny * tcy + nz * tcz) / len;
   }
 
   /**
@@ -443,7 +591,13 @@ export class GasGiant {
    * all the way round — see `GIANT.filamentsPerBand`'s comment for why a
    * single continuous stroke reads as wire and this does not.
    */
-  private drawBelts(trace: TraceBuffer, light: SectorLight, center: Vector3, radius: number): void {
+  private drawBelts(
+    trace: TraceBuffer,
+    light: SectorLight,
+    center: Vector3,
+    radius: number,
+    cameraPos?: Vector3,
+  ): void {
     const steps = GIANT.filamentSteps;
     for (const belt of this.belts) {
       for (const filament of belt.filaments) {
@@ -459,22 +613,25 @@ export class GasGiant {
             belt.baseLat +
             filament.latOffset +
             belt.tilt * (theta0 - Math.PI) +
-            belt.wobbleAmp * Math.sin(belt.wobbleFreq * theta0 + belt.phase);
+            belt.wobbleAmp * Math.sin(belt.wobbleFreq * theta0 + belt.phase) +
+            belt.wobbleAmp2 * Math.sin(belt.wobbleFreq2 * theta0 + belt.phase2);
           const theta = theta0 + this.longitude;
           const cosLat = Math.cos(lat);
           const nx = cosLat * Math.sin(theta);
           const ny = Math.sin(lat);
           const nz = cosLat * Math.cos(theta);
 
-          const facing = nx * this.viewDir.x + ny * this.viewDir.y + nz * this.viewDir.z;
+          // Computed before the cull, not after — the exact per-point test
+          // needs the world position to find the direction to the camera.
+          const x = center.x + nx * radius * GIANT.beltRadiusBias;
+          const y = center.y + ny * radius * GIANT.beltRadiusBias;
+          const z = center.z + nz * radius * GIANT.beltRadiusBias;
+
+          const facing = this.facingOf(nx, ny, nz, x, y, z, cameraPos);
           if (facing <= 0) {
             hasPrev = false;
             continue;
           }
-
-          const x = center.x + nx * radius * GIANT.beltRadiusBias;
-          const y = center.y + ny * radius * GIANT.beltRadiusBias;
-          const z = center.z + nz * radius * GIANT.beltRadiusBias;
 
           if (hasPrev) {
             this.scratchNormal.set(nx, ny, nz);
@@ -485,7 +642,11 @@ export class GasGiant {
             // `GIANT.filamentFadeIn`'s comment for why this, not the
             // hemisphere fade alone, is what stops the belts reading as wire.
             const ends = Math.min(1, u / GIANT.filamentFadeIn, (1 - u) / GIANT.filamentFadeOut);
-            const level = lit * belt.brightness * edgeFade * ends;
+            // Deterministic brightness ripple along the filament's own
+            // length — see `GIANT.grainAmount` for why this, not frame-time
+            // randomness, is what breaks up an otherwise flat middle.
+            const grain = 1 - GIANT.grainAmount * (0.5 + 0.5 * Math.sin(theta0 * GIANT.grainFreq));
+            const level = lit * belt.brightness * edgeFade * ends * grain;
             if (level > GIANT.minLevel) trace.push(px, py, pz, x, y, z, belt.color, level);
           }
 
@@ -498,7 +659,13 @@ export class GasGiant {
     }
   }
 
-  private drawStorm(trace: TraceBuffer, light: SectorLight, center: Vector3, radius: number): void {
+  private drawStorm(
+    trace: TraceBuffer,
+    light: SectorLight,
+    center: Vector3,
+    radius: number,
+    cameraPos?: Vector3,
+  ): void {
     const storm = this.storm;
     if (!storm) return;
     const steps = GIANT.stormSteps;
@@ -519,15 +686,15 @@ export class GasGiant {
         const ny = Math.sin(lat);
         const nz = cosLat * Math.cos(theta);
 
-        const facing = nx * this.viewDir.x + ny * this.viewDir.y + nz * this.viewDir.z;
+        const x = center.x + nx * radius * GIANT.beltRadiusBias;
+        const y = center.y + ny * radius * GIANT.beltRadiusBias;
+        const z = center.z + nz * radius * GIANT.beltRadiusBias;
+
+        const facing = this.facingOf(nx, ny, nz, x, y, z, cameraPos);
         if (facing <= 0) {
           hasPrev = false;
           continue;
         }
-
-        const x = center.x + nx * radius * GIANT.beltRadiusBias;
-        const y = center.y + ny * radius * GIANT.beltRadiusBias;
-        const z = center.z + nz * radius * GIANT.beltRadiusBias;
 
         if (hasPrev) {
           this.scratchNormal.set(nx, ny, nz);
@@ -546,41 +713,55 @@ export class GasGiant {
     }
   }
 
-  /** The bloom-catching rim, §3.2. Drawn all the way around the silhouette
-   * — see `GIANT.limbCount`'s comment for why there is nothing to cull here. */
+  /**
+   * The bloom-catching rim, §3.2 — a scatter of short strokes oriented
+   * *tangentially*, along the silhouette, thickened toward its inner edge by
+   * `GIANT.limbDepthBias`. See `GIANT.limbStrokeCount`'s comment for why this
+   * replaced a fan of strokes running radially outward: that shape is a
+   * corona, not a halo, and it is the third time this project has drawn it
+   * by accident before catching it.
+   */
   private drawHalo(trace: TraceBuffer, light: SectorLight, center: Vector3, radius: number): void {
     this.u.crossVectors(UP, this.viewDir);
     if (this.u.lengthSq() < 1e-6) this.u.crossVectors(RIGHT, this.viewDir);
     this.u.normalize();
     this.v.crossVectors(this.viewDir, this.u);
 
-    for (let i = 0; i < GIANT.limbCount; i++) {
-      const angle = (i / GIANT.limbCount) * Math.PI * 2;
-      const c = Math.cos(angle);
-      const s = Math.sin(angle);
-      const dx = this.u.x * c + this.v.x * s;
-      const dy = this.u.y * c + this.v.y * s;
-      const dz = this.u.z * c + this.v.z * s;
+    for (const stroke of this.limb) {
+      const rad = radius * (1 + GIANT.limbDepth * stroke.depthFrac);
+      const a0 = stroke.angle - stroke.tangentSpan;
+      const a1 = stroke.angle + stroke.tangentSpan;
 
-      this.scratchNormal.set(dx, dy, dz);
-      let px = center.x + dx * radius;
-      let py = center.y + dy * radius;
-      let pz = center.z + dz * radius;
+      const cm = Math.cos(stroke.angle);
+      const sm = Math.sin(stroke.angle);
+      const ndx = this.u.x * cm + this.v.x * sm;
+      const ndy = this.u.y * cm + this.v.y * sm;
+      const ndz = this.u.z * cm + this.v.z * sm;
+
+      const c0 = Math.cos(a0);
+      const s0 = Math.sin(a0);
+      const px = center.x + (this.u.x * c0 + this.v.x * s0) * rad;
+      const py = center.y + (this.u.y * c0 + this.v.y * s0) * rad;
+      const pz = center.z + (this.u.z * c0 + this.v.z * s0) * rad;
+
+      const c1 = Math.cos(a1);
+      const s1 = Math.sin(a1);
+      const x = center.x + (this.u.x * c1 + this.v.x * s1) * rad;
+      const y = center.y + (this.u.y * c1 + this.v.y * s1) * rad;
+      const z = center.z + (this.u.z * c1 + this.v.z * s1) * rad;
+
+      // The stroke's own normal is approximated as radial at its centre
+      // angle — the tangent span is small enough that this is
+      // indistinguishable from shading each endpoint separately.
+      this.scratchNormal.set(ndx, ndy, ndz);
       this.scratchPoint.set(px, py, pz);
       const lit = shadeAt(light, this.scratchPoint, this.scratchNormal);
-
-      for (let r = 1; r <= GIANT.limbSteps; r++) {
-        const rad = radius * (1 + (GIANT.limbDepth * r) / GIANT.limbSteps);
-        const x = center.x + dx * rad;
-        const y = center.y + dy * rad;
-        const z = center.z + dz * rad;
-        const fall = 1 - (r - 1) / GIANT.limbSteps;
-        const level = lit * GIANT.limbBrightness * fall;
-        if (level > GIANT.minLevel) trace.push(px, py, pz, x, y, z, this.haloColor, level);
-        px = x;
-        py = y;
-        pz = z;
-      }
+      // Thickest at the shell's inner edge (the true limb), fading toward
+      // its outer edge — the brightness distribution bloom turns into
+      // atmosphere; see the file header and spec §3.2.
+      const taper = 1 - stroke.depthFrac;
+      const level = lit * GIANT.limbBrightness * stroke.brightnessVar * taper;
+      if (level > GIANT.minLevel) trace.push(px, py, pz, x, y, z, this.haloColor, level);
     }
   }
 
@@ -595,6 +776,7 @@ export class GasGiant {
     this.shell = null;
     this.belts.length = 0;
     this.storm = null;
+    this.limb.length = 0;
     this.light = null;
     for (const child of [...this.object.children]) this.object.remove(child);
   }

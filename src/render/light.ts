@@ -62,15 +62,21 @@ export const STAR = {
    * side — it reads as a hole where geometry should be. The floor is what
    * keeps a silhouette on the unlit limb.
    *
-   * The trade runs both directions and 0.15 is a first guess at the middle
-   * of it: much lower and the dark hemisphere starts disappearing into the
-   * backdrop again, which is the exact defect this constant exists to
-   * avoid; much higher and the lit and unlit sides converge toward the same
-   * brightness, which erases the terminator §3.1 was written to produce in
-   * the first place. A floor that "fixes" the hole by flattening the whole
-   * body evenly lit has just traded one failure for the other.
+   * The trade runs both directions. First guess was 0.15, the middle of it;
+   * task 3's own review of the hero gas giant found the terminator
+   * "provably there [by the maths], not obviously there [by eye]" at that
+   * value — the lit/unlit ratio it gives (1.0 : 0.15, under 7:1) turned out
+   * too narrow once dozens of overlapping, additively-blended belt strokes
+   * pile brightness back up on the dark side regardless of any one stroke's
+   * own dim multiplier. Lowered to 0.08 (over 12:1) to widen that gap. Much
+   * lower and the dark hemisphere starts disappearing into the backdrop
+   * again, which is the exact defect this constant exists to avoid; much
+   * higher and the lit and unlit sides converge toward the same brightness,
+   * which erases the terminator §3.1 was written to produce in the first
+   * place. A floor that "fixes" the hole by flattening the whole body evenly
+   * lit has just traded one failure for the other.
    */
-  floor: 0.15,
+  floor: 0.08,
 } as const;
 
 const DEG = Math.PI / 180;

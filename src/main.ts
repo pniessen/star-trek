@@ -966,9 +966,12 @@ function frame(now: number): void {
 
   // Scenery's bracket, beside combat's. The giant is the first thing to draw
   // into it — belts, storm and limb halo, regenerated in full every frame
-  // the same way the comet's tail is.
+  // the same way the comet's tail is. `stage.camera.position` is passed for
+  // the belts'/storm's exact hemisphere cull (see `GasGiant.draw`'s own
+  // comment) — one frame stale, since `placeCamera` runs later in this same
+  // function, which is close enough that nothing about it is visible.
   skyTrace.begin();
-  giant.draw(skyTrace);
+  giant.draw(skyTrace, stage.camera.position);
   skyTrace.end();
 
   trace.begin();
