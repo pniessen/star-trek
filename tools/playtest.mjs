@@ -125,6 +125,24 @@ check("...and one facing away is dim but not black", lit.away > 0 && lit.away < 
 check("the sector's star is seeded", lit.same, "same seed and sector differ");
 check("...and differs between sectors", lit.other, "two sectors share a star position");
 
+// ── the hero gas giant draws dense, lit, rotating strokes ───────────────────
+// `window.__giant` is the live instance the frame loop already drives — see
+// `render/GasGiant.ts` — so, unlike the pure functions above, this is not
+// rebuilt by hand; it is asserted exactly as the brief specifies, against
+// whatever `show`/`follow` have already put on screen by the time this runs.
+const giant = await page.evaluate(() => {
+  const g = window.__giant;
+  let n = 0;
+  g.draw({ push: () => n++ });
+  const before = g.longitude;
+  g.update(1.0);
+  return { segments: n, rotated: g.longitude !== before, hasShell: !!g.object.children.length };
+});
+check("the giant draws a dense field of strokes", giant.segments > 400, `${giant.segments} segments`);
+check("...within the scenery buffer's budget", giant.segments < 20000, `${giant.segments} of 20000`);
+check("...and rotates on its axis", giant.rotated, "longitude did not advance");
+check("...over a shell that can occlude", giant.hasShell, "no shell in the group");
+
 // ── the fixture is seeded ───────────────────────────────────────────────────
 // Also pure, and checked here for the same reason: `planFixture(seed, sector,
 // null)` is deterministic in `seed` and `sector` alone. `COMET.fixtureChance`

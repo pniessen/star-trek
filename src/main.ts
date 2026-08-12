@@ -4,7 +4,8 @@ import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { Backdrop, backdrop } from "./render/Backdrop.js";
 import { Planet } from "./render/Planet.js";
-import { planLight, shadeAt } from "./render/light.js";
+import { planLight, shadeAt, type SectorLight } from "./render/light.js";
+import { GasGiant } from "./render/GasGiant.js";
 import { PALETTE } from "./render/palette.js";
 import {
   buildBastion,
@@ -64,11 +65,13 @@ const trace = new TraceBuffer();
 /**
  * Scenery's own scratch pad, separate from combat's `trace` so a busy
  * firefight never silently deletes the sky — the comet's tail alone already
- * spends 779 of combat's 5000 segments. Nothing draws into this yet; later
- * tasks are what give the sector something to trace. 20000 segments is
- * 480 KB of vertex data, which is nothing.
+ * spends 779 of combat's 5000 segments. 20000 segments is 480 KB of vertex
+ * data, which is nothing. `fog: false` — see `TraceBuffer`'s own header —
+ * because scenery, unlike combat's near-field strokes, routinely sits past
+ * the scene's 260-unit fog far plane and an additive stroke fogged that far
+ * does not dim, it disappears.
  */
-const skyTrace = new TraceBuffer(20000);
+const skyTrace = new TraceBuffer(20000, false);
 const starfield = createStarfield();
 // The sky of whichever sector the run is in. Added once and then only ever
 // rebuilt in place; it draws between the starfield and the grid and is pinned
@@ -163,6 +166,18 @@ const loom = new Loom(() =>
 const comet = new Comet();
 stage.scene.add(comet.object);
 
+/**
+ * The hero gas giant — `docs/environment.md` §3's stage-1 prototype, and the
+ * whole reason Tasks 1 and 2 exist (`skyTrace`, `light.ts`). One instance,
+ * fixed dead ahead of spawn rather than seeded like `Planet`'s bearing —
+ * `render/GasGiant.ts`'s own header explains why a body built to be looked at
+ * cannot risk rolling behind the player. `object` holds only the shell (for
+ * depth and silhouette); every belt, the storm and the limb halo are strokes
+ * pushed straight into `skyTrace`, in the frame loop below.
+ */
+const giant = new GasGiant();
+stage.scene.add(giant.object);
+
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
   color: PALETTE.traceDim,
@@ -178,6 +193,16 @@ starbase.group.position.copy(STARBASE_POSITION);
 // because the session reads it every frame — wave escalation and salvage
 // both come from the sector you are currently in.
 const campaign = load(window.localStorage, Date.now());
+
+/**
+ * The sector's star, cached the same way `sky`/`planet` cache their own plan
+ * — a key comparison rather than a fresh `planLight` call every frame, since
+ * a sector's light does not move once placed and `planLight` allocates a
+ * `Vector3` and a `Color` each time it runs.
+ */
+let sectorLightKey = "";
+let sectorLight: SectorLight = planLight(campaign.seed, campaign.current);
+sectorLightKey = `${campaign.seed}:${campaign.current}`;
 
 /**
  * The one place the browser's storage is named. Everything below hands this to
@@ -377,6 +402,7 @@ function applyShapeMode(): void {
   playerHull.setMode(settings.shape);
   starbase.setMode(settings.shape);
   planet.setMode(settings.shape);
+  giant.setMode(settings.shape);
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
@@ -900,6 +926,7 @@ function frame(now: number): void {
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
   comet.setMode(settings.shape);
+  giant.setMode(settings.shape);
 
   playerHull.group.position.copy(player.position);
   // Pitch first about the ship's own right, then roll about its own nose —
@@ -923,9 +950,25 @@ function frame(now: number): void {
   const stationSpin = time * 0.06;
   starbase.group.rotation.y = stationSpin;
 
-  // Scenery's bracket, beside combat's. Nothing draws into it yet — see the
-  // declaration above.
+  // The sector's star, recomputed only on the two frames a sector actually
+  // changes on — see the cache's own declaration by `campaign`.
+  const currentLightKey = `${campaign.seed}:${campaign.current}`;
+  if (currentLightKey !== sectorLightKey) {
+    sectorLightKey = currentLightKey;
+    sectorLight = planLight(campaign.seed, campaign.current);
+  }
+  // `show`/`follow` read `player.position` alone, not the camera, so unlike
+  // `sky.follow(stage.camera)` below they do not have to wait for
+  // `placeCamera` to run first — see `render/GasGiant.ts`'s own header.
+  giant.show(campaign.seed, campaign.current, sectorLight);
+  giant.follow(player.position);
+  giant.update(dt);
+
+  // Scenery's bracket, beside combat's. The giant is the first thing to draw
+  // into it — belts, storm and limb halo, regenerated in full every frame
+  // the same way the comet's tail is.
   skyTrace.begin();
+  giant.draw(skyTrace);
   skyTrace.end();
 
   trace.begin();
@@ -1229,13 +1272,21 @@ if (DEBUG_PROBE) {
       model: session.comet,
     },
     /**
-     * The sector's star (`render/light.ts`) — pure maths, unwired into any
-     * run or renderer yet (Task 3 is the first consumer). Exposed the same
-     * way `__comet.plan`/`interferenceAt` are: so a harness can prove
+     * The sector's star (`render/light.ts`) — pure maths. `GasGiant` is now
+     * its first consumer, but this exposure predates that and is kept the
+     * same way `__comet.plan`/`interferenceAt` are: a harness can prove
      * `planLight` is seeded and `shadeAt` is a real Lambertian term without
      * flying anywhere or waiting for a body to exist.
      */
     __light: { planLight, shadeAt },
+    /**
+     * The hero gas giant, exposed as the bare instance rather than wrapped in
+     * a `{ model, constants }` object the way `__comet`/`__loom` are — the
+     * brief's own harness (`tools/playtest.mjs`) calls `draw`/`update` and
+     * reads `longitude`/`object` straight off it, so anything less direct
+     * would just be a second name for the same calls.
+     */
+    __giant: giant,
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.
     __command: {

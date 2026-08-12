@@ -31,6 +31,18 @@ export interface VectorObjectOptions {
   creaseAngle?: number;
   /** Occluder darkness. Pure void reads as a hole; a hint of hull reads solid. */
   fill?: Color;
+  /**
+   * Whether `Stage`'s scene fog (`45..260`, `Stage.ts`) applies. Defaults
+   * `true` — right for every hull and every existing caller, which all live
+   * well inside that range. A body meant to be seen past 260 units needs
+   * `false`, or the fog shader mixes its strokes toward the scene's black
+   * fog colour and an additively-blended stroke fogged to black contributes
+   * nothing — it does not dim, it disappears. `Planet.ts`'s ring already
+   * hand-builds a `fog: false` material for exactly this reason; this is
+   * that same escape hatch, generalised so a body's own shell can take it
+   * too instead of every caller re-deriving the fix.
+   */
+  fog?: boolean;
 }
 
 /**
@@ -64,6 +76,7 @@ export class VectorObject {
   constructor(geometry: BufferGeometry, opts: VectorObjectOptions = {}) {
     const color = opts.color ?? PALETTE.trace;
     const fill = opts.fill ?? new Color(0x060a0f);
+    const fog = opts.fog ?? true;
 
     // Occluder: writes depth, barely visible, sits fractionally behind its own
     // edges so coincident strokes never z-fight into a dashed mess.
@@ -73,7 +86,7 @@ export class VectorObject {
       polygonOffset: true,
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
-      fog: true,
+      fog,
     });
     this.hull = new Mesh(geometry, this.fillMaterial);
     this.hull.renderOrder = 0;
@@ -93,7 +106,7 @@ export class VectorObject {
       depthWrite: false,
       transparent: true,
       dashed: false,
-      fog: true,
+      fog,
     });
     liveMaterials.add(this.lineMaterial);
 

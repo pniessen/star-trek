@@ -28,6 +28,16 @@ const DEFAULT_MAX_SEGMENTS = 5000;
  * each has a ceiling that means something on its own, rather than one number
  * two unrelated draw calls are racing to exhaust. `main.ts` keeps the combat
  * default and gives scenery 20000 — 480 KB of vertex data, which is nothing.
+ *
+ * `fog` is a second, independent reason the two buffers cannot be one.
+ * `Stage`'s scene fog (`45..260`) mixes an additively-blended stroke toward
+ * black as it approaches the far bound, and at or past it the stroke
+ * contributes nothing at all — it does not dim, it disappears. That is
+ * correct for combat's `trace`, whose contents live at engagement range, and
+ * wrong for scenery's `skyTrace`: a body worth flying toward (`GasGiant`'s
+ * hero body sits 640-1160 units out) would be silently invisible the whole
+ * time it is worth looking at. `main.ts` keeps combat's default `fog: true`
+ * and gives scenery `false`.
  */
 export class TraceBuffer {
   readonly object: LineSegments;
@@ -38,7 +48,7 @@ export class TraceBuffer {
   private readonly geometry = new BufferGeometry();
   private count = 0;
 
-  constructor(capacity: number = DEFAULT_MAX_SEGMENTS) {
+  constructor(capacity: number = DEFAULT_MAX_SEGMENTS, fog = true) {
     this.capacity = capacity;
     this.positions = new Float32Array(capacity * 6);
     this.colors = new Float32Array(capacity * 6);
@@ -52,7 +62,7 @@ export class TraceBuffer {
         blending: AdditiveBlending,
         transparent: true,
         depthWrite: false,
-        fog: true,
+        fog,
       }),
     );
     this.object.frustumCulled = false;
