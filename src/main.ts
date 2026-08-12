@@ -60,6 +60,14 @@ try {
 
 const grid = createGrid();
 const trace = new TraceBuffer();
+/**
+ * Scenery's own scratch pad, separate from combat's `trace` so a busy
+ * firefight never silently deletes the sky — the comet's tail alone already
+ * spends 779 of combat's 5000 segments. Nothing draws into this yet; later
+ * tasks are what give the sector something to trace. 20000 segments is
+ * 480 KB of vertex data, which is nothing.
+ */
+const skyTrace = new TraceBuffer(20000);
 const starfield = createStarfield();
 // The sky of whichever sector the run is in. Added once and then only ever
 // rebuilt in place; it draws between the starfield and the grid and is pinned
@@ -72,7 +80,14 @@ const sky = new Backdrop();
  * attempts at this read as fake.
  */
 const planet = new Planet();
-stage.scene.add(grid.object, starfield.object, trace.object, sky.object, planet.object);
+stage.scene.add(
+  grid.object,
+  starfield.object,
+  trace.object,
+  skyTrace.object,
+  sky.object,
+  planet.object,
+);
 
 /**
  * How stretched the sky is, 0-1, eased rather than snapped.
@@ -906,6 +921,11 @@ function frame(now: number): void {
         !session.death.hidesHull));
   const stationSpin = time * 0.06;
   starbase.group.rotation.y = stationSpin;
+
+  // Scenery's bracket, beside combat's. Nothing draws into it yet — see the
+  // declaration above.
+  skyTrace.begin();
+  skyTrace.end();
 
   trace.begin();
   session.ordnance.draw(trace);

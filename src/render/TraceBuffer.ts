@@ -7,7 +7,7 @@ import {
   LineSegments,
 } from "three";
 
-const MAX_SEGMENTS = 5000;
+const DEFAULT_MAX_SEGMENTS = 5000;
 
 /**
  * A world-space scratch pad for strokes that exist for one frame.
@@ -19,16 +19,29 @@ const MAX_SEGMENTS = 5000;
  *
  * Thin lines by design: fat lines cost an instanced quad each and these are
  * transient, numerous, and already blown out by bloom.
+ *
+ * Capacity is a constructor argument, not a shared constant, because combat and
+ * scenery must not share one ceiling. A single buffer would mean a busy
+ * firefight silently deletes the sky — phaser beams and torpedo streaks
+ * elbowing out the strokes that draw the sector around them — and the comet's
+ * tail alone already spends 779 segments of a 5000 budget. Two buffers means
+ * each has a ceiling that means something on its own, rather than one number
+ * two unrelated draw calls are racing to exhaust. `main.ts` keeps the combat
+ * default and gives scenery 20000 — 480 KB of vertex data, which is nothing.
  */
 export class TraceBuffer {
   readonly object: LineSegments;
 
-  private readonly positions = new Float32Array(MAX_SEGMENTS * 6);
-  private readonly colors = new Float32Array(MAX_SEGMENTS * 6);
+  private readonly capacity: number;
+  private readonly positions: Float32Array;
+  private readonly colors: Float32Array;
   private readonly geometry = new BufferGeometry();
   private count = 0;
 
-  constructor() {
+  constructor(capacity: number = DEFAULT_MAX_SEGMENTS) {
+    this.capacity = capacity;
+    this.positions = new Float32Array(capacity * 6);
+    this.colors = new Float32Array(capacity * 6);
     this.geometry.setAttribute("position", new BufferAttribute(this.positions, 3));
     this.geometry.setAttribute("color", new BufferAttribute(this.colors, 3));
 
@@ -61,7 +74,7 @@ export class TraceBuffer {
     color: Color,
     intensity = 1,
   ): void {
-    if (this.count >= MAX_SEGMENTS) return;
+    if (this.count >= this.capacity) return;
     const p = this.count * 6;
     this.positions[p] = ax;
     this.positions[p + 1] = ay;
