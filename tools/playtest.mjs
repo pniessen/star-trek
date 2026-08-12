@@ -101,6 +101,30 @@ check("...and not off to the side", vol.outside === 0, `v=${vol.outside}`);
 check("...and fades toward the edge", vol.edge > 0 && vol.edge < vol.onAxis, `edge=${vol.edge} axis=${vol.onAxis}`);
 check("no comet, no interference", vol.none === 0, `v=${vol.none}`);
 
+// ── the sector's star is pure and seeded ────────────────────────────────────
+// `planLight`/`shadeAt` (`render/light.ts`) are pure functions with nothing
+// wired into a run yet — Task 3 is the first consumer — so, like the comet's
+// own tail-volume test above, this is asserted before a run exists at all.
+const lit = await page.evaluate(async () => {
+  const { planLight, shadeAt } = window.__light;
+  const l = planLight(12345, 7);
+  const at = { x: 0, y: 0, z: 0 };
+  const toward = { x: l.position.x, y: l.position.y, z: l.position.z };
+  const len = Math.hypot(toward.x, toward.y, toward.z);
+  const facing = { x: toward.x / len, y: toward.y / len, z: toward.z / len };
+  const away = { x: -facing.x, y: -facing.y, z: -facing.z };
+  return {
+    facing: shadeAt(l, at, facing),
+    away: shadeAt(l, at, away),
+    same: planLight(12345, 7).position.x === l.position.x,
+    other: planLight(12345, 8).position.x !== l.position.x,
+  };
+});
+check("a surface facing the star is bright", lit.facing > 0.8, `v=${lit.facing}`);
+check("...and one facing away is dim but not black", lit.away > 0 && lit.away < 0.25, `v=${lit.away}`);
+check("the sector's star is seeded", lit.same, "same seed and sector differ");
+check("...and differs between sectors", lit.other, "two sectors share a star position");
+
 // ── the fixture is seeded ───────────────────────────────────────────────────
 // Also pure, and checked here for the same reason: `planFixture(seed, sector,
 // null)` is deterministic in `seed` and `sector` alone. `COMET.fixtureChance`

@@ -4,6 +4,7 @@ import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { Backdrop, backdrop } from "./render/Backdrop.js";
 import { Planet } from "./render/Planet.js";
+import { planLight, shadeAt } from "./render/light.js";
 import { PALETTE } from "./render/palette.js";
 import {
   buildBastion,
@@ -1227,6 +1228,14 @@ if (DEBUG_PROBE) {
       seed: () => session.seedComet(player),
       model: session.comet,
     },
+    /**
+     * The sector's star (`render/light.ts`) — pure maths, unwired into any
+     * run or renderer yet (Task 3 is the first consumer). Exposed the same
+     * way `__comet.plan`/`interferenceAt` are: so a harness can prove
+     * `planLight` is seeded and `shadeAt` is a real Lambertian term without
+     * flying anywhere or waiting for a body to exist.
+     */
+    __light: { planLight, shadeAt },
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.
     __command: {
