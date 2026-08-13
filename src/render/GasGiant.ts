@@ -117,6 +117,62 @@ export const GIANT = {
    * something on screen to judge it against. */
   rotationRate: 0.035,
 
+  // ── colour (§4.1, "a genuinely orange Jupiter" — never the Shroud's) ─────
+
+  /**
+   * The body's hue anchor, degrees, drawn narrow rather than from the full
+   * wheel the first two passes used (`rng.next() * 360`, unconstrained). The
+   * owner's complaint was specific — the shipped body read magenta, which is
+   * `PALETTE.magenta`, the Shroud's own hue and the single most
+   * information-loaded colour the game has — and an unconstrained roll does
+   * not just risk that once, it revisits it every sector. Narrowed to
+   * Jupiter's own equatorial range (warm ochre-orange) closes the whole
+   * class of mistake rather than re-rolling and hoping.
+   */
+  baseHueMin: 24,
+  baseHueMax: 46,
+  /**
+   * Per-band colour swatches, picked by weight in `pickSwatch` rather than
+   * jittered off one base hue — a single hue with only lightness variance is
+   * what "one flat wash" looks like; several named families (cream, ochre,
+   * rust, deep brown-red) each with their own saturation and lightness is
+   * what "several colours, like the real Jupiter" asked for. `hueOffset` is
+   * degrees off `baseHue`, kept inside the same warm family so two bands
+   * never disagree about which planet they belong to.
+   *
+   * Every `saturation` here sits clearly under the hull roster's own floor
+   * (`PALETTE.lance`, the lowest of the five, is ~0.61) — not because a body
+   * must be desaturated (§4.1 says the opposite), but because a *band's*
+   * colour is judged in isolation for a fraction of a second as the eye
+   * scans the body, and a warm, saturated ochre at hull saturation is one
+   * glance away from reading as Raider gold. Multi-hue banding is what
+   * still reads as unmistakably *body* even with every individual band
+   * capped this way.
+   *
+   * `weight` sets how often a swatch is drawn; cream and the deep
+   * brown-red sit lowest so the pale zones stay occasional accents rather
+   * than half the body, per the brief's own "occasional pale zone."
+   */
+  bandSwatches: [
+    { hueOffset: 9, saturation: 0.15, lightness: 0.8, weight: 2 }, // cream
+    { hueOffset: 4, saturation: 0.27, lightness: 0.62, weight: 3 }, // pale zone
+    { hueOffset: 0, saturation: 0.42, lightness: 0.46, weight: 6 }, // ochre
+    { hueOffset: -12, saturation: 0.48, lightness: 0.33, weight: 5 }, // rust
+    { hueOffset: -18, saturation: 0.38, lightness: 0.2, weight: 2 }, // deep brown-red
+  ],
+  /**
+   * The storm's own family — pulled toward red rather than jittered off the
+   * base hue the way a belt is, the same way the real Great Red Spot reads
+   * as a distinct accent rather than another belt. The first pass offset
+   * this +150°, which for a hue anchored near 35° lands around 185° —
+   * inside `PALETTE.trace`'s own cyan (~178°), the player's colour. Negative
+   * and small keeps the storm in the same warm family as the belts, just
+   * redder and darker, and its saturation still sits under the hull floor.
+   */
+  stormHueOffset: -22,
+  stormSaturation: 0.5,
+  stormLightness: 0.3,
+
   // ── the belts (§3.3, "hundreds of arcs, not eight stripes") ──────────────
 
   /**
@@ -139,6 +195,16 @@ export const GIANT = {
    * a cap, not a band. */
   beltLatitudeRange: 1.1,
   /**
+   * Exponent applied to a band's own signed latitude draw before it is
+   * scaled by `beltLatitudeRange` — above 1, it biases band placement toward
+   * the equator, leaving the poles comparatively bare. A real gas giant is
+   * busy at the equator and quiet at the poles; the uniform draw this
+   * replaced spread bands evenly across the whole range instead, which is
+   * exactly the "uniform coverage over a sphere" the finding named as part
+   * of why the body read as a wound ball rather than banded weather.
+   */
+  latitudeBias: 1.7,
+  /**
    * Short filaments per band, each covering only a fraction of the full
    * circumference (`filamentSpanMin`/`Max`) rather than one continuous line
    * all the way round. This is the same correction the comet's own plume
@@ -156,10 +222,21 @@ export const GIANT = {
    * — some bands read sparser than others, which is itself part of not
    * looking like a uniform grid. */
   filamentCountJitter: 3,
-  /** Fraction of the full circumference (0-1, i.e. of 2π) one filament
-   * spans, before the per-filament jitter below widens or narrows it. */
-  filamentSpanMin: 0.18,
-  filamentSpanMax: 0.4,
+  /**
+   * Fraction of the full circumference (0-1, i.e. of 2π) one filament spans,
+   * before the per-filament jitter below widens or narrows it. Cut sharply
+   * from the first pass's 0.18-0.4 (65°-144° — most of a hemisphere in one
+   * stroke): a filament that long sweeps conspicuously across the body and
+   * crosses the limb at a visible angle, which is what a *sphere wound with
+   * yarn* actually is. A band reads as a band when it is built from many
+   * short arcs that stay inside one parallel, not a few long ones that
+   * advertise their own curve; foreshortening toward the limb — parallels
+   * compressing as they turn away from the camera — is the cue that
+   * separates "banded sphere" from "sphere with lines on it", and it only
+   * shows up for free when the strokes genuinely hold their latitude.
+   */
+  filamentSpanMin: 0.02,
+  filamentSpanMax: 0.055,
   /** Steps a single filament is walked in. Short — these are meant to be
    * short strokes, not the whole belt. */
   filamentSteps: 16,
@@ -175,15 +252,34 @@ export const GIANT = {
   filamentFadeOut: 0.3,
   /**
    * Radians a band's centre line drifts, linearly, across a filament's own
-   * span — "a slight tilt" per the brief, distinct from the sinusoidal
-   * wobble below. Small: this is a gentle incline, not a spiral.
+   * *local* progress (0-1 within that one filament) — "a slight tilt" per
+   * the brief, distinct from the sinusoidal wobble below.
+   *
+   * **This constant was correct; the code reading it was not, and that bug
+   * is the actual cause of the "ball of thread" finding.** The drift term
+   * was `tilt * (theta0 - π)` — `theta0` is the stroke's *absolute* position
+   * on the sphere's full circumference, not its position within its own
+   * filament, so a filament near either edge of the longitude range picked
+   * up a drift of nearly `tilt * π` (≈22° at the old 0.12) regardless of how
+   * short the filament itself was. Twenty-two degrees of latitude drift
+   * across the body is not "a slight tilt", it is most of a visible spiral —
+   * exactly what makes a band look wound rather than level. Fixed to drift
+   * across `u` (the filament's own 0-1 walk) instead, so the magnitude this
+   * constant sets is now the true bound, never a function of where on the
+   * sphere the filament happens to sit.
    */
   beltTilt: 0.12,
-  /** Turbulence — the sinusoidal wobble in latitude that shears with
-   * longitude, per the brief. Amplitude range and the frequency band below it
-   * are what turns a belt from a hoop into weather. */
-  wobbleAmpMin: 0.02,
-  wobbleAmpMax: 0.09,
+  /**
+   * Turbulence — the sinusoidal wobble in latitude that shears with
+   * longitude, per the brief. Pulled down from the first pass's 0.02-0.09
+   * (up to ~5°): a wobble that large routinely carried a stroke clear out of
+   * its own band and into a neighbour's, which is the second thing "reads
+   * as a wound ball" was diagnosed against — perturbation should break the
+   * line, not relocate it. At this range the belt visibly wavers without
+   * leaving its parallel.
+   */
+  wobbleAmpMin: 0.008,
+  wobbleAmpMax: 0.032,
   wobbleFreqMin: 1.5,
   wobbleFreqMax: 4.5,
   /**
@@ -209,16 +305,23 @@ export const GIANT = {
    */
   grainAmount: 0.35,
   grainFreq: 19,
-  /** How far a band's individual filaments scatter off its centre latitude,
+  /**
+   * How far a band's individual filaments scatter off its centre latitude,
    * radians — "a width" per the brief. Several filaments landing at
    * slightly different latitudes within this spread is what reads as a
-   * filled band; a single hairline would not. */
-  beltWidthMin: 0.02,
-  beltWidthMax: 0.1,
-  /** How far off the base hue an individual band's tint drifts, degrees.
-   * Band to band variation is what stops the whole body reading as one flat
-   * wash of colour under the shading. */
-  hueJitterDeg: 18,
+   * filled band; a single hairline would not. Narrowed from 0.02-0.1 (up to
+   * ~5.7°) alongside the wobble amplitudes above, for the same reason — a
+   * band this wide combined with the old wobble is most of how filaments
+   * ended up in a neighbour's territory.
+   */
+  beltWidthMin: 0.012,
+  beltWidthMax: 0.045,
+  /** How far off a swatch's own hue an individual band's tint drifts,
+   * degrees — texture within one swatch family, not a second palette; the
+   * families themselves (`bandSwatches`) are what carries "several colours,
+   * like the real Jupiter." Cut from 18 now that the swatches already give
+   * band-to-band contrast, so this no longer has to do that job too. */
+  hueJitterDeg: 6,
   /**
    * Below this, a segment is skipped rather than pushed — the same guard the
    * comet's plume uses (`level > 0.02`) so a segment faded to nothing does
@@ -254,10 +357,6 @@ export const GIANT = {
    * than a second, smaller planet stuck to the first. */
   stormHalfLat: 0.16,
   stormHalfLon: 0.26,
-  /** Degrees the storm's hue sits from the base — a genuine accent rather
-   * than another belt, the way a real gas giant's one great storm stands out
-   * from its banding. */
-  stormHueOffset: 150,
 
   // ── the limb halo (§3.2, "bloom is the atmosphere") ───────────────────────
 
@@ -310,6 +409,24 @@ export const GIANT = {
 
 const UP = new Vector3(0, 1, 0);
 const RIGHT = new Vector3(1, 0, 0);
+
+type Swatch = (typeof GIANT.bandSwatches)[number];
+
+/**
+ * Weighted pick from `GIANT.bandSwatches` — a band's colour family, not its
+ * exact hue (`hueJitterDeg` still varies that within the family). Weighted
+ * rather than uniform so cream and deep brown-red stay occasional accents;
+ * see `bandSwatches`' own comment for why they sit at the low end.
+ */
+function pickSwatch(rng: { next(): number }): Swatch {
+  const total = GIANT.bandSwatches.reduce((sum, s) => sum + s.weight, 0);
+  let r = rng.next() * total;
+  for (const swatch of GIANT.bandSwatches) {
+    r -= swatch.weight;
+    if (r <= 0) return swatch;
+  }
+  return GIANT.bandSwatches[GIANT.bandSwatches.length - 1];
+}
 
 /** One short filament within a band — see `GIANT.filamentsPerBand` for why a
  * band is several of these rather than one continuous line. */
@@ -421,8 +538,14 @@ export class GasGiant {
     // those files' own comments warn against.
     const rng = makeRng((seed * 3628273133 + sector * 2308142839 + 97354729) >>> 0);
 
-    const hue = rng.next() * 360;
-    const saturation = 0.5 + rng.next() * 0.3;
+    // Confined to `baseHueMin`-`baseHueMax` — see that constant's own
+    // comment for why the old `rng.next() * 360` (any hue at all) is what
+    // let this body land on `PALETTE.magenta` in the first place.
+    const hue = GIANT.baseHueMin + rng.next() * (GIANT.baseHueMax - GIANT.baseHueMin);
+    // The ochre swatch's own saturation stands in for "the body's overall
+    // saturation" wherever one number is needed (the shell tint, the halo) —
+    // every per-band colour now comes from `bandSwatches` instead.
+    const saturation = GIANT.bandSwatches[2].saturation;
 
     this.shell = new VectorObject(
       new SphereGeometry(GIANT.radius, GIANT.shellSegments, GIANT.shellRings),
@@ -445,7 +568,8 @@ export class GasGiant {
     this.object.add(this.shell.group);
 
     for (let i = 0; i < GIANT.bandCount; i++) {
-      const beltHue = hue + (rng.next() * 2 - 1) * GIANT.hueJitterDeg;
+      const swatch = pickSwatch(rng);
+      const beltHue = hue + swatch.hueOffset + (rng.next() * 2 - 1) * GIANT.hueJitterDeg;
       const width = GIANT.beltWidthMin + rng.next() * (GIANT.beltWidthMax - GIANT.beltWidthMin);
 
       const filamentCount = Math.max(
@@ -461,8 +585,14 @@ export class GasGiant {
         });
       }
 
+      // Signed draw raised to `latitudeBias` before scaling — see that
+      // constant's comment for why this clusters bands toward the equator
+      // instead of spreading them uniformly across the whole range.
+      const latDraw = rng.next() * 2 - 1;
+      const baseLat = Math.sign(latDraw) * Math.abs(latDraw) ** GIANT.latitudeBias * GIANT.beltLatitudeRange;
+
       this.belts.push({
-        baseLat: (rng.next() * 2 - 1) * GIANT.beltLatitudeRange,
+        baseLat,
         tilt: (rng.next() * 2 - 1) * GIANT.beltTilt,
         wobbleAmp: GIANT.wobbleAmpMin + rng.next() * (GIANT.wobbleAmpMax - GIANT.wobbleAmpMin),
         wobbleFreq: GIANT.wobbleFreqMin + rng.next() * (GIANT.wobbleFreqMax - GIANT.wobbleFreqMin),
@@ -471,7 +601,12 @@ export class GasGiant {
         wobbleFreq2: GIANT.wobbleFreq2Min + rng.next() * (GIANT.wobbleFreq2Max - GIANT.wobbleFreq2Min),
         phase2: rng.next() * Math.PI * 2,
         brightness: 0.55 + rng.next() * 0.45,
-        color: new Color().setHSL((((beltHue % 360) + 360) % 360) / 360, saturation, 0.4 + rng.next() * 0.3, SRGBColorSpace),
+        color: new Color().setHSL(
+          (((beltHue % 360) + 360) % 360) / 360,
+          swatch.saturation,
+          swatch.lightness,
+          SRGBColorSpace,
+        ),
         filaments,
       });
     }
@@ -480,10 +615,19 @@ export class GasGiant {
       lat: (rng.next() * 2 - 1) * GIANT.beltLatitudeRange * 0.7,
       lon: rng.next() * Math.PI * 2,
       brightness: 1.1,
-      color: new Color().setHSL(((hue + GIANT.stormHueOffset) % 360) / 360, saturation, 0.55, SRGBColorSpace),
+      color: new Color().setHSL(
+        ((((hue + GIANT.stormHueOffset) % 360) + 360) % 360) / 360,
+        GIANT.stormSaturation,
+        GIANT.stormLightness,
+        SRGBColorSpace,
+      ),
     };
 
-    this.haloColor = new Color().setHSL(hue / 360, Math.min(1, saturation + 0.15), 0.72, SRGBColorSpace);
+    // Capped rather than `saturation + 0.15` uncapped — see `bandSwatches`'
+    // own comment on why every band stays under the hull roster's ~0.61
+    // floor; the halo is the brightest thing on the body and the last place
+    // that cap should slip.
+    this.haloColor = new Color().setHSL(hue / 360, Math.min(0.5, saturation + 0.1), 0.74, SRGBColorSpace);
 
     for (let i = 0; i < GIANT.limbStrokeCount; i++) {
       this.limb.push({
@@ -609,10 +753,15 @@ export class GasGiant {
         for (let k = 0; k <= steps; k++) {
           const u = k / steps;
           const theta0 = (filament.startLon + filament.span * u) * Math.PI * 2;
+          // `u` (0-1, local to this filament), not `theta0` (absolute
+          // sphere longitude) — see `GIANT.beltTilt`'s comment for why using
+          // the absolute position here was the actual bug behind "reads as
+          // a wound ball": it let a short filament pick up drift sized by
+          // where on the sphere it sat rather than by its own span.
           const lat =
             belt.baseLat +
             filament.latOffset +
-            belt.tilt * (theta0 - Math.PI) +
+            belt.tilt * (u - 0.5) +
             belt.wobbleAmp * Math.sin(belt.wobbleFreq * theta0 + belt.phase) +
             belt.wobbleAmp2 * Math.sin(belt.wobbleFreq2 * theta0 + belt.phase2);
           const theta = theta0 + this.longitude;
