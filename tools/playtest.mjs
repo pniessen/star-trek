@@ -126,22 +126,27 @@ check("the sector's star is seeded", lit.same, "same seed and sector differ");
 check("...and differs between sectors", lit.other, "two sectors share a star position");
 
 // ── the hero gas giant is a real lit mesh, not strokes ──────────────────────
-// Rewritten twice now for the same file: first for `docs/environment.md`
-// §1.5 (a real mesh instead of strokes), then for task 3's own mechanism fix
-// (banding moved from baked vertex colours into `body`'s fragment shader, so
-// a boundary is crisp regardless of tessellation — see `render/GasGiant.ts`'s
-// own header). The old `getAttribute("color")` check tested a buffer that no
-// longer exists; this checks the geometry's own vertex count instead, since
-// tessellation now only has to keep the silhouette round, not carry the
-// pattern. `window.__giant` is the live instance the frame loop already
-// drives.
+// Rewritten three times now for the same file: first for `docs/environment.md`
+// §1.5 (a real mesh instead of strokes), then to move banding from baked
+// vertex colours into `body`'s fragment shader, then to replace the band
+// lookup itself with domain-warped flow noise — see `render/GasGiant.ts`'s
+// own header for why each rebuild happened. The old `getAttribute("color")`
+// check tested a buffer that no longer exists; this checks the geometry's
+// own vertex count instead, since tessellation only has to keep the
+// silhouette round, not carry the pattern. `uBandCount` went with the band
+// lookup it belonged to — `uFlowScale` is its replacement as "some shader
+// uniform only the flow-noise rebuild would set." Rotation moved off the
+// mesh onto a `uRotation` uniform in the same rebuild (`update`'s own
+// comment has the reasoning), so this now reads that uniform rather than
+// `body.rotation.y`, which no longer changes. `window.__giant` is the live
+// instance the frame loop already drives.
 const giant = await page.evaluate(() => {
   const g = window.__giant;
   const positionAttr = g.body?.geometry?.getAttribute("position");
-  const hasShaderUniforms = typeof g.body?.material?.uniforms?.uBandCount?.value === "number";
-  const before = g.body ? g.body.rotation.y : 0;
+  const hasShaderUniforms = typeof g.body?.material?.uniforms?.uFlowScale?.value === "number";
+  const before = g.body ? g.body.material.uniforms.uRotation.value : 0;
   g.update(1.0);
-  const after = g.body ? g.body.rotation.y : 0;
+  const after = g.body ? g.body.material.uniforms.uRotation.value : 0;
   return {
     hasBody: !!g.body,
     vertexCount: positionAttr ? positionAttr.count : 0,
@@ -157,8 +162,8 @@ const giant = await page.evaluate(() => {
 });
 check("the giant is a real mesh, not a field of strokes", giant.hasBody, `hasBody=${giant.hasBody}`);
 check("...tessellated enough for a round silhouette", giant.vertexCount > 500, `${giant.vertexCount} vertices`);
-check("...banded per fragment, not baked per vertex", giant.hasShaderUniforms, `uBandCount set=${giant.hasShaderUniforms}`);
-check("...and rotates rigidly on its axis", giant.rotated, `rotated=${giant.rotated}`);
+check("...coloured by the flow-noise shader, not a band lookup", giant.hasShaderUniforms, `uFlowScale set=${giant.hasShaderUniforms}`);
+check("...and rotates by advancing the sample coordinate", giant.rotated, `rotated=${giant.rotated}`);
 check(
   "...under an additive limb shell",
   giant.hasLimb && giant.limbAdditive,

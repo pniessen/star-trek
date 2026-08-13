@@ -8,7 +8,6 @@ import {
   SphereGeometry,
   SRGBColorSpace,
   Vector3,
-  Vector4,
 } from "three";
 import { makeRng } from "../chart/rng.js";
 import type { SectorLight } from "./light.js";
@@ -52,6 +51,23 @@ import type { SectorLight } from "./light.js";
  * project drew a halo as spokes before catching that a halo is dense at the
  * edge, not radiating from it (`game/comet.ts`'s `COMA_GLOW` comment is the
  * first two).
+ *
+ * **A third rebuild, `body`'s fragment shader only, for the reason §3.3
+ * names directly: "density, not outlines."** The per-fragment band lookup
+ * above fixed the crispness problem but not the real one — four rounds of
+ * swatch and boundary-wave tuning on top of it never stopped reading as
+ * *stripes*, because a lookup keyed on latitude alone cannot produce
+ * anything else: every pixel at a given latitude was still the same colour,
+ * wobble and turbulence notwithstanding. Jupiter's belts are not stripes,
+ * they are shear zones — adjacent jets moving at different rates, and all
+ * the interesting shape (festoons, curls, wakes) lives at the boundary
+ * between them, exactly where a boundary table has nothing to say. The band
+ * index, the swatch-family table, the boundary-wave harmonics and the
+ * three-octave `sin`-sum turbulence are gone; `flow` below replaces all of
+ * it with domain-warped 3D value noise, sheared by latitude, with the
+ * bands emerging from how that noise is *sampled* rather than being decided
+ * first and decorated after. See `flowPoint`'s own comment for the one line
+ * doing most of the work, and `flow`'s for the warp.
  *
  * The sector's actual `DirectionalLight`/fill light are still owned by
  * `main.ts`, not this file — a light is a property of the *sector*, not of
@@ -100,74 +116,168 @@ export const GIANT = {
   widthSegments: 48,
   heightSegments: 32,
 
-  // ── colour (§4.1, "a genuinely orange Jupiter" — never the Shroud's) ─────
+  // ── colour ─────────────────────────────────────────────────────────────
+  // The owner lifted every hue/saturation constraint for this body — §4.1's
+  // "genuinely orange Jupiter" carve-out already exempted celestial bodies
+  // from the strokes' palette rule, and this task removed the narrower
+  // constraint the swatch build had additionally imposed on itself (a tight
+  // hue band, to close off a magenta roll that once collided with the
+  // Shroud's own colour). What is below is now a *choice*, sampled from
+  // `01_full-disc_belts-zones_PIA04866_cassini.jpg` and
+  // `03_belt-zone-boundary_closeup_PIA00574_galileo.jpg` rather than derived
+  // from a rule: warm cream zones, rust-to-brown belts, a cooler grey-blue
+  // at both the poles and the belt/zone boundary itself — because that is
+  // what a gas giant actually looks like, not because anything requires it.
 
-  /** The body's hue anchor, degrees. Narrow rather than the full wheel for
-   * the reason the swatch lists below inherit unchanged from the stroke
-   * build: an unconstrained roll once put this body on `PALETTE.magenta`,
-   * the Shroud's own hue, and closing the whole class of mistake beats
-   * re-rolling and hoping. */
+  /** The body's hue anchor, degrees, still rolled per sector — kept in the
+   * same warm range the swatch build used, now because the reference is
+   * warm, not because a wider roll is forbidden. */
   baseHueMin: 24,
   baseHueMax: 46,
-  /**
-   * Two swatch families, not one weighted list — the Cassini reference this
-   * task's brief was checked against says the drama is *only* in value, not
-   * hue: pale cream zones against distinctly darker rust belts, both muted.
-   * `show` alternates strictly between these two families by band parity
-   * (see `BODY_FRAGMENT`'s own comment on why parity, not a hash, decides
-   * which family a band belongs to) — a hash-picked family per band, the
-   * vertex-colour build's approach, could roll two adjacent bands from the
-   * *same* family and erase the one contrast the brief says is missing.
-   * Every `saturation` here still sits under the hull roster's own floor
-   * (`PALETTE.lance` ≈0.61), and the lightness gap between the two families
-   * — roughly 0.35 at its narrowest — is the single number doing the most
-   * work in this file.
-   */
-  zoneSwatches: [
-    { hueOffset: 9, saturation: 0.1, lightness: 0.88 }, // pale cream — the broad equatorial zone
-    { hueOffset: 4, saturation: 0.16, lightness: 0.78 }, // warm cream-gold — the paler flank zones
-  ],
-  beltSwatches: [
-    { hueOffset: 0, saturation: 0.3, lightness: 0.42 }, // ochre-tan belt
-    { hueOffset: -12, saturation: 0.36, lightness: 0.3 }, // rust belt
-    { hueOffset: -18, saturation: 0.22, lightness: 0.18 }, // deep brown-red belt
-  ],
+  /** Four colour stops the flow value `t` (see `flow` in `BODY_FRAGMENT`) is
+   * ramped across, each an offset from `uHue` plus its own saturation and
+   * lightness — pale cream zone, warm tan transition, rust belt, deep
+   * brown-red belt. This is the same "drama is in value, not hue" reading
+   * the Cassini reference gave the swatch build, expressed as a continuous
+   * ramp over a *continuous* field instead of a discrete lookup over a
+   * discrete one — the mechanism that made bands read as stripes no matter
+   * how the stops were tuned. */
+  zoneHueOffset: 8,
+  zoneSaturation: 0.16,
+  /** Held below the swatch build's own 0.88-0.9 — `Stage.ts`'s bloom fires
+   * above a luminance of 0.5 (`UnrealBloomPass`'s own threshold, tuned for
+   * traces and never touched by this file), and a lightness this close to 1
+   * pushes most of the sunlit hemisphere over that line at once, which
+   * blooms the whole disc into a flat wash and erases the very texture item
+   * 1-4 exist to add. The swatch build never hit this because its bands were
+   * uniform patches large enough to still read as banded even blurred; a
+   * continuous noise field has no such patches to fall back on. */
+  zoneLightness: 0.8,
+  midHueOffset: 3,
+  midSaturation: 0.3,
+  midLightness: 0.56,
+  beltHueOffset: -4,
+  beltSaturation: 0.44,
+  beltLightness: 0.44,
+  deepHueOffset: -10,
+  deepSaturation: 0.36,
+  deepLightness: 0.22,
+  /** The boundary streamer's own colour — pale grey-blue, fixed rather than
+   * relative to `uHue`, matching the turbulent cloud tone the Galileo
+   * close-up shows precisely at a belt/zone transition and nowhere else.
+   * Mixed in by `edge` (see `BODY_FRAGMENT`), never by latitude, which is
+   * what keeps it a boundary phenomenon rather than a third band family. */
+  streamerHue: 205,
+  streamerSaturation: 0.14,
+  streamerLightness: 0.74,
+  /** How much of the flow field's local gradient magnitude survives into
+   * `edge` before it is used as a mix weight — see `flow`'s own comment on
+   * why a gradient, not a value, is what marks a boundary. First-draft
+   * tuning treated any nonzero gradient as a boundary and painted the
+   * streamer almost everywhere, since four-octave noise has *some* slope
+   * nearly every pixel it owns; `BODY_FRAGMENT`'s own `edge` now runs the
+   * gain through a smoothstep threshold rather than a plain clamp, so a
+   * gentle slope inside a band contributes nothing and only a genuine tear
+   * crosses into visible streamer. */
+  edgeEpsilon: 0.045,
+  edgeGain: 3.2,
+  edgeLow: 0.12,
+  edgeHigh: 0.55,
+  edgeMix: 0.42,
 
-  // ── banding (§3.3, "broad alternating zones and belts") ──────────────────
+  // ── the flow field (item 1-4: the technique itself) ───────────────────
 
-  /** How many alternating bands span the whole body pole to pole, seeded per
-   * sector within this range — "roughly 8-12 across the disc" per the brief,
-   * rolled rather than fixed so sector to sector variety survives the
-   * rebuild the way it did in the stroke version's belt count. */
-  bandCountMin: 8,
-  bandCountMax: 12,
-  /** Upper bound the shader's boundary table is sized for — `bandCountMax`
-   * plus headroom, not `bandCountMax` itself, so the array literal in
-   * `BODY_FRAGMENT` never has to change if the roll range above does. */
-  maxBands: 14,
+  /** Frequency the (lon, lat) pair is scaled to before it reaches the noise
+   * — one knob shared by both axes; `latStretch` below is what makes the
+   * two axes disagree. */
+  flowScale: 2.2,
   /**
-   * How much extra boundary weight a band gets for sitting near the equator
-   * versus near a pole, before the roll below adds per-band jitter on top —
-   * the mechanism behind "not even stripes: a broad pale equatorial zone,
-   * narrower belts flanking it." 0 would give every band the same expected
-   * width; this is a bonus of up to `equatorialWidthBoost` at the exact
-   * equator, fading to none at the poles.
-   *
-   * This widens whichever band sits at the equator, zone or belt — it does
-   * not by itself decide which. `show`'s own `eqIdx` is what decides that
-   * one: a first version numbered bands south-pole-to-north and alternated
-   * family by that raw index, so roughly half the seeds this rolled put the
-   * *widened* band at the belt, not the zone — a broad, dark, high-contrast
-   * band sitting right across the equator, the opposite of "a broad pale
-   * equatorial zone." `eqIdx` re-anchors the alternation at whichever band
-   * actually contains latitude zero, forcing *that* band to be a zone always
-   * and letting belts and zones alternate outward from it in both
-   * directions — the width bonus above and the family guarantee below now
-   * agree about which band they are both talking about.
+   * The multiplier applied to the latitude axis only, on top of
+   * `flowScale` — the brief's own "stretch the sampling coordinates hard in
+   * latitude" and the one number doing more than anything else in this
+   * file. A noise field sampled at `vec3(cos(lon), lat * latStretch,
+   * sin(lon)) * flowScale` fits far more noise cycles across the latitude
+   * range than the longitude range for the same physical distance, which
+   * stretches every feature into something wide and flat — texture that
+   * happens to be banded, rather than a band that has texture painted on
+   * it. Below about 4 the result reads as blobby weather with no belts at
+   * all; the brief's own suggested value is 8.
    */
-  equatorialWidthBoost: 1.8,
-  /** Absolute latitude (0-1, fraction of a right angle) past which the band
-   * signal starts blending into the mottled polar cap. */
+  latStretch: 8.0,
+  /** Displacement strength in the domain warp (`flow`'s three nested `fbm3`
+   * calls) — the brief's own "displace the noise sample position by another
+   * noise field," the mechanism that turns smooth gradients into curls and
+   * festoons. Too high and the warp overwhelms the latitude stretch above
+   * and the bands dissolve back into blobs; this sits just under that
+   * point. */
+  warpStrength: 1.1,
+  /** Gain applied to the flow value before it is mapped to a colour stop.
+   * Summing four octaves of warped noise clusters its output near the
+   * middle of its own range far more often than at either extreme — a
+   * central-limit effect, the same reason adding dice gets you more 7s than
+   * 2s or 12s — so an untouched `flow` value spends most of its pixels near
+   * `t = 0.5`, sitting in the zone-belt transition rather than in either
+   * stop, and the disc reads as one muddy mid-tone with a bright rim
+   * instead of alternating pale zones and dark belts. This is what stretches
+   * the value back out so most pixels commit to a stop; without it, item
+   * 2's latitude stretch was setting up bands that this flattening then
+   * erased before they ever reached the colour ramp. */
+  flowContrast: 1.7,
+  /** Range the per-sector jet frequency (`uJetFreq`, how many alternating
+   * shear bands fit pole to pole) is rolled from — the belt count's
+   * replacement, now expressed as a rate rather than a count because there
+   * is no discrete band list left to size. */
+  jetFreqMin: 3,
+  jetFreqMax: 6,
+  /** Range the per-sector shear amplitude is rolled from, in the same
+   * lon-radians units `uShearAmp` displaces the flow sample by — the
+   * brief's item 3, "offset the longitude coordinate by a velocity that
+   * varies with latitude, alternating direction between adjacent bands."
+   * `sin(lat * jetFreq)` supplies the alternation; this supplies how hard
+   * adjacent jets disagree, which is what tears the boundary between them
+   * rather than merely bending it. */
+  shearAmpMin: 0.5,
+  shearAmpMax: 1.0,
+
+  // ── the storm (item 5: vorticity, not a sticker) ──────────────────────
+
+  /** Half-width of the storm's influence in longitude, radians — sized so
+   * `2 * stormHalfLon` is roughly a sixth of the full circumference
+   * (`stormHalfLon / π ≈ 0.16`), the brief's own "roughly a sixth of the
+   * disc," a Great-Red-Spot-sized feature rather than a small eddy. */
+  stormHalfLon: 0.5,
+  /** Half-height in latitude — smaller than the longitude half-width on
+   * purpose, an oval rather than a circle, because a circular storm reads as
+   * a second small moon and an oval reads as weather. */
+  stormHalfLat: 0.22,
+  /** How far latitude the storm's centre is rolled from the equator —
+   * kept well inside the polar-cap threshold below so it never has to
+   * compete with the pole blend for the same pixels. */
+  stormLatRange: 0.35,
+  /** Peak rotation, radians, the storm bends the sampling coordinate through
+   * at its own centre, fading to none past its own influence radius — see
+   * `BODY_FRAGMENT`'s own comment on why this rotates the *coordinate*
+   * rather than paints an ellipse: the surrounding flow spirals into the
+   * distortion the way real weather wraps around a vortex, instead of
+   * sitting on top of it. */
+  vortexStrength: 2.6,
+  /** The storm's own hue offset from `uHue`, saturation and lightness — a
+   * distinct warm rust-orange, the one place on the disc allowed to read as
+   * a single named feature rather than a texture. */
+  stormHueOffset: -22,
+  stormSaturation: 0.56,
+  stormLightness: 0.4,
+
+  // ── poles ──────────────────────────────────────────────────────────────
+
+  /** Absolute latitude (0-1, fraction of a right angle) past which the flow
+   * field's own colour blends into the mottled polar cap. Still needed with
+   * a continuous noise field for the reason `flowPoint`'s own comment gives:
+   * the cylindrical embedding that closes the longitude seam does not
+   * shrink toward the pole the way a true spherical one would, so without
+   * this blend the last few degrees would show noise sampled at an
+   * effectively wrong scale rather than the calmer, more chaotic texture
+   * the JunoCam polar reference actually shows. */
   poleThreshold: 0.74,
   /** How much further latitude the blend above takes to reach full strength. */
   poleBlendWidth: 0.16,
@@ -177,41 +287,10 @@ export const GIANT = {
    * the one hue constant in the file that is not an offset from `baseHue`. */
   poleHue: 205,
   /** The cap's own saturation and lightness once the blend above is complete
-   * — muted, and darker than either swatch family (`poleLightness` sits below
-   * every belt but the deepest one), so the poles read as "essentially
-   * bandless and dim" rather than as one more stripe. */
+   * — muted, and darker than every zone stop, so the poles read as
+   * "essentially bandless and dim" rather than as one more stripe. */
   poleSaturation: 0.14,
   poleLightness: 0.38,
-
-  /**
-   * Two low, integer harmonics of longitude that displace a band boundary's
-   * effective latitude — "a slight tilt" made organic rather than straight.
-   * Integer on purpose: a non-integer harmonic would not close over the
-   * longitude seam, leaving a visible mismatch at `lon = ±π` where the sphere
-   * wraps.
-   */
-  boundaryWaveFreq1: 3,
-  boundaryWaveFreq2: 7,
-  /**
-   * The two harmonics' amplitudes, as a *fraction of the narrowest band gap
-   * actually rolled this sector* rather than a fixed number — `show` scales
-   * these by the tightest boundary spacing its own boundary table produced,
-   * which is what turns "keep the perturbation small enough that a band
-   * never crosses into its neighbour" (the brief's own wording) into a
-   * guarantee: a fixed amplitude could exceed a narrow belt rolled thin by
-   * `equatorialWidthBoost`'s own trade-off, and cross it.
-   */
-  boundaryWaveFrac1: 0.35,
-  boundaryWaveFrac2: 0.15,
-
-  /** How much the turbulence field (three summed sine octaves, seeded per
-   * sector) perturbs a band's own hue and lightness. Deliberately small
-   * relative to the gap between the two swatch families above — turbulence
-   * modulates the swatch a pixel already belongs to; it never touches the
-   * band index itself, which is what keeps it inside its own band by
-   * construction rather than by tuning. */
-  turbulenceHueAmp: 5,
-  turbulenceLightAmp: 0.07,
 
   // ── lighting (§3.1, done per fragment instead of by `MeshStandardMaterial`) ─
 
@@ -222,13 +301,11 @@ export const GIANT = {
    * was tuned for a single job — keep a lit body's dark hemisphere from
    * vanishing into the background — and nothing else in the scene consumes
    * it yet, so there was no real "single source of truth" being served by
-   * sharing it, only the appearance of one. Once bands were rendering
-   * correctly (verified per-pixel: the boundary table and the zone/belt
-   * lookup were both right) they still read as a smooth gradient, not
-   * stripes, because `STAR.floor`'s 12:1 lit-to-dark ratio swings far
-   * wider across one hemisphere than the roughly 2:1 lightness ratio
-   * between a zone and a belt — the lighting term dominated the banding
-   * term by an order of magnitude. This floor is what narrows that gap:
+   * sharing it, only the appearance of one. `STAR.floor`'s 12:1 lit-to-dark
+   * ratio swings far wider across one hemisphere than the value contrast
+   * the flow field itself produces, and unconstrained would let the
+   * lighting term dominate the banding term by an order of magnitude. This
+   * floor is what narrows that gap:
    * high enough that the dim side of the terminator still keeps most of a
    * band's own contrast, at some real cost to how dark the true night side
    * can get. That trade — a flatter terminator for a legible band pattern —
@@ -246,6 +323,15 @@ export const GIANT = {
    * brightness closer to the centre of the disc and darkens only the last
    * sliver toward the edge. */
   limbDarkPower: 1.6,
+  /** Strength of a second, tinted falloff layered on top of `limbDark` —
+   * item 6's "thin scattering falloff toward the silhouette edge," a cool
+   * highlight rather than a dimming, the way a real atmosphere's Rayleigh
+   * scattering brightens and cools the limb instead of only darkening it.
+   * Kept well below 1 — this rims the edge, it does not recolour it. */
+  scatterStrength: 0.14,
+  /** Exponent shaping the scattering falloff — steep, so it stays a thin rim
+   * rather than washing the tinted colour across the whole lit hemisphere. */
+  scatterPower: 3.0,
 
   // ── the limb halo (§3.2, "bloom is the atmosphere") ───────────────────────
 
@@ -292,11 +378,14 @@ void main() {
 `;
 
 /**
- * `body`'s vertex stage. Three varyings do three different jobs, and keeping
- * them separate is the point: `vObjectNormal` is passed through *before* any
- * transform, so the fragment stage's band lookup is a function of the mesh
- * alone and rides `body.rotation.y` around for free, exactly the way the old
- * baked vertex colours did. `vViewNormal` is the same normal *after* the
+ * `body`'s vertex stage, unchanged in shape from the swatch build though the
+ * fragment stage it feeds is not: `vObjectNormal` still passes through
+ * *before* any transform, so the flow field's longitude/latitude are still a
+ * function of the mesh alone. What changed is what rides that ride —
+ * `body.rotation.y` never moves any more (see `update`'s own comment); the
+ * shader instead advances a `uRotation` uniform added to `lon` at the very
+ * start of the fragment stage, item 7's "advance the sample coordinate"
+ * rather than the mesh. `vViewNormal` is the same normal *after* the
  * standard `normalMatrix` transform (view space, per three.js convention),
  * used only for lighting. `vLightDirView` carries the sector light's fixed
  * world direction into that same view space via the built-in `viewMatrix`,
@@ -323,41 +412,52 @@ void main() {
 `;
 
 /**
- * Builds `body`'s fragment shader, with the two swatch families and the
- * boundary-table size baked in as `#define`s and array literals rather than
- * left as uniforms — they are fixed at compile time once per sector-change
- * (a full `ShaderMaterial` rebuild already happens in `show`, the same cost
- * a uniform update would have been), and a `#define`d array bound satisfies
- * even the strictest GLSL ES loop-bound rule, which a uniform-sized loop
- * would not. `GIANT.zoneSwatches`/`beltSwatches` stay the single source of
- * truth — this only stringifies them, so the tuning list never has to touch
- * two places that happen to agree.
+ * `body`'s fragment shader. A plain template string now, not a builder
+ * function — the swatch build's `buildBodyFragment` existed to stringify
+ * `GIANT.zoneSwatches`/`beltSwatches` into compile-time array literals so a
+ * strict GLSL ES loop bound would accept them; nothing here loops over a
+ * per-sector-sized list any more; every `GIANT` number reaches the shader as
+ * an ordinary uniform, set once per `show()` the same way the light and pole
+ * constants always were.
  */
-function buildBodyFragment(): string {
-  const swatchLiteral = (s: { hueOffset: number; saturation: number; lightness: number }): string =>
-    `vec3(${s.hueOffset.toFixed(2)}, ${s.saturation.toFixed(4)}, ${s.lightness.toFixed(4)})`;
-  const zoneList = GIANT.zoneSwatches.map(swatchLiteral).join(",\n    ");
-  const beltList = GIANT.beltSwatches.map(swatchLiteral).join(",\n    ");
-
-  return `
-#define MAX_BANDS ${GIANT.maxBands}
-#define ZONE_COUNT ${GIANT.zoneSwatches.length}
-#define BELT_COUNT ${GIANT.beltSwatches.length}
-
+const BODY_FRAGMENT = `
 uniform float uHue;
-uniform int uBandCount;
-uniform float uBoundaries[MAX_BANDS + 1];
-uniform int uEquatorIdx;
-uniform float uSwatchSalt;
-uniform float uWaveSeed1;
-uniform float uWaveSeed2;
-uniform float uWaveFreq1;
-uniform float uWaveFreq2;
-uniform float uWaveAmp1;
-uniform float uWaveAmp2;
-uniform vec4 uOctaves[3];
-uniform float uTurbHueAmp;
-uniform float uTurbLightAmp;
+uniform float uRotation;
+uniform float uFlowScale;
+uniform float uLatStretch;
+uniform float uWarpStrength;
+uniform float uFlowContrast;
+uniform float uJetFreq;
+uniform float uJetPhase;
+uniform float uShearAmp;
+uniform float uEdgeEpsilon;
+uniform float uEdgeGain;
+uniform float uEdgeLow;
+uniform float uEdgeHigh;
+uniform float uEdgeMix;
+uniform float uZoneHue;
+uniform float uZoneSaturation;
+uniform float uZoneLightness;
+uniform float uMidHue;
+uniform float uMidSaturation;
+uniform float uMidLightness;
+uniform float uBeltHue;
+uniform float uBeltSaturation;
+uniform float uBeltLightness;
+uniform float uDeepHue;
+uniform float uDeepSaturation;
+uniform float uDeepLightness;
+uniform float uStreamerHue;
+uniform float uStreamerSaturation;
+uniform float uStreamerLightness;
+uniform float uStormLon;
+uniform float uStormLat;
+uniform float uStormHalfLon;
+uniform float uStormHalfLat;
+uniform float uVortexStrength;
+uniform float uStormHue;
+uniform float uStormSaturation;
+uniform float uStormLightness;
 uniform float uPoleThreshold;
 uniform float uPoleBlendWidth;
 uniform float uPoleHue;
@@ -367,33 +467,13 @@ uniform vec3 uLightColor;
 uniform float uAmbientFloor;
 uniform float uLimbDarkFloor;
 uniform float uLimbDarkPower;
+uniform float uScatterStrength;
+uniform float uScatterPower;
 
 varying vec3 vObjectNormal;
 varying vec3 vViewNormal;
 varying vec3 vViewDir;
 varying vec3 vLightDirView;
-
-const vec3 ZONE_SWATCH[ZONE_COUNT] = vec3[ZONE_COUNT](
-    ${zoneList}
-);
-const vec3 BELT_SWATCH[BELT_COUNT] = vec3[BELT_COUNT](
-    ${beltList}
-);
-
-/** A cheap, deterministic float from an integer band index and a per-sector
- * salt — a hash, not a draw off a sequential RNG, because a band's colour
- * has to be a pure function of *which band it is*, re-evaluated at every
- * pixel that band owns, not a value consumed once from a cursor. Same
- * formula the old vertex-colour build used, moved here unchanged. */
-float hash1(float i, float salt) {
-  float s = sin(i * 127.1 + salt * 311.7) * 43758.5453;
-  return fract(s);
-}
-
-float smoothstepc(float e0, float e1, float x) {
-  float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
-  return t * t * (3.0 - 2.0 * t);
-}
 
 float hueFrac(float hDeg) {
   return mod(mod(hDeg, 360.0) + 360.0, 360.0) / 360.0;
@@ -413,93 +493,188 @@ vec3 hsl2rgb(float h, float s, float l) {
   return rgb + m;
 }
 
+float smoothstepc(float e0, float e1, float x) {
+  float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}
+
+float wrapAngle(float a) {
+  return mod(a + 3.14159265, 6.28318531) - 3.14159265;
+}
+
+/** Hash on an integer lattice point, three-dimensional rather than two —
+ * flowPoint below embeds longitude on a unit circle (cos(lon),
+ * sin(lon)) before it ever reaches here, so the flow field is periodic
+ * across the lon = ±π seam by construction. The swatch build's own
+ * boundary harmonics had to stay integer-frequency for the same closure;
+ * embedding on a circle buys the same seamlessness without constraining
+ * every frequency in this shader to an integer. */
+float hash31(vec3 p) {
+  p = fract(p * vec3(127.1, 311.7, 74.7));
+  p += dot(p, p.yzx + 34.45);
+  return fract((p.x + p.y) * p.z);
+}
+
+float noise3(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  float n000 = hash31(i);
+  float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+  float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+  float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+  float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+  float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+  float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+  float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+  float nx00 = mix(n000, n100, u.x);
+  float nx10 = mix(n010, n110, u.x);
+  float nx01 = mix(n001, n101, u.x);
+  float nx11 = mix(n011, n111, u.x);
+  float nxy0 = mix(nx00, nx10, u.y);
+  float nxy1 = mix(nx01, nx11, u.y);
+  return mix(nxy0, nxy1, u.z);
+}
+
+/** Four octaves, each half the amplitude and twice the frequency of the
+ * last — item 1's own recipe, held to four rather than the usual five or
+ * six because flow below evaluates this three times per fragment (once
+ * per warp level) and a fifth octave buys detail this body's screen size
+ * never keeps past the bloom pass. */
+float fbm3(vec3 p) {
+  float sum = 0.0;
+  float amp = 0.5;
+  float freq = 1.0;
+  for (int i = 0; i < 4; i++) {
+    sum += amp * (noise3(p * freq) * 2.0 - 1.0);
+    freq *= 2.0;
+    amp *= 0.5;
+  }
+  return sum;
+}
+
+/** Domain warping — item 4, fbm(p + fbm(p + fbm(p))) literally: each
+ * nested call displaces the next along all three axes by the same scalar,
+ * which is what turns a smooth gradient into curls and festoons instead of
+ * a blob. Three nested fbm3 calls rather than the more usual
+ * vector-valued warp (a vec2/vec3 built from two or three extra fbm3
+ * evaluations per level) — this is the same picture at roughly a third of
+ * the cost, and at a sphere's worth of fragments the cost is what capped
+ * the octave count above, not visual quality. */
+float flow(vec3 p) {
+  float a = fbm3(p);
+  float b = fbm3(p + uWarpStrength * a + vec3(3.1, 1.7, 5.9));
+  float c = fbm3(p + uWarpStrength * b + vec3(7.2, 4.1, 2.3));
+  return c;
+}
+
+/** Maps a longitude/latitude pair to the 3D point flow actually samples.
+ * uLatStretch is item 2 of the brief and does more than anything else in
+ * this file: multiplying only the latitude axis fits far more noise cycles
+ * across the latitude range than the longitude range for the same physical
+ * distance, which stretches every feature into something wide and flat —
+ * texture that happens to be banded, rather than a band that has texture
+ * painted on it. The trade this embedding makes for closing the seam (see
+ * hash31's own comment) is that cos(lon)/sin(lon) do not shrink toward
+ * the pole the way a true spherical embedding would — a cylinder, not a
+ * sphere — so the last few degrees of latitude sample the field at an
+ * effectively wrong scale. main hides this behind the polar blend rather
+ * than correcting it, because a correction here would reintroduce the exact
+ * per-fragment trig cost item 2 exists to spend on stretch instead. */
+vec3 flowPoint(float lon, float lat) {
+  return vec3(cos(lon), lat * uLatStretch, sin(lon)) * uFlowScale;
+}
+
 void main() {
   vec3 n = normalize(vObjectNormal);
   float lat = asin(clamp(n.y, -1.0, 1.0));
-  float lon = atan(n.x, n.z);
+  float lon = atan(n.x, n.z) + uRotation;
   float latNorm = clamp(lat / 1.5707963, -0.9999, 0.9999);
   float absLat = abs(latNorm);
-  float cosLat = cos(lat);
 
-  // Vanishes at the pole via cosLat — the same seam-avoidance the old
-  // vertex-colour build needed, needed again here because the pole is one
-  // point every value of lon maps to, and an un-faded term would disagree
-  // with itself there.
-  float wobble = cosLat * (
-    uWaveAmp1 * sin(uWaveFreq1 * lon + uWaveSeed1) +
-    uWaveAmp2 * sin(uWaveFreq2 * lon + uWaveSeed2)
-  );
-  float effLat = latNorm - wobble;
+  // Shear — item 3: alternating jet direction per latitude band, offset
+  // straight into the longitude the flow field samples at. Two adjacent
+  // bands now read the field from different, sliding offsets and disagree
+  // exactly where they meet, which is what tears a boundary instead of
+  // merely bending it.
+  float jet = sin(lat * uJetFreq + uJetPhase);
+  float shearedLon = lon + jet * uShearAmp;
 
-  // Counts how many boundaries effLat has passed — a compile-time-bounded
-  // loop (MAX_BANDS is a #define, not a uniform), satisfying even the
-  // strict GLSL ES loop rule, with the actual band count enforced by the
-  // dynamic break rather than the loop's own static bound.
-  int idx = 0;
-  for (int i = 1; i <= MAX_BANDS; i++) {
-    if (i > uBandCount) break;
-    if (effLat >= uBoundaries[i]) idx = i; else break;
-  }
-  idx = min(idx, uBandCount - 1);
+  // The storm — item 5: bend the *sampling coordinate* rotationally around
+  // its own centre before the flow field ever sees it, rather than draw an
+  // oval and stop. The surrounding bands' own texture spirals into the
+  // distortion the way real weather wraps around a vortex, instead of a
+  // patch of different-coloured noise sitting on top like a sticker.
+  float dLon = wrapAngle(lon - uStormLon);
+  float dLat = lat - uStormLat;
+  vec2 rel = vec2(dLon / uStormHalfLon, dLat / uStormHalfLat);
+  float stormR = length(rel);
+  float vortexT = smoothstepc(1.3, 0.0, stormR);
+  float ang = vortexT * uVortexStrength;
+  float ca = cos(ang);
+  float sa = sin(ang);
+  vec2 relRot = vec2(rel.x * ca - rel.y * sa, rel.x * sa + rel.y * ca);
+  float lonEff = mix(shearedLon, uStormLon + relRot.x * uStormHalfLon, vortexT);
+  float latEff = mix(lat, uStormLat + relRot.y * uStormHalfLat, vortexT);
 
-  // Strict parity, not a hash, decides zone-family versus belt-family —
-  // see GIANT.zoneSwatches's own comment on why a hash-picked family per
-  // band was rejected: neighbouring bands differ in index by exactly one,
-  // so parity guarantees they never share a family, which is the one
-  // contrast this whole rebuild exists to put back. Parity is measured from
-  // uEquatorIdx, not from band 0 — GIANT.equatorialWidthBoost's own comment
-  // is the record of why: numbering straight from the south pole let the
-  // *belt* land on the widened equatorial band as often as the zone did,
-  // which produced a wide, dark, high-contrast band sitting across the
-  // equator on roughly half of all seeds — everything this shader does
-  // right, aimed at the one band the brief needed to be pale. abs() first
-  // because only the parity of the offset matters, and GLSL int division
-  // truncates toward zero rather than flooring negative operands, which
-  // would otherwise misclassify every band south of the equator.
-  int rel = idx - uEquatorIdx;
-  int arel = rel >= 0 ? rel : -rel;
-  bool isZone = (arel - (arel / 2) * 2) == 0;
-  float swatchR = hash1(float(idx), uSwatchSalt);
-  vec3 swatch;
-  if (isZone) {
-    int si = clamp(int(floor(swatchR * float(ZONE_COUNT))), 0, ZONE_COUNT - 1);
-    swatch = ZONE_SWATCH[si];
-  } else {
-    int si = clamp(int(floor(swatchR * float(BELT_COUNT))), 0, BELT_COUNT - 1);
-    swatch = BELT_SWATCH[si];
-  }
+  vec3 p = flowPoint(lonEff, latEff);
+  float f = flow(p);
 
-  // Each octave's longitude term is faded toward zero as cosLat shrinks,
-  // the same pole-seam guard wobble uses above.
-  float lonFade = min(1.0, cosLat * 6.0);
-  float turb = 0.0;
-  for (int i = 0; i < 3; i++) {
-    turb += uOctaves[i].w * sin(uOctaves[i].x * lon * lonFade + uOctaves[i].y * lat + uOctaves[i].z);
-  }
+  // A second sample, offset along the latitude axis only, turned into a
+  // gradient magnitude. The belt/zone boundary is not a *value* on this
+  // field, it is a place where the field changes fast — exactly what the
+  // Galileo close-up shows: streaked grey-blue turbulence living only at
+  // the transition, nowhere else. Measured on fbm3(p) — the single
+  // unwarped octave stack, the same one main's own colour ramp is not
+  // reading here — rather than on flow(p): domain warping is chaotic by
+  // construction (that is what makes it curl at all), so a finite
+  // difference across the *warped* field is highly sensitive almost
+  // everywhere and first-draft tuning painted the streamer over nearly the
+  // whole disc, not just its tears. The unwarped stack still carries the
+  // shear and vortex already folded into p, so it still marks the belts'
+  // own transitions; it just does not also register the warp's own
+  // internal turbulence as a false boundary.
+  float fEdge = fbm3(p);
+  float fEdgeShift = fbm3(p + vec3(0.0, uEdgeEpsilon, 0.0));
+  // A smoothstep threshold, not a plain clamp, on top of that: below
+  // uEdgeLow contributes nothing at all; only a gradient that clears
+  // uEdgeHigh reaches full strength, so a merely ordinary slope inside a
+  // band still cannot paint the streamer color.
+  float edge = smoothstepc(uEdgeLow, uEdgeHigh, abs(fEdge - fEdgeShift) * uEdgeGain);
 
-  float h = uHue + swatch.x + turb * uTurbHueAmp;
-  float s = swatch.y;
-  float l = swatch.z + turb * uTurbLightAmp;
+  float t = clamp(f * uFlowContrast * 0.5 + 0.5, 0.0, 1.0);
+  vec3 stopZone = hsl2rgb(hueFrac(uHue + uZoneHue), uZoneSaturation, uZoneLightness);
+  vec3 stopMid = hsl2rgb(hueFrac(uHue + uMidHue), uMidSaturation, uMidLightness);
+  vec3 stopBelt = hsl2rgb(hueFrac(uHue + uBeltHue), uBeltSaturation, uBeltLightness);
+  vec3 stopDeep = hsl2rgb(hueFrac(uHue + uDeepHue), uDeepSaturation, uDeepLightness);
+  vec3 albedo;
+  if (t < 0.4) albedo = mix(stopZone, stopMid, smoothstepc(0.0, 0.4, t));
+  else if (t < 0.7) albedo = mix(stopMid, stopBelt, smoothstepc(0.4, 0.7, t));
+  else albedo = mix(stopBelt, stopDeep, smoothstepc(0.7, 1.0, t));
 
-  // Poles blend to a fixed grey-blue and drop the band signal entirely —
-  // "the poles are darker, grey-blue, and bandless" — reusing turb as
-  // mottling rather than banding once inside the blend, which is why it
-  // fades out approaching the exact pole (lonFade above) instead of
-  // producing a sharp, organised pattern there.
+  vec3 streamer = hsl2rgb(hueFrac(uStreamerHue), uStreamerSaturation, uStreamerLightness);
+  albedo = mix(albedo, streamer, edge * uEdgeMix);
+
+  vec3 stormColor = hsl2rgb(hueFrac(uHue + uStormHue), uStormSaturation, uStormLightness);
+  albedo = mix(albedo, stormColor, vortexT * 0.85);
+
+  // Poles blend to a fixed grey-blue and drop the flow signal's own hue and
+  // saturation entirely — "essentially bandless and dim" — for the reason
+  // flowPoint's own comment gives: the embedding that closes the
+  // longitude seam degrades approaching the pole rather than fading out,
+  // and this blend is what keeps that degradation from ever being seen.
   float poleT = smoothstepc(uPoleThreshold, uPoleThreshold + uPoleBlendWidth, absLat);
   if (poleT > 0.0) {
-    h = mix(h, uPoleHue, poleT);
-    s = mix(s, uPoleSaturation, poleT);
-    l = mix(l, uPoleLightness + turb * uTurbLightAmp * 1.5, poleT);
+    vec3 poleColor = hsl2rgb(hueFrac(uPoleHue), uPoleSaturation, uPoleLightness + f * 0.05);
+    albedo = mix(albedo, poleColor, poleT);
   }
-
-  vec3 albedo = hsl2rgb(hueFrac(h), clamp(s, 0.0, 1.0), clamp(l, 0.0, 1.0));
 
   // Lighting: a hand-rolled Lambertian with a lifted floor — uAmbientFloor,
   // GIANT.ambientFloor's own constant, not render/light.ts's shadeAt-only
   // STAR.floor (see that constant's comment for why the two floors are not
   // the same trade) — instead of MeshStandardMaterial's PBR response, which
-  // is what was muting the swatch colours in the first place.
+  // is what was muting the flow field's own colours in the swatch build's
+  // first pass.
   vec3 wn = normalize(vViewNormal);
   vec3 ld = normalize(vLightDirView);
   float ndotl = max(dot(wn, ld), 0.0);
@@ -513,12 +688,17 @@ void main() {
   float limbDark = mix(uLimbDarkFloor, 1.0, pow(facing, uLimbDarkPower));
 
   vec3 color = albedo * uLightColor * lit * limbDark;
+
+  // A thin scattering falloff toward the true silhouette, on top of (not
+  // instead of) the terminator above — item 6's second half. Tinted rather
+  // than merely dimmed, the way a real atmosphere's Rayleigh scattering
+  // brightens and cools the limb instead of only darkening it.
+  float scatter = pow(1.0 - facing, uScatterPower) * uScatterStrength;
+  color = mix(color, vec3(0.68, 0.78, 0.88) * uLightColor, scatter);
+
   gl_FragColor = vec4(color, 1.0);
 }
 `;
-}
-
-const BODY_FRAGMENT = buildBodyFragment();
 
 /**
  * One hero gas giant. There is exactly one in the scene, added once in
@@ -557,60 +737,20 @@ export class GasGiant {
     const rng = makeRng((seed * 3628273133 + sector * 2308142839 + 97354729) >>> 0);
 
     const hue = GIANT.baseHueMin + rng.next() * (GIANT.baseHueMax - GIANT.baseHueMin);
-    const bandCount =
-      GIANT.bandCountMin + Math.floor(rng.next() * (GIANT.bandCountMax - GIANT.bandCountMin + 1));
-    const swatchSalt = rng.next() * 9973;
-    const waveSeed1 = rng.next() * Math.PI * 2;
-    const waveSeed2 = rng.next() * Math.PI * 2;
-    const octaves = [0.5, 0.3, 0.2].map((amp) => ({
-      lonFreq: 2 + Math.floor(rng.next() * 5),
-      latFreq: 0.6 + rng.next() * 1.6,
-      phase: rng.next() * Math.PI * 2,
-      amp,
-    }));
-
-    // Variable-width boundaries — the Cassini reference this task's brief was
-    // checked against is not an evenly-spaced flag: one broad pale zone
-    // straddles the equator and the belts flanking it are narrower. A fixed
-    // `phase = lat * bandCount` (the vertex-colour build's own approach)
-    // could only ever produce a barcode; this bakes the width unevenness
-    // into the boundary table itself, via `GIANT.equatorialWidthBoost`.
-    const weights: number[] = [];
-    for (let i = 0; i < bandCount; i++) {
-      const centerFrac = (i + 0.5) / bandCount;
-      const distFromEquator = Math.abs(centerFrac - 0.5) * 2;
-      const equatorialBoost = 1 + GIANT.equatorialWidthBoost * (1 - distFromEquator) ** 2;
-      weights.push((0.55 + rng.next() * 0.7) * equatorialBoost);
-    }
-    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
-    const boundaries = new Float32Array(GIANT.maxBands + 1).fill(2); // sentinel: past the north pole
-    boundaries[0] = -1;
-    let acc = -1;
-    let minGap = Infinity;
-    for (let i = 0; i < bandCount; i++) {
-      const width = (weights[i] / totalWeight) * 2;
-      acc += width;
-      boundaries[i + 1] = i === bandCount - 1 ? 1 : acc;
-      minGap = Math.min(minGap, width);
-    }
-
-    // The band that actually contains the equator — see
-    // `GIANT.equatorialWidthBoost`'s own comment for why the shader measures
-    // zone/belt parity from this index rather than from band 0. `boundaries`
-    // is monotonic, so the last boundary at or below 0 marks it; `bandCount`
-    // itself is the fallback for the (essentially unreachable, latNorm ∈
-    // [-1,1) by construction) case where none is.
-    let eqIdx = bandCount - 1;
-    for (let i = 0; i < bandCount; i++) {
-      if (boundaries[i] <= 0) eqIdx = i;
-      else break;
-    }
-
-    // Wobble amplitude scales to the narrowest gap this sector actually
-    // rolled — see `GIANT.boundaryWaveFrac1`'s own comment for why a fixed
-    // amplitude was rejected.
-    const wobbleAmp1 = GIANT.boundaryWaveFrac1 * minGap;
-    const wobbleAmp2 = GIANT.boundaryWaveFrac2 * minGap;
+    // Item 7: the starting spin used to be `body.rotation.y`, seeded so the
+    // same sector does not always present the same face; now it seeds
+    // `uRotation` instead, since the mesh itself never rotates any more —
+    // see `update`'s own comment for why advancing the sample coordinate
+    // replaced advancing the mesh.
+    const rotation0 = rng.next() * Math.PI * 2;
+    const jetFreq = GIANT.jetFreqMin + rng.next() * (GIANT.jetFreqMax - GIANT.jetFreqMin);
+    const jetPhase = rng.next() * Math.PI * 2;
+    const shearAmp = GIANT.shearAmpMin + rng.next() * (GIANT.shearAmpMax - GIANT.shearAmpMin);
+    // The storm's own centre — full longitude range, latitude kept inside
+    // `stormLatRange` so it never has to fight the polar blend for the same
+    // pixels (see `GIANT.stormLatRange`'s own comment).
+    const stormLon = (rng.next() * 2 - 1) * Math.PI;
+    const stormLat = (rng.next() * 2 - 1) * GIANT.stormLatRange;
 
     const geometry = new SphereGeometry(GIANT.radius, GIANT.widthSegments, GIANT.heightSegments);
 
@@ -627,19 +767,42 @@ export class GasGiant {
       new ShaderMaterial({
         uniforms: {
           uHue: { value: hue },
-          uBandCount: { value: bandCount },
-          uBoundaries: { value: boundaries },
-          uEquatorIdx: { value: eqIdx },
-          uSwatchSalt: { value: swatchSalt },
-          uWaveSeed1: { value: waveSeed1 },
-          uWaveSeed2: { value: waveSeed2 },
-          uWaveFreq1: { value: GIANT.boundaryWaveFreq1 },
-          uWaveFreq2: { value: GIANT.boundaryWaveFreq2 },
-          uWaveAmp1: { value: wobbleAmp1 },
-          uWaveAmp2: { value: wobbleAmp2 },
-          uOctaves: { value: octaves.map((o) => new Vector4(o.lonFreq, o.latFreq, o.phase, o.amp)) },
-          uTurbHueAmp: { value: GIANT.turbulenceHueAmp },
-          uTurbLightAmp: { value: GIANT.turbulenceLightAmp },
+          uRotation: { value: rotation0 },
+          uFlowScale: { value: GIANT.flowScale },
+          uLatStretch: { value: GIANT.latStretch },
+          uWarpStrength: { value: GIANT.warpStrength },
+          uFlowContrast: { value: GIANT.flowContrast },
+          uJetFreq: { value: jetFreq },
+          uJetPhase: { value: jetPhase },
+          uShearAmp: { value: shearAmp },
+          uEdgeEpsilon: { value: GIANT.edgeEpsilon },
+          uEdgeGain: { value: GIANT.edgeGain },
+          uEdgeLow: { value: GIANT.edgeLow },
+          uEdgeHigh: { value: GIANT.edgeHigh },
+          uEdgeMix: { value: GIANT.edgeMix },
+          uZoneHue: { value: GIANT.zoneHueOffset },
+          uZoneSaturation: { value: GIANT.zoneSaturation },
+          uZoneLightness: { value: GIANT.zoneLightness },
+          uMidHue: { value: GIANT.midHueOffset },
+          uMidSaturation: { value: GIANT.midSaturation },
+          uMidLightness: { value: GIANT.midLightness },
+          uBeltHue: { value: GIANT.beltHueOffset },
+          uBeltSaturation: { value: GIANT.beltSaturation },
+          uBeltLightness: { value: GIANT.beltLightness },
+          uDeepHue: { value: GIANT.deepHueOffset },
+          uDeepSaturation: { value: GIANT.deepSaturation },
+          uDeepLightness: { value: GIANT.deepLightness },
+          uStreamerHue: { value: GIANT.streamerHue },
+          uStreamerSaturation: { value: GIANT.streamerSaturation },
+          uStreamerLightness: { value: GIANT.streamerLightness },
+          uStormLon: { value: stormLon },
+          uStormLat: { value: stormLat },
+          uStormHalfLon: { value: GIANT.stormHalfLon },
+          uStormHalfLat: { value: GIANT.stormHalfLat },
+          uVortexStrength: { value: GIANT.vortexStrength },
+          uStormHue: { value: GIANT.stormHueOffset },
+          uStormSaturation: { value: GIANT.stormSaturation },
+          uStormLightness: { value: GIANT.stormLightness },
           uPoleThreshold: { value: GIANT.poleThreshold },
           uPoleBlendWidth: { value: GIANT.poleBlendWidth },
           uPoleHue: { value: GIANT.poleHue },
@@ -650,6 +813,8 @@ export class GasGiant {
           uAmbientFloor: { value: GIANT.ambientFloor },
           uLimbDarkFloor: { value: GIANT.limbDarkFloor },
           uLimbDarkPower: { value: GIANT.limbDarkPower },
+          uScatterStrength: { value: GIANT.scatterStrength },
+          uScatterPower: { value: GIANT.scatterPower },
         },
         vertexShader: BODY_VERTEX,
         fragmentShader: BODY_FRAGMENT,
@@ -670,7 +835,7 @@ export class GasGiant {
 
     const haloColor = new Color().setHSL(
       hue / 360,
-      Math.min(0.5, GIANT.beltSwatches[0].saturation + 0.1),
+      Math.min(0.5, GIANT.beltSaturation + 0.1),
       0.74,
       SRGBColorSpace,
     );
@@ -717,9 +882,6 @@ export class GasGiant {
     // presses a key to check it would be testing nothing.
     this.anchor.set(0, GIANT.height, GIANT.range);
     this.object.position.copy(this.anchor);
-    // A seeded starting spin so the same sector does not always present the
-    // same face.
-    this.body.rotation.y = rng.next() * Math.PI * 2;
   }
 
   /** Hold station if the player has come too close — unchanged leash logic
@@ -737,13 +899,20 @@ export class GasGiant {
     }
   }
 
-  /** Axial rotation, §3.6 — the whole mechanism the brief specifies:
-   * `mesh.rotation.y += rate * dt`. Nothing else moves, because the banding
-   * is a per-fragment lookup off the mesh's own (rotating) normal rather
-   * than anything rebuilt frame to frame. */
+  /** Axial rotation, §3.6 — item 7's own choice of mechanism. The mesh
+   * itself never turns any more; `uRotation` advances instead and is added
+   * to `lon` at the top of the fragment shader, which is "cheaper and
+   * better than rotating the mesh": cheaper because nothing downstream of
+   * the vertex stage (the limb's own fresnel term, `body`'s normal matrix)
+   * has to recompute anything a static mesh wasn't already giving it for
+   * free, and better because it is the literal thing being asked for — the
+   * *clouds* rotate, not the geometry underneath them, which is the more
+   * accurate picture for a gas giant whose visible "surface" is weather,
+   * not a solid crust moving with it. */
   update(dt: number): void {
     if (!this.body) return;
-    this.body.rotation.y += GIANT.rotationRate * dt;
+    const material = this.body.material as ShaderMaterial;
+    material.uniforms.uRotation.value += GIANT.rotationRate * dt;
   }
 
   /** Torn down on a sector change, the same moment `Planet.clear` and
