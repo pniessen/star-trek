@@ -68,6 +68,55 @@ adds lands on the cheap axis.
 
 ---
 
+## 1.5 The correction — strokes were form ahead of function
+
+*Added 2026-08-12, after stage 1 was built, judged and largely thrown away. It is
+kept in place rather than folded silently into the sections below, because the
+mistake is more useful than the fix.*
+
+Stage 1 built the hero body out of strokes: a `VectorObject` shell plus hundreds
+of lit `TraceBuffer` arcs. It went three rounds — a transparent balloon, then a
+ball of thread, then a ball of straw — and each round fixed a real bug while
+never reaching a planet.
+
+**The premise was wrong.** `CLAUDE.md`'s "occluded geometry, not pure wireframe"
+is justified in its own sentence: *"pure wireframe is unreadable the moment two
+ships overlap."* That is a claim about **ships in combat**. A planet does not
+overlap another planet. The decision was treated as a house art style and applied
+to a domain it was never argued for — the same error as applying the sky's
+decoration colour rule to the comet, which this project had already made, caught
+and written down once.
+
+Ask what strokes are *for* and the environment has no answer. A body must read as
+solid, read as distant, never be confusable with a contact, and look rich. None
+of that requires line art, and a real material does all of it better:
+
+| | Stroke approach | Filled approach |
+|---|---|---|
+| Far-side bleed-through | per-point camera cull — a bug fixed twice | solid mesh, depth buffer. Gone. |
+| Moving terminator | the entire §5.1 split exists for this | a `DirectionalLight`. Gone. |
+| Banding | hundreds of arcs that read as straw | vertex colours by latitude — literally bands |
+| Rotation | longitude offset, field rebuilt per frame | `mesh.rotation.y += rate * dt` |
+
+**What actually makes this game cohere is the post chain, not the medium.** Bloom,
+phosphor and CRT run over every pixel; a filled lit sphere passes through the same
+glass the hulls do. The stroke medium was mistaken for the aesthetic.
+
+**So §5.1 is void.** It exists because `VectorObject` bakes vertex colours and
+cannot express a moving lit side — a constraint that only binds if the body is
+made of strokes. It stays in this document as the record of a workaround built for
+a self-imposed problem.
+
+**What survives:** `light.ts` (Task 2) is unchanged in purpose — it now positions a
+real light rather than feeding a per-stroke multiply. The scenery `TraceBuffer`
+(Task 1) is not wasted either: gas shoals and near-field dust are genuinely
+stroke-shaped and still want it. Strokes keep the jobs they are good at —
+transients, filament fields, and anything ephemeral — and lose the one they were
+never suited to.
+
+**`CLAUDE.md` needs the same amendment the colour rule is getting:** occluded
+geometry governs **hulls**, not celestial bodies.
+
 ## 2. The organising principle
 
 > **Things with a surface are real geometry in world space. Things that are light
