@@ -125,23 +125,44 @@ check("...and one facing away is dim but not black", lit.away > 0 && lit.away < 
 check("the sector's star is seeded", lit.same, "same seed and sector differ");
 check("...and differs between sectors", lit.other, "two sectors share a star position");
 
-// ── the hero gas giant draws dense, lit, rotating strokes ───────────────────
-// `window.__giant` is the live instance the frame loop already drives — see
-// `render/GasGiant.ts` — so, unlike the pure functions above, this is not
-// rebuilt by hand; it is asserted exactly as the brief specifies, against
-// whatever `show`/`follow` have already put on screen by the time this runs.
+// ── the hero gas giant is a real lit mesh, not strokes ──────────────────────
+// Rewritten for `docs/environment.md` §1.5 — the stroke build's own four
+// assertions (segment count, `longitude`, a shell "that can occlude") tested
+// a medium this file no longer uses. `window.__giant` is the live instance
+// the frame loop already drives, so this checks the actual replacement:
+// a real mesh with baked vertex-colour banding, an additive fresnel limb
+// shell depth-tested against it, and rigid rotation via `body.rotation.y`.
 const giant = await page.evaluate(() => {
   const g = window.__giant;
-  let n = 0;
-  g.draw({ push: () => n++ });
-  const before = g.longitude;
+  const colorAttr = g.body?.geometry?.getAttribute("color");
+  const before = g.body ? g.body.rotation.y : 0;
   g.update(1.0);
-  return { segments: n, rotated: g.longitude !== before, hasShell: !!g.object.children.length };
+  const after = g.body ? g.body.rotation.y : 0;
+  return {
+    hasBody: !!g.body,
+    vertexCount: colorAttr ? colorAttr.count : 0,
+    rotated: g.body != null && after !== before,
+    hasLimb: !!g.limb,
+    // THREE.AdditiveBlending === 2 (NoBlending 0, NormalBlending 1,
+    // AdditiveBlending 2) — a stable constant, not worth importing `three`
+    // into a bare-node harness for.
+    limbAdditive: g.limb?.material?.blending === 2,
+    limbDepthTested: g.limb?.material?.depthTest === true,
+  };
 });
-check("the giant draws a dense field of strokes", giant.segments > 400, `${giant.segments} segments`);
-check("...within the scenery buffer's budget", giant.segments < 20000, `${giant.segments} of 20000`);
-check("...and rotates on its axis", giant.rotated, "longitude did not advance");
-check("...over a shell that can occlude", giant.hasShell, "no shell in the group");
+check("the giant is a real mesh, not a field of strokes", giant.hasBody, `hasBody=${giant.hasBody}`);
+check("...tessellated enough for a smooth terminator", giant.vertexCount > 2000, `${giant.vertexCount} vertices`);
+check("...and rotates rigidly on its axis", giant.rotated, `rotated=${giant.rotated}`);
+check(
+  "...under an additive limb shell",
+  giant.hasLimb && giant.limbAdditive,
+  `hasLimb=${giant.hasLimb} additive=${giant.limbAdditive}`,
+);
+check(
+  "...depth-tested against the body, not just laid over it",
+  giant.limbDepthTested,
+  `depthTest=${giant.limbDepthTested}`,
+);
 
 // ── the fixture is seeded ───────────────────────────────────────────────────
 // Also pure, and checked here for the same reason: `planFixture(seed, sector,

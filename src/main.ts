@@ -1,4 +1,4 @@
-import { MathUtils, Vector3 } from "three";
+import { AmbientLight, DirectionalLight, MathUtils, Vector3 } from "three";
 import { Stage } from "./render/Stage.js";
 import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
@@ -72,6 +72,14 @@ const trace = new TraceBuffer();
  * does not dim, it disappears.
  */
 const skyTrace = new TraceBuffer(20000, false);
+// Nothing pushes into this buffer any more — the giant was its only consumer
+// and `docs/environment.md` §1.5 retired its strokes in favour of a lit mesh
+// — but the buffer stays (gas shoals and dust want it later, per the spec's
+// own staging) and needs one `begin`/`end` pair so its draw range is 0
+// rather than the geometry's default (whole, zero-initialised, buffer),
+// which would otherwise render 20000 degenerate lines stacked at the origin.
+skyTrace.begin();
+skyTrace.end();
 const starfield = createStarfield();
 // The sky of whichever sector the run is in. Added once and then only ever
 // rebuilt in place; it draws between the starfield and the grid and is pinned
@@ -167,13 +175,12 @@ const comet = new Comet();
 stage.scene.add(comet.object);
 
 /**
- * The hero gas giant — `docs/environment.md` §3's stage-1 prototype, and the
- * whole reason Tasks 1 and 2 exist (`skyTrace`, `light.ts`). One instance,
- * fixed dead ahead of spawn rather than seeded like `Planet`'s bearing —
- * `render/GasGiant.ts`'s own header explains why a body built to be looked at
- * cannot risk rolling behind the player. `object` holds only the shell (for
- * depth and silhouette); every belt, the storm and the limb halo are strokes
- * pushed straight into `skyTrace`, in the frame loop below.
+ * The hero gas giant — `docs/environment.md` §3's stage-1 prototype, rebuilt
+ * per §1.5 as a lit mesh rather than strokes. One instance, fixed dead ahead
+ * of spawn rather than seeded like `Planet`'s bearing — `render/GasGiant.ts`'s
+ * own header explains why a body built to be looked at cannot risk rolling
+ * behind the player. `object` holds the whole thing now, body and limb shell
+ * together; nothing here pushes into `skyTrace` any more.
  */
 const giant = new GasGiant();
 stage.scene.add(giant.object);
@@ -203,6 +210,36 @@ const campaign = load(window.localStorage, Date.now());
 let sectorLightKey = "";
 let sectorLight: SectorLight = planLight(campaign.seed, campaign.current);
 sectorLightKey = `${campaign.seed}:${campaign.current}`;
+
+/**
+ * The sector's star, as a real light — `docs/environment.md` §1.5: the whole
+ * reason the stroke build carried a `shadeAt` per-stroke multiply was that
+ * `VectorObject` bakes vertex colours and cannot express a moving lit side.
+ * `GasGiant.body` is a real material now, so a real `DirectionalLight` does
+ * that job instead, and `planLight`'s seeded position/colour are what aims
+ * it. Owned here rather than by `GasGiant` because a light is a property of
+ * the *sector*, not of one body in it (§3.1) — a second lit body later reads
+ * this same light rather than carrying its own.
+ *
+ * `MeshBasicMaterial`-family and additive materials — every hull, the HUD,
+ * `Backdrop`'s painted bodies, `Planet`'s ring — ignore both lights below by
+ * construction (`three.js` never samples scene lights for an unlit
+ * material), so adding the sector's first-ever light source touches nothing
+ * that was not already asking to be lit.
+ */
+const sun = new DirectionalLight(0xffffff, 1.4);
+sun.position.copy(sectorLight.position);
+sun.color.copy(sectorLight.colour);
+/**
+ * A low, constant floor under the star, so a real material's night side does
+ * not go to literal zero — the same purpose `STAR.floor` served for
+ * `shadeAt`'s Lambertian term (`render/light.ts`'s own comment: "a hole where
+ * geometry should be"), now spent as a second light instead of a floor added
+ * inside a shading function no longer being called. Low enough that the
+ * terminator this whole task exists to produce still reads clearly.
+ */
+const sunFill = new AmbientLight(0xffffff, 0.12);
+stage.scene.add(sun, sunFill);
 
 /**
  * The one place the browser's storage is named. Everything below hands this to
@@ -402,7 +439,9 @@ function applyShapeMode(): void {
   playerHull.setMode(settings.shape);
   starbase.setMode(settings.shape);
   planet.setMode(settings.shape);
-  giant.setMode(settings.shape);
+  // The giant has no wireframe mode — `docs/environment.md` §1.5 rules that
+  // "occluded geometry, not pure wireframe" governs hulls, not celestial
+  // bodies, and a lit `MeshStandardMaterial` has nothing for `G` to toggle.
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
@@ -926,7 +965,6 @@ function frame(now: number): void {
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
   comet.setMode(settings.shape);
-  giant.setMode(settings.shape);
 
   playerHull.group.position.copy(player.position);
   // Pitch first about the ship's own right, then roll about its own nose —
@@ -956,23 +994,15 @@ function frame(now: number): void {
   if (currentLightKey !== sectorLightKey) {
     sectorLightKey = currentLightKey;
     sectorLight = planLight(campaign.seed, campaign.current);
+    sun.position.copy(sectorLight.position);
+    sun.color.copy(sectorLight.colour);
   }
   // `show`/`follow` read `player.position` alone, not the camera, so unlike
   // `sky.follow(stage.camera)` below they do not have to wait for
   // `placeCamera` to run first — see `render/GasGiant.ts`'s own header.
-  giant.show(campaign.seed, campaign.current, sectorLight);
+  giant.show(campaign.seed, campaign.current);
   giant.follow(player.position);
   giant.update(dt);
-
-  // Scenery's bracket, beside combat's. The giant is the first thing to draw
-  // into it — belts, storm and limb halo, regenerated in full every frame
-  // the same way the comet's tail is. `stage.camera.position` is passed for
-  // the belts'/storm's exact hemisphere cull (see `GasGiant.draw`'s own
-  // comment) — one frame stale, since `placeCamera` runs later in this same
-  // function, which is close enough that nothing about it is visible.
-  skyTrace.begin();
-  giant.draw(skyTrace, stage.camera.position);
-  skyTrace.end();
 
   trace.begin();
   session.ordnance.draw(trace);
@@ -1275,18 +1305,20 @@ if (DEBUG_PROBE) {
       model: session.comet,
     },
     /**
-     * The sector's star (`render/light.ts`) — pure maths. `GasGiant` is now
-     * its first consumer, but this exposure predates that and is kept the
-     * same way `__comet.plan`/`interferenceAt` are: a harness can prove
-     * `planLight` is seeded and `shadeAt` is a real Lambertian term without
-     * flying anywhere or waiting for a body to exist.
+     * The sector's star (`render/light.ts`) — pure maths. `sun`/`sunFill`
+     * above are its only consumer now that `GasGiant.body` is lit by the
+     * scene's real `DirectionalLight` rather than a per-stroke `shadeAt`
+     * call; this exposure predates that change and is kept the same way
+     * `__comet.plan`/`interferenceAt` are: a harness can prove `planLight` is
+     * seeded and `shadeAt` is a real Lambertian term without flying anywhere
+     * or waiting for a body to exist.
      */
     __light: { planLight, shadeAt },
     /**
      * The hero gas giant, exposed as the bare instance rather than wrapped in
      * a `{ model, constants }` object the way `__comet`/`__loom` are — the
-     * brief's own harness (`tools/playtest.mjs`) calls `draw`/`update` and
-     * reads `longitude`/`object` straight off it, so anything less direct
+     * brief's own harness (`tools/playtest.mjs`) reads `body`/`limb`/`object`
+     * straight off it, so anything less direct
      * would just be a second name for the same calls.
      */
     __giant: giant,

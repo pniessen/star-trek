@@ -1,157 +1,102 @@
-import { Color, Group, SphereGeometry, SRGBColorSpace, Vector3 } from "three";
+import {
+  AdditiveBlending,
+  BufferAttribute,
+  Color,
+  FrontSide,
+  Group,
+  Mesh,
+  MeshStandardMaterial,
+  ShaderMaterial,
+  SphereGeometry,
+  SRGBColorSpace,
+  Vector3,
+} from "three";
 import { makeRng } from "../chart/rng.js";
-import { shadeAt, type SectorLight } from "./light.js";
-import type { TraceBuffer } from "./TraceBuffer.js";
-import { VectorObject } from "./VectorObject.js";
 
 /**
- * The hero gas giant — `docs/environment.md` §3, stage 1 of the plan. Not one
- * of eight bodies; **one**, built as a throwaway-visible prototype, because
- * the question this file exists to answer — does density plus a real light
- * plus bloom read as *weather on a sphere lit by a star*, or as a wireframe
- * ball with stripes — is cheapest to answer once. See the spec's own §8,
- * "the medium may not carry it": this is the whole bet, at the price of one
- * body.
+ * The hero gas giant — `docs/environment.md` §1.5, the rebuild that replaced
+ * the stroke version. That version went three rounds (a transparent balloon,
+ * a ball of thread, a ball of straw) and never reached a planet, because it
+ * applied "occluded geometry, not pure wireframe" to a domain the decision was
+ * never argued for: `CLAUDE.md`'s own justification for that rule is a claim
+ * about *ships in combat*, and a planet does not overlap another planet.
+ * §1.5's own table is why this file looks the way it does — a solid mesh
+ * closes the far-side-bleed problem the camera cull existed for, and a real
+ * `DirectionalLight` closes the moving-terminator problem the whole
+ * stroke-shading split existed for. Neither workaround survives; both are
+ * gone from this file rather than left dormant.
  *
- * **The two-mechanism split, §5.1 of the spec, is why this file has both a
- * `VectorObject` and a `draw(trace)` method instead of just the first.**
- * `VectorObject` bakes vertex colours at construction — right for a hull,
- * whose brightness never changes, wrong for a body that rotates under a
- * fixed light, whose lit side *moves*. So:
+ * **Two meshes, not the two-mechanism split the stroke version needed.**
+ * `body` is a lit `SphereGeometry` whose vertex colours encode the banding —
+ * computed once, in `show`, from the sector seed, because unlike the old
+ * per-stroke shading, a real light does the moving part for free and the
+ * surface pattern itself never has to change frame to frame. `limb` is a
+ * second, slightly larger sphere in the same idiom `render/Planet.ts`'s ring
+ * uses for "tested but not written" depth reliance: additive, un-lit,
+ * fresnel-shaded, depth-tested against `body` so it only survives past the
+ * true silhouette. That is `docs/environment.md` §3.2's "bloom is the
+ * atmosphere" done as a shader instead of as a scatter of radial strokes —
+ * the third and last place this project drew a halo as spokes before
+ * catching that a halo is dense at the edge, not radiating from it
+ * (`game/comet.ts`'s `COMA_GLOW` comment is the first two).
  *
- * - **The shell** (`this.shell`, built in `show`) is a low-poly occluded
- *   sphere. Its only jobs are to write depth, so the body eats the starfield
- *   behind it (§3.4), and to give the silhouette. Uniform, dim, barely seen —
- *   the detail sits on top of it, never on it.
- * - **Everything with a shape** — the belts, the storm, the limb halo — is
- *   rebuilt from scratch into `skyTrace` every `draw` call, exactly the
- *   comet's plume technique (`game/comet.ts`, read before this file was
- *   written): connected chains rather than loose dashes, a fade at both ends,
- *   density over count. That is what makes rotation free (advance `longitude`
- *   and the next frame's strokes land in new places) and lighting a per-
- *   stroke multiply (`shadeAt`) rather than something baked once and stale
- *   forever after.
- *
- * **Fixed bearing, not seeded.** Every other body in this codebase
- * (`Planet.ts`, `game/comet.ts`) places itself at a seeded bearing so a
- * sector's furniture varies. This one does not: stage 1's entire job is to be
- * looked at (spec §6, step 1 — "the owner looks at it before anything is
- * planned around it"), and a prototype that might roll a bearing behind the
- * player at the moment someone presses a key to check it would be testing
- * nothing. `seed`/`sector` still drive the belts, the storm and the hue, so
- * the look still varies sector to sector — only the position is pinned, dead
- * ahead of the ship's spawn heading (`+Z`, bearing 0). A later stage that
- * wants a seeded bearing for "one hero per sector" is exactly the kind of
- * choice `docs/environment.md` §6 defers past this one.
- *
- * **Revised: the hemisphere cull now takes the camera, and the single-axis
- * version it replaced is why task 3's first look read as a transparent
- * balloon.** The original cull tested `dot(normal, viewDir) > 0` against one
- * shared axis for the whole sphere — cheap, and correct only in the limit of
- * a viewer infinitely far away. This body is deliberately never that: §3.5
- * puts the viewer as close as `minRange` (520) against a radius of 260, where
- * `R/d` is large enough that the true visible cap is a good deal smaller than
- * a hemisphere (its half-angle is `acos(R/d)`, not 90°) — the single-axis
- * test was measurably wrong, not just approximate, and instrumenting a live
- * frame at an oblique angle found it passing strokes up to 109° off the true
- * per-point camera direction. Depth test should have caught the rest — the
- * shell does write depth, `TraceBuffer`'s material does read it — but the
- * shell's own low tessellation (`shellSegments`/`shellRings`, kept low
- * because "the shell is barely seen") leaves it faceted precisely in the
- * grazing region the bad cull was dumping its false positives into, so nothing
- * backstopped the leak where it mattered most. The fix is `draw(trace,
- * cameraPos)`: an exact per-point test, `dot(normal, cameraPos - point) > 0`,
- * needs no small-angle assumption and no depth-test backstop. `follow` still
- * reads `player.position` alone for the leash and keeps a cached `viewDir`
- * (player-relative) as the fallback the halo's billboard basis and any caller
- * that omits `cameraPos` — the brief's own playtest harness among them — still
- * use; only the belts' and storm's hemisphere test needed the exact version.
+ * The sector's actual `DirectionalLight`/fill light are owned by `main.ts`,
+ * not this file — a light is a property of the *sector*, not of one body in
+ * it (`docs/environment.md` §3.1: "every body obeys it"), so a second body
+ * added later reads the same light this one does rather than each carrying
+ * its own. `render/light.ts`'s `planLight` is still what decides where that
+ * light sits and what colour it is; this file only consumes the geometry
+ * question, never the physics one.
  */
 export const GIANT = {
   // ── placement and scale (§3.5) ────────────────────────────────────────────
 
-  /**
-   * Distance from sector centre, dead ahead of spawn. Chosen, with `radius`,
-   * so the body reads as roughly a third of the horizontal field of view
-   * (`Stage.ts`'s 62° vertical FOV is ~88° horizontal at a 1280×800 aspect):
-   * `atan(radius / range) * 2` ≈ 25° here, against an 88° frame. Pulled back
-   * from the first pass's 900/260 (≈32°) per task 3's own review — it read as
-   * swallowing the HUD rather than framing the ship — without giving up
-   * "dominates the frame". Comfortably inside the 2000 far plane with the
-   * leash never engaging until the player genuinely closes distance.
-   */
+  /** Distance from sector centre, dead ahead of spawn. Unchanged from the
+   * stroke build's own tuning — `atan(radius/range)*2 ≈ 25°` against
+   * `Stage.ts`'s ~88° horizontal FOV, reviewed once already as "frames the
+   * ship" rather than "swallows the HUD". A rebuilt medium does not reopen a
+   * framing number the medium had nothing to do with. */
   range: 950,
-  /**
-   * How close the player may get before the body holds station — the same
-   * dishonesty `Planet.ts` accepts and names: real parallax right up until
-   * this point, then a held distance rather than a flight through the body.
-   * 550, giving ~400 units (42% of `range`) of genuine approach, enough for
-   * the size change to read as real perspective rather than a tween.
-   */
+  /** How close the player may get before the body holds station — the same
+   * bounded dishonesty `Planet.ts` names and accepts. */
   minRange: 550,
-  /** World radius. See `range` for the framing this is chosen against, and
-   * for why this shrank from the first pass's 260. */
+  /** World radius. */
   radius: 215,
-  /**
-   * Height above the plane. 0, not `Planet.height`'s 210 — a body this large
-   * needs no lift to clear the grid, and centring it on the horizon is what
-   * keeps the whole silhouette inside a downward-pitched camera's frame
-   * without ever asking the game to look up (`CLAUDE.md`'s recurring warning;
-   * `PLANET.height`'s own comment is the fourth file to record it).
-   */
+  /** Height above the plane. 0: a body this large needs no lift to clear the
+   * grid, and centring it on the horizon is what keeps the whole silhouette
+   * inside a downward-pitched camera that cannot look up. */
   height: 0,
-  /**
-   * Latitude/longitude divisions on the shell. Doubled from the first pass's
-   * 20×14 for a reason unrelated to how visible the shell itself is (still
-   * barely — the detail sits on top of it): a coarser facet sagitta was
-   * exactly where the old single-axis belt cull dumped its false positives
-   * (see the file header), so the depth test that was supposed to backstop
-   * that leak was itself faceted in the same grazing region. The per-point
-   * cull is the real fix; this is cheap insurance for whatever it still
-   * misses, and it costs nothing extra — still 2 draw calls.
-   */
-  shellSegments: 28,
-  shellRings: 20,
-  /** Radians per second the body turns. First-draft guess, unflown, same
-   * species as every other constant here — on the tuning list once there is
-   * something on screen to judge it against. */
+  /** Radians per second the body turns. First-draft, unflown, same species as
+   * every other constant here — on the tuning list once there is something on
+   * screen to judge it against. */
   rotationRate: 0.035,
+
+  /**
+   * Latitude/longitude divisions on `body`. Raised well past the old shell's
+   * 28×20 — that count was chosen because the shell was "barely seen", the
+   * detail sitting on strokes drawn on top of it. There is no on-top layer
+   * now: this mesh *is* the whole visible surface, so its own tessellation is
+   * what stands between a smooth terminator and a faceted one.
+   */
+  widthSegments: 96,
+  heightSegments: 64,
 
   // ── colour (§4.1, "a genuinely orange Jupiter" — never the Shroud's) ─────
 
-  /**
-   * The body's hue anchor, degrees, drawn narrow rather than from the full
-   * wheel the first two passes used (`rng.next() * 360`, unconstrained). The
-   * owner's complaint was specific — the shipped body read magenta, which is
-   * `PALETTE.magenta`, the Shroud's own hue and the single most
-   * information-loaded colour the game has — and an unconstrained roll does
-   * not just risk that once, it revisits it every sector. Narrowed to
-   * Jupiter's own equatorial range (warm ochre-orange) closes the whole
-   * class of mistake rather than re-rolling and hoping.
-   */
+  /** The body's hue anchor, degrees. Narrow rather than the full wheel for
+   * the reason `bandSwatches` below inherits unchanged from the stroke
+   * build: an unconstrained roll once put this body on `PALETTE.magenta`,
+   * the Shroud's own hue, and closing the whole class of mistake beats
+   * re-rolling and hoping. */
   baseHueMin: 24,
   baseHueMax: 46,
   /**
-   * Per-band colour swatches, picked by weight in `pickSwatch` rather than
-   * jittered off one base hue — a single hue with only lightness variance is
-   * what "one flat wash" looks like; several named families (cream, ochre,
-   * rust, deep brown-red) each with their own saturation and lightness is
-   * what "several colours, like the real Jupiter" asked for. `hueOffset` is
-   * degrees off `baseHue`, kept inside the same warm family so two bands
-   * never disagree about which planet they belong to.
-   *
-   * Every `saturation` here sits clearly under the hull roster's own floor
-   * (`PALETTE.lance`, the lowest of the five, is ~0.61) — not because a body
-   * must be desaturated (§4.1 says the opposite), but because a *band's*
-   * colour is judged in isolation for a fraction of a second as the eye
-   * scans the body, and a warm, saturated ochre at hull saturation is one
-   * glance away from reading as Raider gold. Multi-hue banding is what
-   * still reads as unmistakably *body* even with every individual band
-   * capped this way.
-   *
-   * `weight` sets how often a swatch is drawn; cream and the deep
-   * brown-red sit lowest so the pale zones stay occasional accents rather
-   * than half the body, per the brief's own "occasional pale zone."
+   * Per-band colour families, picked by weight rather than jittered off one
+   * base hue, for the same reason as before: several named swatches (cream,
+   * a pale zone, ochre, rust, deep brown-red) is what "several colours, like
+   * the real Jupiter" asked for, and every `saturation` here sits under the
+   * hull roster's own floor (`PALETTE.lance` ≈0.61) so a band read in
+   * isolation never reads as Raider gold.
    */
   bandSwatches: [
     { hueOffset: 9, saturation: 0.15, lightness: 0.8, weight: 2 }, // cream
@@ -160,373 +105,171 @@ export const GIANT = {
     { hueOffset: -12, saturation: 0.48, lightness: 0.33, weight: 5 }, // rust
     { hueOffset: -18, saturation: 0.38, lightness: 0.2, weight: 2 }, // deep brown-red
   ],
-  /**
-   * The storm's own family — pulled toward red rather than jittered off the
-   * base hue the way a belt is, the same way the real Great Red Spot reads
-   * as a distinct accent rather than another belt. The first pass offset
-   * this +150°, which for a hue anchored near 35° lands around 185° —
-   * inside `PALETTE.trace`'s own cyan (~178°), the player's colour. Negative
-   * and small keeps the storm in the same warm family as the belts, just
-   * redder and darker, and its saturation still sits under the hull floor.
-   */
-  stormHueOffset: -22,
-  stormSaturation: 0.5,
-  stormLightness: 0.3,
 
-  // ── the belts (§3.3, "hundreds of arcs, not eight stripes") ──────────────
+  // ── banding (§3.3, "broad alternating zones and belts") ──────────────────
+
+  /** How many alternating bands span the whole body pole to pole, seeded per
+   * sector within this range — "roughly 8-12 across the disc" per the brief,
+   * rolled rather than fixed so sector to sector variety survives the
+   * rebuild the way it did in the stroke version's belt count. */
+  bandCountMin: 8,
+  bandCountMax: 12,
+  /**
+   * How much a band's own angular width shrinks as latitude approaches the
+   * pole, applied to `lat` before it is turned into a band index — 0 would
+   * give bands of even width everywhere; above 0 narrows them the further
+   * out they sit, which is what "narrowing toward the poles" means as a
+   * continuous warp rather than a second, separately-tuned band count.
+   */
+  poleNarrowK: 1.6,
+  /** Absolute latitude (0-1, fraction of a right angle) past which the band
+   * signal starts blending into the mottled polar cap. */
+  poleThreshold: 0.74,
+  /** How much further latitude the blend above takes to reach full strength. */
+  poleBlendWidth: 0.16,
+  /** The cap's own saturation and lightness once the blend above is complete
+   * — muted and pale rather than another band colour, so the poles read as
+   * "essentially bandless" rather than as one more stripe. */
+  poleSaturation: 0.14,
+  poleLightness: 0.7,
 
   /**
-   * Distinct latitude bands. Each is not one continuous line around the
-   * whole sphere — see `filamentsPerBand` for why — so the true stroke
-   * count this produces is well past "hundreds" before a single segment is
-   * walked. Same lesson the comet's rewrite recorded: 40 dashes read as
-   * scatter, ~500 connected filaments read as gas. If this number can be
-   * counted at a glance in the finished render, it is too low.
-   *
-   * Raised from the first pass's 70 — task 3's own review found that count
-   * still countable, still reading as "latitude lines on a globe, not
-   * weather". The buffer has the room: the first pass spent 2500-5000 of
-   * `skyTrace`'s 20000, so there was three-to-four times the headroom this
-   * spends.
+   * Two low, integer harmonics of longitude that displace a band boundary's
+   * effective latitude — "a slight tilt" made organic rather than straight.
+   * Integer on purpose: a non-integer harmonic would not close over the
+   * longitude seam, leaving a visible mismatch at `lon = ±π` where the sphere
+   * wraps. Scaled by `cosLat` at the call site so the displacement vanishes
+   * at the poles — the single point every meridian collapses to, where a
+   * longitude-only term would otherwise disagree with itself.
    */
-  bandCount: 130,
-  /** Latitude band the belts are drawn across, radians either side of the
-   * equator. Kept off the poles — a belt wrapped tight around a pole reads as
-   * a cap, not a band. */
-  beltLatitudeRange: 1.1,
-  /**
-   * Exponent applied to a band's own signed latitude draw before it is
-   * scaled by `beltLatitudeRange` — above 1, it biases band placement toward
-   * the equator, leaving the poles comparatively bare. A real gas giant is
-   * busy at the equator and quiet at the poles; the uniform draw this
-   * replaced spread bands evenly across the whole range instead, which is
-   * exactly the "uniform coverage over a sphere" the finding named as part
-   * of why the body read as a wound ball rather than banded weather.
-   */
-  latitudeBias: 1.7,
-  /**
-   * Short filaments per band, each covering only a fraction of the full
-   * circumference (`filamentSpanMin`/`Max`) rather than one continuous line
-   * all the way round. This is the same correction the comet's own plume
-   * needed and for the same reason, recorded in `game/comet.ts`'s
-   * `COMET.filaments` comment: one line per belt, walked start to finish,
-   * reads as taut wire — the visible hemisphere is one smooth stroke with a
-   * hard start and a hard stop at the horizon, and forty of those read as a
-   * wireframe cage, not weather. Several shorter, overlapping filaments per
-   * band, each fading to nothing at both of its own ends
-   * (`filamentFadeIn`/`Out`), is what gave the comet's tail depth instead of
-   * a bundle of straight lines, and the same fix applies here.
-   */
-  filamentsPerBand: 8,
-  /** How much a band's filament count is allowed to jitter, seeded per band
-   * — some bands read sparser than others, which is itself part of not
-   * looking like a uniform grid. */
-  filamentCountJitter: 3,
-  /**
-   * Fraction of the full circumference (0-1, i.e. of 2π) one filament spans,
-   * before the per-filament jitter below widens or narrows it. Cut sharply
-   * from the first pass's 0.18-0.4 (65°-144° — most of a hemisphere in one
-   * stroke): a filament that long sweeps conspicuously across the body and
-   * crosses the limb at a visible angle, which is what a *sphere wound with
-   * yarn* actually is. A band reads as a band when it is built from many
-   * short arcs that stay inside one parallel, not a few long ones that
-   * advertise their own curve; foreshortening toward the limb — parallels
-   * compressing as they turn away from the camera — is the cue that
-   * separates "banded sphere" from "sphere with lines on it", and it only
-   * shows up for free when the strokes genuinely hold their latitude.
-   */
-  filamentSpanMin: 0.02,
-  filamentSpanMax: 0.055,
-  /** Steps a single filament is walked in. Short — these are meant to be
-   * short strokes, not the whole belt. */
-  filamentSteps: 16,
-  /** How much of a filament's own span fades in at its leading edge and out
-   * at its trailing one, 0-1. The single most important number for whether
-   * this reads as gas rather than wire — see `filamentsPerBand`'s comment
-   * and `game/comet.ts`'s `FILAMENT_FADE_IN`/`FILAMENT_FADE_OUT`, which this
-   * mirrors: tapering both ends to nothing is what stops every filament from
-   * announcing a visible line-end, so the eye integrates the overlap into
-   * something with no edges instead of counting threads.
-   */
-  filamentFadeIn: 0.22,
-  filamentFadeOut: 0.3,
-  /**
-   * Radians a band's centre line drifts, linearly, across a filament's own
-   * *local* progress (0-1 within that one filament) — "a slight tilt" per
-   * the brief, distinct from the sinusoidal wobble below.
-   *
-   * **This constant was correct; the code reading it was not, and that bug
-   * is the actual cause of the "ball of thread" finding.** The drift term
-   * was `tilt * (theta0 - π)` — `theta0` is the stroke's *absolute* position
-   * on the sphere's full circumference, not its position within its own
-   * filament, so a filament near either edge of the longitude range picked
-   * up a drift of nearly `tilt * π` (≈22° at the old 0.12) regardless of how
-   * short the filament itself was. Twenty-two degrees of latitude drift
-   * across the body is not "a slight tilt", it is most of a visible spiral —
-   * exactly what makes a band look wound rather than level. Fixed to drift
-   * across `u` (the filament's own 0-1 walk) instead, so the magnitude this
-   * constant sets is now the true bound, never a function of where on the
-   * sphere the filament happens to sit.
-   */
-  beltTilt: 0.12,
-  /**
-   * Turbulence — the sinusoidal wobble in latitude that shears with
-   * longitude, per the brief. Pulled down from the first pass's 0.02-0.09
-   * (up to ~5°): a wobble that large routinely carried a stroke clear out of
-   * its own band and into a neighbour's, which is the second thing "reads
-   * as a wound ball" was diagnosed against — perturbation should break the
-   * line, not relocate it. At this range the belt visibly wavers without
-   * leaving its parallel.
-   */
-  wobbleAmpMin: 0.008,
-  wobbleAmpMax: 0.032,
-  wobbleFreqMin: 1.5,
-  wobbleFreqMax: 4.5,
-  /**
-   * A second, finer wobble layered on top of the first at its own amplitude
-   * and frequency — one slow shear reads as a single smooth curve no matter
-   * how much it wanders; two frequencies beating against each other is what
-   * stops a filament reading as one clean stroke, the same reason real
-   * turbulence is a spectrum and not one sine wave.
-   */
-  wobbleAmp2Min: 0.006,
-  wobbleAmp2Max: 0.025,
-  wobbleFreq2Min: 9,
-  wobbleFreq2Max: 22,
-  /**
-   * Per-step brightness grain, 0-1 — how much a filament's level rides a
-   * fast, deterministic ripple along its own length rather than staying flat.
-   * "Edges that break up" per task 3's own finding: a filament that fades
-   * smoothly at both ends (`filamentFadeIn`/`Out`) but glows evenly along its
-   * middle still reads as a drawn line: this is what stops the middle from
-   * reading as flat too. Deterministic (a function of `theta0`, not of frame
-   * time) so it holds still rather than crawling — a body may never pulse or
-   * flash, and a re-rolled-every-frame grain would read as exactly that.
-   */
-  grainAmount: 0.35,
-  grainFreq: 19,
-  /**
-   * How far a band's individual filaments scatter off its centre latitude,
-   * radians — "a width" per the brief. Several filaments landing at
-   * slightly different latitudes within this spread is what reads as a
-   * filled band; a single hairline would not. Narrowed from 0.02-0.1 (up to
-   * ~5.7°) alongside the wobble amplitudes above, for the same reason — a
-   * band this wide combined with the old wobble is most of how filaments
-   * ended up in a neighbour's territory.
-   */
-  beltWidthMin: 0.012,
-  beltWidthMax: 0.045,
-  /** How far off a swatch's own hue an individual band's tint drifts,
-   * degrees — texture within one swatch family, not a second palette; the
-   * families themselves (`bandSwatches`) are what carries "several colours,
-   * like the real Jupiter." Cut from 18 now that the swatches already give
-   * band-to-band contrast, so this no longer has to do that job too. */
-  hueJitterDeg: 6,
-  /**
-   * Below this, a segment is skipped rather than pushed — the same guard the
-   * comet's plume uses (`level > 0.02`) so a segment faded to nothing does
-   * not spend a slot in the buffer for a stroke nobody would see anyway.
-   */
-  minLevel: 0.02,
-  /**
-   * How close to the exact silhouette (`facing`, the dot of the surface
-   * normal and `viewDir`) a belt segment fades in from, 0-1. Without this the
-   * strokes stop dead at the horizon in a single frame's step rather than
-   * feathering into the shell's own silhouette edge.
-   */
-  hemisphereFadeIn: 0.14,
-  /**
-   * The radius belt strokes are actually drawn at, as a multiple of `radius`.
-   * Fractionally outside the shell's own surface so the strokes never
-   * z-fight the depth the shell writes at exactly `radius` — the same problem
-   * `VectorObject`'s `polygonOffset` solves for a hull's edges against its
-   * own hull.
-   */
-  beltRadiusBias: 1.012,
+  boundaryWaveAmp1: 0.5,
+  boundaryWaveFreq1: 3,
+  boundaryWaveAmp2: 0.25,
+  boundaryWaveFreq2: 7,
 
-  // ── the storm (§3.3, "one storm oval") ────────────────────────────────────
-
-  /** Concentric rings drawn to give the storm a filled, not outlined, look. */
-  stormRings: 4,
-  /** How much each successive ring shrinks toward the storm's centre. */
-  stormRingStep: 0.22,
-  /** Steps per ring. */
-  stormSteps: 28,
-  /** Angular half-extent of the storm in latitude and longitude, radians —
-   * an oval, not a circle, which is what keeps it reading as weather rather
-   * than a second, smaller planet stuck to the first. */
-  stormHalfLat: 0.16,
-  stormHalfLon: 0.26,
+  /** How much the turbulence field (three summed sine octaves, seeded per
+   * sector) perturbs a band's own hue and lightness. Deliberately small
+   * relative to the gap between two `bandSwatches` entries — turbulence
+   * modulates the swatch a vertex already belongs to; it never touches the
+   * band index itself, which is what keeps it inside its own band by
+   * construction rather than by tuning. */
+  turbulenceHueAmp: 5,
+  turbulenceLightAmp: 0.07,
 
   // ── the limb halo (§3.2, "bloom is the atmosphere") ───────────────────────
 
-  /**
-   * **Rebuilt. The first pass drew this as `limbCount` radial spokes fanning
-   * straight outward from the surface — which is corona geometry, not halo
-   * geometry: `Backdrop.ts` already owns that exact shape for `kind: "sun";
-   * rays`, and `game/comet.ts`'s own `COMA_GLOW` comment records code review
-   * catching the identical mistake once already, on the comet's coma. Radial
-   * strokes read as spikes no matter how many there are; a halo is dense at
-   * the edge, not radiating from it.**
-   *
-   * The replacement is a scatter of short *tangential* strokes — oriented
-   * along the silhouette, not away from it — held in a shell just outside
-   * `radius`, biased toward the inner edge of that shell by `limbDepthBias`
-   * so the strokes thicken toward the true limb rather than forming clean
-   * concentric rings. Precomputed once in `show`, the way `belts` are, and
-   * only re-shaded and re-projected in `draw`.
-   */
-  limbStrokeCount: 640,
-  /** How far outside `radius` the halo shell reaches, as a fraction of it. */
-  limbDepth: 0.22,
-  /**
-   * Exponent applied to a uniform draw before it picks a stroke's depth
-   * within the shell (`depthFrac = rng() ** limbDepthBias`, biased toward 0).
-   * Above 1 crowds strokes toward the inner edge — the true limb — which is
-   * the "thickening toward the limb" the finding asked for; the same
-   * clustering trick `game/comet.ts`'s `COMA_GLOW` comment describes for the
-   * coma, applied to a shell instead of a cone.
-   */
-  limbDepthBias: 2.4,
-  /** Angular half-length of one tangential stroke, radians — short, so many
-   * short strokes overlap into a fuzzed band rather than a few long arcs
-   * that would read as rings. */
-  limbTangentSpanMin: 0.012,
-  limbTangentSpanMax: 0.03,
-  /** Per-stroke brightness variance, multiplying `limbBrightness` — texture,
-   * the same reason `hueJitterDeg` exists for the belts. */
-  limbBrightnessVarMin: 0.6,
-  limbBrightnessVarMax: 1.3,
-  /** Peak brightness multiplier at the shell's inner edge, before `shadeAt`'s
-   * own falloff, the depth taper and the per-stroke variance above. Above 1
-   * on purpose — bloom keys off intensity past a threshold, and this is the
-   * one place in the body meant to cross it. Lowered from the first pass's
-   * 1.6 — task 3's own review found bloom flattening the lit/unlit contrast
-   * rather than sharpening it, and a less blown-out halo leaves more of that
-   * contrast for the terminator to use. */
-  limbBrightness: 1.15,
+  /** `limb`'s radius as a multiple of `body`'s. */
+  limbScale: 1.03,
+  /** Fresnel exponent — higher pulls the glow tighter to the true silhouette. */
+  limbPower: 2.6,
+  /** Brightness multiplier at full fresnel, before bloom's own threshold.
+   * Above 1 on purpose — this is the one place on the body meant to cross
+   * it, the mechanism behind "phosphorescent" in the brief. */
+  limbIntensity: 1.7,
 } as const;
 
-const UP = new Vector3(0, 1, 0);
-const RIGHT = new Vector3(1, 0, 0);
+const HALF_PI = Math.PI / 2;
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/** A cheap, deterministic float from an integer band index and a per-sector
+ * salt — a hash, not a draw off `rng`, because a band's colour has to be a
+ * pure function of *which band it is*, re-evaluated at every vertex that
+ * band owns, not a value consumed once from a sequential cursor. */
+function hash1(i: number, salt: number): number {
+  const s = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
 
 type Swatch = (typeof GIANT.bandSwatches)[number];
 
-/**
- * Weighted pick from `GIANT.bandSwatches` — a band's colour family, not its
- * exact hue (`hueJitterDeg` still varies that within the family). Weighted
- * rather than uniform so cream and deep brown-red stay occasional accents;
- * see `bandSwatches`' own comment for why they sit at the low end.
- */
-function pickSwatch(rng: { next(): number }): Swatch {
+/** Weighted pick from `GIANT.bandSwatches`, keyed by a hash rather than by
+ * `rng.next()` for the reason `hash1` documents. */
+function pickSwatch(r: number): Swatch {
   const total = GIANT.bandSwatches.reduce((sum, s) => sum + s.weight, 0);
-  let r = rng.next() * total;
+  let x = r * total;
   for (const swatch of GIANT.bandSwatches) {
-    r -= swatch.weight;
-    if (r <= 0) return swatch;
+    x -= swatch.weight;
+    if (x <= 0) return swatch;
   }
   return GIANT.bandSwatches[GIANT.bandSwatches.length - 1];
 }
 
-/** One short filament within a band — see `GIANT.filamentsPerBand` for why a
- * band is several of these rather than one continuous line. */
-interface Filament {
-  /** Where it starts, as a fraction of the full circumference (0-1). */
-  startLon: number;
-  /** How far it reaches from `startLon`, same units. */
-  span: number;
-  /** Latitude offset from the band's own centre, radians. */
-  latOffset: number;
-}
-
-/** One band's shape, fixed at `show` time. Only the body's `longitude`
- * changes what world position it draws at — see the file header on why that
- * is what makes rotation free. */
-interface Belt {
-  baseLat: number;
-  tilt: number;
-  wobbleAmp: number;
-  wobbleFreq: number;
+interface Octave {
+  /** Integer — see `GIANT.boundaryWaveFreq1`'s comment on why every
+   * longitude harmonic in this file has to be one. */
+  lonFreq: number;
+  latFreq: number;
   phase: number;
-  /** The finer, second wobble layered on top — see `GIANT.wobbleAmp2Min`. */
-  wobbleAmp2: number;
-  wobbleFreq2: number;
-  phase2: number;
-  brightness: number;
-  color: Color;
-  filaments: Filament[];
-}
-
-interface Storm {
-  lat: number;
-  lon: number;
-  brightness: number;
-  color: Color;
-}
-
-/** One short tangential stroke of the limb halo — see `GIANT.limbStrokeCount`
- * for why this replaced a fan of radial spokes. Fixed at `show` time; `draw`
- * only re-projects and re-shades it. */
-interface LimbStroke {
-  /** Position around the silhouette, radians. */
-  angle: number;
-  /** 0-1, biased toward 0 by `GIANT.limbDepthBias` — how far out through the
-   * halo shell this stroke sits. */
-  depthFrac: number;
-  /** Angular half-length, radians — see `GIANT.limbTangentSpanMin`. */
-  tangentSpan: number;
-  brightnessVar: number;
+  amp: number;
 }
 
 /**
+ * `limb`'s own material. A minimal fresnel shader rather than a stock
+ * material — nothing in three.js's built-in roster multiplies by
+ * `1 - dot(normal, viewDir)`, and that term is the entire effect. Computed in
+ * view space so it needs no world-space camera position passed in, and reads
+ * as "dim at centre, bright at the true edge" without depending on anything
+ * this class tracks between frames.
+ */
+const LIMB_VERTEX = `
+varying vec3 vNormal;
+varying vec3 vViewDir;
+void main() {
+  vNormal = normalize(normalMatrix * normal);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  vViewDir = normalize(-mvPosition.xyz);
+  gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+const LIMB_FRAGMENT = `
+uniform vec3 glowColor;
+uniform float power;
+uniform float intensity;
+varying vec3 vNormal;
+varying vec3 vViewDir;
+void main() {
+  float facing = max(dot(normalize(vNormal), normalize(vViewDir)), 0.0);
+  float fresnel = pow(1.0 - facing, power);
+  gl_FragColor = vec4(glowColor * intensity * fresnel, fresnel);
+}
+`;
+
+/**
  * One hero gas giant. There is exactly one in the scene, added once in
- * `main.ts` — this is not a per-kind factory the way `Fleet`'s hostiles are,
- * because stage 1 (`docs/environment.md` §6) is deliberately one body and
- * nothing else.
+ * `main.ts` — `docs/environment.md` §6 stage 1 is deliberately one body and
+ * nothing else, unchanged by this rebuild.
  */
 export class GasGiant {
   readonly object = Object.assign(new Group(), { name: "gas-giant" });
 
-  /** Current rotation, radians, advanced by `update`. Public because the
-   * brief's own harness reads it directly to prove rotation is happening —
-   * see `tools/playtest.mjs`. */
-  longitude = 0;
+  /** The lit surface. Public so a harness can read its geometry and material
+   * directly rather than through an indirection this class would otherwise
+   * have to invent just to be testable. */
+  body: Mesh | null = null;
+  /** The additive limb shell. Same visibility, same reason. */
+  limb: Mesh | null = null;
 
   private key = "";
-  private shell: VectorObject | null = null;
-  private light: SectorLight | null = null;
-  private readonly belts: Belt[] = [];
-  private storm: Storm | null = null;
-  private readonly limb: LimbStroke[] = [];
-  private haloColor = new Color();
-
   /** Where the body sits before the leash. */
   private readonly anchor = new Vector3();
-  /** Direction from the body to the player, refreshed by `follow`. Used as
-   * the halo's billboard axis and as the belts'/storm's hemisphere-cull
-   * fallback for any caller that omits `draw`'s `cameraPos` — the brief's own
-   * playtest harness among them; see the file header for why the belts and
-   * storm prefer the exact per-point test when a camera is given. Defaults to
-   * "toward spawn" so a `draw` called before the first `follow` still culls
-   * against something sane rather than the zero vector. */
-  private readonly viewDir = new Vector3(0, 0, -1);
-
-  // Scratch, reused every stroke rather than allocated per one — see the
-  // file header and `render/light.ts`'s own header on why `shadeAt`'s call
-  // sites have to stay allocation-free too.
-  private readonly scratchPoint = new Vector3();
-  private readonly scratchNormal = new Vector3();
-  private readonly u = new Vector3();
-  private readonly v = new Vector3();
 
   /**
-   * Rebuild for a sector, if it is not already the one standing. `light` is
-   * reassigned unconditionally — cheap, a pointer copy, and a sector's star
-   * does not move once `planLight` has placed it, so there is nothing to
-   * gain by gating it behind the same key.
+   * Rebuild for a sector, if it is not already the one standing. Bakes the
+   * band pattern once into vertex colours — unlike the stroke build, nothing
+   * here has to be recomputed per frame, because a real light reads the
+   * terminator off the mesh's own normals and a rigid `rotation.y` carries
+   * the baked pattern around with it for free.
    */
-  show(seed: number, sector: number, light: SectorLight): void {
-    this.light = light;
+  show(seed: number, sector: number): void {
     const key = `${seed}:${sector}`;
     if (key === this.key) return;
     this.key = key;
@@ -534,132 +277,165 @@ export class GasGiant {
 
     // A hash mix distinct from `planPlanet`'s, `planFixture`'s and
     // `planLight`'s own — reusing any of theirs would correlate the giant's
-    // look with another sector feature, the exact furniture problem each of
-    // those files' own comments warn against.
+    // look with another sector feature.
     const rng = makeRng((seed * 3628273133 + sector * 2308142839 + 97354729) >>> 0);
 
-    // Confined to `baseHueMin`-`baseHueMax` — see that constant's own
-    // comment for why the old `rng.next() * 360` (any hue at all) is what
-    // let this body land on `PALETTE.magenta` in the first place.
     const hue = GIANT.baseHueMin + rng.next() * (GIANT.baseHueMax - GIANT.baseHueMin);
-    // The ochre swatch's own saturation stands in for "the body's overall
-    // saturation" wherever one number is needed (the shell tint, the halo) —
-    // every per-band colour now comes from `bandSwatches` instead.
-    const saturation = GIANT.bandSwatches[2].saturation;
+    const bandCount =
+      GIANT.bandCountMin + Math.floor(rng.next() * (GIANT.bandCountMax - GIANT.bandCountMin + 1));
+    const swatchSalt = rng.next() * 9973;
+    const waveSeed1 = rng.next() * Math.PI * 2;
+    const waveSeed2 = rng.next() * Math.PI * 2;
+    const octaves: Octave[] = [0.5, 0.3, 0.2].map((amp) => ({
+      lonFreq: 2 + Math.floor(rng.next() * 5),
+      latFreq: 0.6 + rng.next() * 1.6,
+      phase: rng.next() * Math.PI * 2,
+      amp,
+    }));
+    const poleSwatch = GIANT.bandSwatches[0];
 
-    this.shell = new VectorObject(
-      new SphereGeometry(GIANT.radius, GIANT.shellSegments, GIANT.shellRings),
-      {
-        color: new Color().setHSL(hue / 360, saturation * 0.6, 0.3, SRGBColorSpace),
-        linewidth: 1.2,
-        // The body lives 640-1160 units out — well past `Stage`'s 260-unit
-        // fog far plane. Without this the shell's edges fog to the scene's
-        // black and vanish, and the only thing left on screen is a
-        // depth-only hole in the starfield. See `VectorObject`'s own header.
-        fog: false,
-      },
-    );
-    // Below the ships and below `Planet`'s own render order (-1.97/-1.96) —
-    // this body is further out and larger, so it should lose any coincident
-    // overlap to everything nearer.
-    this.shell.group.traverse((child) => {
-      child.renderOrder = -1.98;
-    });
-    this.object.add(this.shell.group);
+    const geometry = new SphereGeometry(GIANT.radius, GIANT.widthSegments, GIANT.heightSegments);
+    const position = geometry.attributes.position;
+    const colors = new Float32Array(position.count * 3);
+    const color = new Color();
 
-    for (let i = 0; i < GIANT.bandCount; i++) {
-      const swatch = pickSwatch(rng);
-      const beltHue = hue + swatch.hueOffset + (rng.next() * 2 - 1) * GIANT.hueJitterDeg;
-      const width = GIANT.beltWidthMin + rng.next() * (GIANT.beltWidthMax - GIANT.beltWidthMin);
+    for (let i = 0; i < position.count; i++) {
+      const x = position.getX(i);
+      const y = position.getY(i);
+      const z = position.getZ(i);
+      const nx = x / GIANT.radius;
+      const ny = Math.min(1, Math.max(-1, y / GIANT.radius));
+      const nz = z / GIANT.radius;
+      const lat = Math.asin(ny);
+      const lon = Math.atan2(nx, nz);
+      const latNorm = lat / HALF_PI;
+      const absLat = Math.abs(latNorm);
+      const cosLat = Math.cos(lat);
 
-      const filamentCount = Math.max(
-        1,
-        GIANT.filamentsPerBand + Math.round((rng.next() * 2 - 1) * GIANT.filamentCountJitter),
-      );
-      const filaments: Filament[] = [];
-      for (let f = 0; f < filamentCount; f++) {
-        filaments.push({
-          startLon: rng.next(),
-          span: GIANT.filamentSpanMin + rng.next() * (GIANT.filamentSpanMax - GIANT.filamentSpanMin),
-          latOffset: (rng.next() * 2 - 1) * width,
-        });
+      // Narrows bands toward the pole without changing how many there are —
+      // see `GIANT.poleNarrowK`.
+      const warpedLat = lat * (1 + GIANT.poleNarrowK * latNorm * latNorm);
+      // Vanishes at the pole via `cosLat` — see `GIANT.boundaryWaveFreq1`'s
+      // comment for why that is load-bearing, not cosmetic.
+      const wobble =
+        cosLat *
+        (GIANT.boundaryWaveAmp1 * Math.sin(GIANT.boundaryWaveFreq1 * lon + waveSeed1) +
+          GIANT.boundaryWaveAmp2 * Math.sin(GIANT.boundaryWaveFreq2 * lon + waveSeed2));
+      const phase = warpedLat * bandCount + wobble;
+      const idx = Math.floor(phase / Math.PI);
+      const swatch = pickSwatch(hash1(idx, swatchSalt));
+
+      // Each octave's longitude term is scaled toward zero as `cosLat`
+      // shrinks, so at the exact pole every term collapses to a function of
+      // `lat` alone — the same seam-avoidance `wobble` uses above, needed
+      // here too because the pole is one point every value of `lon` maps to.
+      const lonFade = Math.min(1, cosLat * 6);
+      let turb = 0;
+      for (const o of octaves) {
+        turb += o.amp * Math.sin(o.lonFreq * lon * lonFade + o.latFreq * lat + o.phase);
       }
 
-      // Signed draw raised to `latitudeBias` before scaling — see that
-      // constant's comment for why this clusters bands toward the equator
-      // instead of spreading them uniformly across the whole range.
-      const latDraw = rng.next() * 2 - 1;
-      const baseLat = Math.sign(latDraw) * Math.abs(latDraw) ** GIANT.latitudeBias * GIANT.beltLatitudeRange;
+      let h: number = hue + swatch.hueOffset + turb * GIANT.turbulenceHueAmp;
+      let s: number = swatch.saturation;
+      let l: number = swatch.lightness + turb * GIANT.turbulenceLightAmp;
 
-      this.belts.push({
-        baseLat,
-        tilt: (rng.next() * 2 - 1) * GIANT.beltTilt,
-        wobbleAmp: GIANT.wobbleAmpMin + rng.next() * (GIANT.wobbleAmpMax - GIANT.wobbleAmpMin),
-        wobbleFreq: GIANT.wobbleFreqMin + rng.next() * (GIANT.wobbleFreqMax - GIANT.wobbleFreqMin),
-        phase: rng.next() * Math.PI * 2,
-        wobbleAmp2: GIANT.wobbleAmp2Min + rng.next() * (GIANT.wobbleAmp2Max - GIANT.wobbleAmp2Min),
-        wobbleFreq2: GIANT.wobbleFreq2Min + rng.next() * (GIANT.wobbleFreq2Max - GIANT.wobbleFreq2Min),
-        phase2: rng.next() * Math.PI * 2,
-        brightness: 0.55 + rng.next() * 0.45,
-        color: new Color().setHSL(
-          (((beltHue % 360) + 360) % 360) / 360,
-          swatch.saturation,
-          swatch.lightness,
-          SRGBColorSpace,
-        ),
-        filaments,
-      });
-    }
+      const poleT = smoothstep(GIANT.poleThreshold, GIANT.poleThreshold + GIANT.poleBlendWidth, absLat);
+      if (poleT > 0) {
+        h = lerp(h, hue + poleSwatch.hueOffset, poleT);
+        s = lerp(s, GIANT.poleSaturation, poleT);
+        l = lerp(l, GIANT.poleLightness, poleT);
+      }
 
-    this.storm = {
-      lat: (rng.next() * 2 - 1) * GIANT.beltLatitudeRange * 0.7,
-      lon: rng.next() * Math.PI * 2,
-      brightness: 1.1,
-      color: new Color().setHSL(
-        ((((hue + GIANT.stormHueOffset) % 360) + 360) % 360) / 360,
-        GIANT.stormSaturation,
-        GIANT.stormLightness,
+      color.setHSL(
+        (((h % 360) + 360) % 360) / 360,
+        Math.min(1, Math.max(0, s)),
+        Math.min(1, Math.max(0, l)),
         SRGBColorSpace,
-      ),
-    };
-
-    // Capped rather than `saturation + 0.15` uncapped — see `bandSwatches`'
-    // own comment on why every band stays under the hull roster's ~0.61
-    // floor; the halo is the brightest thing on the body and the last place
-    // that cap should slip.
-    this.haloColor = new Color().setHSL(hue / 360, Math.min(0.5, saturation + 0.1), 0.74, SRGBColorSpace);
-
-    for (let i = 0; i < GIANT.limbStrokeCount; i++) {
-      this.limb.push({
-        angle: rng.next() * Math.PI * 2,
-        depthFrac: rng.next() ** GIANT.limbDepthBias,
-        tangentSpan:
-          GIANT.limbTangentSpanMin + rng.next() * (GIANT.limbTangentSpanMax - GIANT.limbTangentSpanMin),
-        brightnessVar:
-          GIANT.limbBrightnessVarMin + rng.next() * (GIANT.limbBrightnessVarMax - GIANT.limbBrightnessVarMin),
-      });
+      );
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
     }
+    geometry.setAttribute("color", new BufferAttribute(colors, 3));
 
-    // Fixed bearing 0 (+Z, dead ahead of spawn heading) — see the file
-    // header for why this body does not roll a seeded bearing the way
-    // `Planet.ts` does.
+    this.body = new Mesh(
+      geometry,
+      new MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 1,
+        metalness: 0,
+        // The body lives 640-1160 units out — well past `Stage`'s 260-unit
+        // fog far plane. Without this the whole mesh fades toward the
+        // scene's black fog colour and a solid, lit sphere disappears the
+        // same way an additive stroke used to. See `VectorObject`'s own
+        // header; this is the same trap, hit a second time on a different
+        // material family.
+        fog: false,
+      }),
+    );
+    // Below the ships and below `Planet`'s own render order — this body is
+    // further out and larger, so it should lose any coincident overlap to
+    // everything nearer.
+    this.body.renderOrder = -1.98;
+
+    const haloColor = new Color().setHSL(
+      hue / 360,
+      Math.min(0.5, GIANT.bandSwatches[2].saturation + 0.1),
+      0.74,
+      SRGBColorSpace,
+    );
+    this.limb = new Mesh(
+      new SphereGeometry(
+        GIANT.radius * GIANT.limbScale,
+        Math.max(32, Math.floor(GIANT.widthSegments / 2)),
+        Math.max(24, Math.floor(GIANT.heightSegments / 2)),
+      ),
+      new ShaderMaterial({
+        uniforms: {
+          glowColor: { value: haloColor },
+          power: { value: GIANT.limbPower },
+          intensity: { value: GIANT.limbIntensity },
+        },
+        vertexShader: LIMB_VERTEX,
+        fragmentShader: LIMB_FRAGMENT,
+        transparent: true,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        // Tested and load-bearing, not a default left alone: with this off,
+        // `limb` draws its whole disc rather than only the sliver past
+        // `body`'s own silhouette that depth-testing against it produces.
+        depthTest: true,
+        side: FrontSide,
+        // A hand-written shader gets no automatic fog unless it opts in —
+        // this one never does, which is the same exemption `fog: false`
+        // above spends a property to state explicitly.
+        fog: false,
+      }),
+    );
+    // Child of `body` so it inherits the same rigid rotation for free —
+    // the shader's own fresnel term depends only on the normal and the view
+    // direction, both recomputed every frame regardless of orientation, so
+    // there is nothing to keep in sync by parenting it here instead of
+    // beside it.
+    this.body.add(this.limb);
+    this.object.add(this.body);
+
+    // Fixed bearing 0 (+Z, dead ahead of spawn heading) — unchanged from the
+    // stroke build: this body is stage 1 of `docs/environment.md` §6,
+    // "the owner looks at it before anything is planned around it," and a
+    // prototype that might roll behind the player at the moment someone
+    // presses a key to check it would be testing nothing.
     this.anchor.set(0, GIANT.height, GIANT.range);
     this.object.position.copy(this.anchor);
     // A seeded starting spin so the same sector does not always present the
-    // same face — cheap variety, since nothing about the belts themselves
-    // depends on where `longitude` starts.
-    this.longitude = rng.next() * Math.PI * 2;
+    // same face.
+    this.body.rotation.y = rng.next() * Math.PI * 2;
   }
 
-  /**
-   * Hold station if the player has come too close, and cache the
-   * player-relative `viewDir` — still the leash's own logic and still the
-   * fallback `draw`'s hemisphere cull uses when it is not given a camera
-   * position. See the file header for why the exact cull needed more than
-   * this, and `draw`'s own comment for what it uses instead.
-   */
+  /** Hold station if the player has come too close — unchanged leash logic
+   * from the stroke build and from `Planet.ts` before it. */
   follow(player: Vector3): void {
-    if (!this.shell) return;
+    if (!this.body) return;
     const dx = this.anchor.x - player.x;
     const dz = this.anchor.z - player.z;
     const flat = Math.hypot(dx, dz);
@@ -669,264 +445,29 @@ export class GasGiant {
       const push = GIANT.minRange / flat;
       this.object.position.set(player.x + dx * push, GIANT.height, player.z + dz * push);
     }
-
-    this.viewDir.set(
-      player.x - this.object.position.x,
-      player.y - this.object.position.y,
-      player.z - this.object.position.z,
-    );
-    const len = this.viewDir.length();
-    if (len > 1e-3) this.viewDir.multiplyScalar(1 / len);
   }
 
-  /** Axial rotation, §3.6 — a longitude offset advanced by `dt`. Because the
-   * belts are rebuilt from scratch every `draw` call, this is the entire
-   * cost of rotation; nothing else has to change. */
+  /** Axial rotation, §3.6 — the whole mechanism the brief specifies:
+   * `mesh.rotation.y += rate * dt`. Nothing else moves, because the banding
+   * is baked geometry now rather than strokes rebuilt every frame. */
   update(dt: number): void {
-    this.longitude = (this.longitude + GIANT.rotationRate * dt) % (Math.PI * 2);
-  }
-
-  /**
-   * Every stroke of surface detail, pushed into `trace` at intensity
-   * `shadeAt` computes for that exact point and normal. Regenerated in full
-   * every call and nothing here persists between them — the comet's own
-   * contract (`game/comet.ts`'s `Comet.draw`).
-   *
-   * `cameraPos` is optional and, when given, is what the belts' and storm's
-   * hemisphere cull test against instead of the cached `viewDir` — see the
-   * file header for why the exact per-point test needed it. `main.ts` passes
-   * `stage.camera.position`, one frame stale (`placeCamera` has not run yet
-   * when this is called — see the call site's own comment), which is close
-   * enough that nothing about it is visible: the same tolerance the old
-   * player-position approximation already leaned on. Omitting it — the
-   * brief's own playtest harness does — falls back to `viewDir` and is
-   * exactly the old behaviour, imprecision included.
-   */
-  draw(trace: TraceBuffer, cameraPos?: Vector3): void {
-    if (!this.shell || !this.light) return;
-    const light = this.light;
-    const center = this.object.position;
-    const radius = GIANT.radius;
-
-    this.drawBelts(trace, light, center, radius, cameraPos);
-    this.drawStorm(trace, light, center, radius, cameraPos);
-    this.drawHalo(trace, light, center, radius);
-  }
-
-  /**
-   * The exact per-point hemisphere test — `dot(normal, direction to
-   * camera) > 0` — when `cameraPos` is given, falling back to the cached
-   * `viewDir` axis otherwise. No allocation: `cameraPos` and the point are
-   * read as plain numbers, the same discipline `render/light.ts`'s own
-   * header holds `shadeAt` to and for the same reason — this runs once per
-   * belt/storm vertex, hundreds of times a frame.
-   */
-  private facingOf(nx: number, ny: number, nz: number, x: number, y: number, z: number, cameraPos?: Vector3): number {
-    if (!cameraPos) return nx * this.viewDir.x + ny * this.viewDir.y + nz * this.viewDir.z;
-    const tcx = cameraPos.x - x;
-    const tcy = cameraPos.y - y;
-    const tcz = cameraPos.z - z;
-    const len = Math.hypot(tcx, tcy, tcz) || 1;
-    return (nx * tcx + ny * tcy + nz * tcz) / len;
-  }
-
-  /**
-   * Each band as several short, overlapping filaments rather than one line
-   * all the way round — see `GIANT.filamentsPerBand`'s comment for why a
-   * single continuous stroke reads as wire and this does not.
-   */
-  private drawBelts(
-    trace: TraceBuffer,
-    light: SectorLight,
-    center: Vector3,
-    radius: number,
-    cameraPos?: Vector3,
-  ): void {
-    const steps = GIANT.filamentSteps;
-    for (const belt of this.belts) {
-      for (const filament of belt.filaments) {
-        let hasPrev = false;
-        let px = 0;
-        let py = 0;
-        let pz = 0;
-
-        for (let k = 0; k <= steps; k++) {
-          const u = k / steps;
-          const theta0 = (filament.startLon + filament.span * u) * Math.PI * 2;
-          // `u` (0-1, local to this filament), not `theta0` (absolute
-          // sphere longitude) — see `GIANT.beltTilt`'s comment for why using
-          // the absolute position here was the actual bug behind "reads as
-          // a wound ball": it let a short filament pick up drift sized by
-          // where on the sphere it sat rather than by its own span.
-          const lat =
-            belt.baseLat +
-            filament.latOffset +
-            belt.tilt * (u - 0.5) +
-            belt.wobbleAmp * Math.sin(belt.wobbleFreq * theta0 + belt.phase) +
-            belt.wobbleAmp2 * Math.sin(belt.wobbleFreq2 * theta0 + belt.phase2);
-          const theta = theta0 + this.longitude;
-          const cosLat = Math.cos(lat);
-          const nx = cosLat * Math.sin(theta);
-          const ny = Math.sin(lat);
-          const nz = cosLat * Math.cos(theta);
-
-          // Computed before the cull, not after — the exact per-point test
-          // needs the world position to find the direction to the camera.
-          const x = center.x + nx * radius * GIANT.beltRadiusBias;
-          const y = center.y + ny * radius * GIANT.beltRadiusBias;
-          const z = center.z + nz * radius * GIANT.beltRadiusBias;
-
-          const facing = this.facingOf(nx, ny, nz, x, y, z, cameraPos);
-          if (facing <= 0) {
-            hasPrev = false;
-            continue;
-          }
-
-          if (hasPrev) {
-            this.scratchNormal.set(nx, ny, nz);
-            this.scratchPoint.set(x, y, z);
-            const lit = shadeAt(light, this.scratchPoint, this.scratchNormal);
-            const edgeFade = Math.min(1, facing / GIANT.hemisphereFadeIn);
-            // Tapers to nothing at both of the filament's own ends — see
-            // `GIANT.filamentFadeIn`'s comment for why this, not the
-            // hemisphere fade alone, is what stops the belts reading as wire.
-            const ends = Math.min(1, u / GIANT.filamentFadeIn, (1 - u) / GIANT.filamentFadeOut);
-            // Deterministic brightness ripple along the filament's own
-            // length — see `GIANT.grainAmount` for why this, not frame-time
-            // randomness, is what breaks up an otherwise flat middle.
-            const grain = 1 - GIANT.grainAmount * (0.5 + 0.5 * Math.sin(theta0 * GIANT.grainFreq));
-            const level = lit * belt.brightness * edgeFade * ends * grain;
-            if (level > GIANT.minLevel) trace.push(px, py, pz, x, y, z, belt.color, level);
-          }
-
-          px = x;
-          py = y;
-          pz = z;
-          hasPrev = true;
-        }
-      }
-    }
-  }
-
-  private drawStorm(
-    trace: TraceBuffer,
-    light: SectorLight,
-    center: Vector3,
-    radius: number,
-    cameraPos?: Vector3,
-  ): void {
-    const storm = this.storm;
-    if (!storm) return;
-    const steps = GIANT.stormSteps;
-
-    for (let ring = 0; ring < GIANT.stormRings; ring++) {
-      const scale = 1 - ring * GIANT.stormRingStep;
-      let hasPrev = false;
-      let px = 0;
-      let py = 0;
-      let pz = 0;
-
-      for (let k = 0; k <= steps; k++) {
-        const t = (k / steps) * Math.PI * 2;
-        const lat = storm.lat + Math.sin(t) * GIANT.stormHalfLat * scale;
-        const theta = storm.lon + this.longitude + Math.cos(t) * GIANT.stormHalfLon * scale;
-        const cosLat = Math.cos(lat);
-        const nx = cosLat * Math.sin(theta);
-        const ny = Math.sin(lat);
-        const nz = cosLat * Math.cos(theta);
-
-        const x = center.x + nx * radius * GIANT.beltRadiusBias;
-        const y = center.y + ny * radius * GIANT.beltRadiusBias;
-        const z = center.z + nz * radius * GIANT.beltRadiusBias;
-
-        const facing = this.facingOf(nx, ny, nz, x, y, z, cameraPos);
-        if (facing <= 0) {
-          hasPrev = false;
-          continue;
-        }
-
-        if (hasPrev) {
-          this.scratchNormal.set(nx, ny, nz);
-          this.scratchPoint.set(x, y, z);
-          const lit = shadeAt(light, this.scratchPoint, this.scratchNormal);
-          const edgeFade = Math.min(1, facing / GIANT.hemisphereFadeIn);
-          const level = lit * storm.brightness * edgeFade;
-          if (level > GIANT.minLevel) trace.push(px, py, pz, x, y, z, storm.color, level);
-        }
-
-        px = x;
-        py = y;
-        pz = z;
-        hasPrev = true;
-      }
-    }
-  }
-
-  /**
-   * The bloom-catching rim, §3.2 — a scatter of short strokes oriented
-   * *tangentially*, along the silhouette, thickened toward its inner edge by
-   * `GIANT.limbDepthBias`. See `GIANT.limbStrokeCount`'s comment for why this
-   * replaced a fan of strokes running radially outward: that shape is a
-   * corona, not a halo, and it is the third time this project has drawn it
-   * by accident before catching it.
-   */
-  private drawHalo(trace: TraceBuffer, light: SectorLight, center: Vector3, radius: number): void {
-    this.u.crossVectors(UP, this.viewDir);
-    if (this.u.lengthSq() < 1e-6) this.u.crossVectors(RIGHT, this.viewDir);
-    this.u.normalize();
-    this.v.crossVectors(this.viewDir, this.u);
-
-    for (const stroke of this.limb) {
-      const rad = radius * (1 + GIANT.limbDepth * stroke.depthFrac);
-      const a0 = stroke.angle - stroke.tangentSpan;
-      const a1 = stroke.angle + stroke.tangentSpan;
-
-      const cm = Math.cos(stroke.angle);
-      const sm = Math.sin(stroke.angle);
-      const ndx = this.u.x * cm + this.v.x * sm;
-      const ndy = this.u.y * cm + this.v.y * sm;
-      const ndz = this.u.z * cm + this.v.z * sm;
-
-      const c0 = Math.cos(a0);
-      const s0 = Math.sin(a0);
-      const px = center.x + (this.u.x * c0 + this.v.x * s0) * rad;
-      const py = center.y + (this.u.y * c0 + this.v.y * s0) * rad;
-      const pz = center.z + (this.u.z * c0 + this.v.z * s0) * rad;
-
-      const c1 = Math.cos(a1);
-      const s1 = Math.sin(a1);
-      const x = center.x + (this.u.x * c1 + this.v.x * s1) * rad;
-      const y = center.y + (this.u.y * c1 + this.v.y * s1) * rad;
-      const z = center.z + (this.u.z * c1 + this.v.z * s1) * rad;
-
-      // The stroke's own normal is approximated as radial at its centre
-      // angle — the tangent span is small enough that this is
-      // indistinguishable from shading each endpoint separately.
-      this.scratchNormal.set(ndx, ndy, ndz);
-      this.scratchPoint.set(px, py, pz);
-      const lit = shadeAt(light, this.scratchPoint, this.scratchNormal);
-      // Thickest at the shell's inner edge (the true limb), fading toward
-      // its outer edge — the brightness distribution bloom turns into
-      // atmosphere; see the file header and spec §3.2.
-      const taper = 1 - stroke.depthFrac;
-      const level = lit * GIANT.limbBrightness * stroke.brightnessVar * taper;
-      if (level > GIANT.minLevel) trace.push(px, py, pz, x, y, z, this.haloColor, level);
-    }
-  }
-
-  setMode(mode: Parameters<VectorObject["setMode"]>[0]): void {
-    this.shell?.setMode(mode);
+    if (!this.body) return;
+    this.body.rotation.y += GIANT.rotationRate * dt;
   }
 
   /** Torn down on a sector change, the same moment `Planet.clear` and
    * `Comet.clear` are. */
   clear(): void {
-    this.shell?.dispose();
-    this.shell = null;
-    this.belts.length = 0;
-    this.storm = null;
-    this.limb.length = 0;
-    this.light = null;
+    if (this.limb) {
+      this.limb.geometry.dispose();
+      (this.limb.material as ShaderMaterial).dispose();
+    }
+    if (this.body) {
+      this.body.geometry.dispose();
+      (this.body.material as MeshStandardMaterial).dispose();
+    }
+    this.body = null;
+    this.limb = null;
     for (const child of [...this.object.children]) this.object.remove(child);
   }
 }
