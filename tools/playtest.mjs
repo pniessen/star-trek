@@ -126,21 +126,26 @@ check("the sector's star is seeded", lit.same, "same seed and sector differ");
 check("...and differs between sectors", lit.other, "two sectors share a star position");
 
 // ── the hero gas giant is a real lit mesh, not strokes ──────────────────────
-// Rewritten for `docs/environment.md` §1.5 — the stroke build's own four
-// assertions (segment count, `longitude`, a shell "that can occlude") tested
-// a medium this file no longer uses. `window.__giant` is the live instance
-// the frame loop already drives, so this checks the actual replacement:
-// a real mesh with baked vertex-colour banding, an additive fresnel limb
-// shell depth-tested against it, and rigid rotation via `body.rotation.y`.
+// Rewritten twice now for the same file: first for `docs/environment.md`
+// §1.5 (a real mesh instead of strokes), then for task 3's own mechanism fix
+// (banding moved from baked vertex colours into `body`'s fragment shader, so
+// a boundary is crisp regardless of tessellation — see `render/GasGiant.ts`'s
+// own header). The old `getAttribute("color")` check tested a buffer that no
+// longer exists; this checks the geometry's own vertex count instead, since
+// tessellation now only has to keep the silhouette round, not carry the
+// pattern. `window.__giant` is the live instance the frame loop already
+// drives.
 const giant = await page.evaluate(() => {
   const g = window.__giant;
-  const colorAttr = g.body?.geometry?.getAttribute("color");
+  const positionAttr = g.body?.geometry?.getAttribute("position");
+  const hasShaderUniforms = typeof g.body?.material?.uniforms?.uBandCount?.value === "number";
   const before = g.body ? g.body.rotation.y : 0;
   g.update(1.0);
   const after = g.body ? g.body.rotation.y : 0;
   return {
     hasBody: !!g.body,
-    vertexCount: colorAttr ? colorAttr.count : 0,
+    vertexCount: positionAttr ? positionAttr.count : 0,
+    hasShaderUniforms,
     rotated: g.body != null && after !== before,
     hasLimb: !!g.limb,
     // THREE.AdditiveBlending === 2 (NoBlending 0, NormalBlending 1,
@@ -151,7 +156,8 @@ const giant = await page.evaluate(() => {
   };
 });
 check("the giant is a real mesh, not a field of strokes", giant.hasBody, `hasBody=${giant.hasBody}`);
-check("...tessellated enough for a smooth terminator", giant.vertexCount > 2000, `${giant.vertexCount} vertices`);
+check("...tessellated enough for a round silhouette", giant.vertexCount > 500, `${giant.vertexCount} vertices`);
+check("...banded per fragment, not baked per vertex", giant.hasShaderUniforms, `uBandCount set=${giant.hasShaderUniforms}`);
 check("...and rotates rigidly on its axis", giant.rotated, `rotated=${giant.rotated}`);
 check(
   "...under an additive limb shell",

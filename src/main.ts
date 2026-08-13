@@ -215,17 +215,29 @@ sectorLightKey = `${campaign.seed}:${campaign.current}`;
  * The sector's star, as a real light — `docs/environment.md` §1.5: the whole
  * reason the stroke build carried a `shadeAt` per-stroke multiply was that
  * `VectorObject` bakes vertex colours and cannot express a moving lit side.
- * `GasGiant.body` is a real material now, so a real `DirectionalLight` does
- * that job instead, and `planLight`'s seeded position/colour are what aims
- * it. Owned here rather than by `GasGiant` because a light is a property of
- * the *sector*, not of one body in it (§3.1) — a second lit body later reads
- * this same light rather than carrying its own.
+ * `planLight`'s seeded position/colour are what aims it. Owned here rather
+ * than by `GasGiant` because a light is a property of the *sector*, not of
+ * one body in it (§3.1) — a second lit body later reads this same light
+ * rather than carrying its own.
+ *
+ * **`GasGiant.body` no longer consumes this pair through three.js's own
+ * lighting pipeline.** It did, briefly, through a `MeshStandardMaterial` —
+ * that build read as a planet but could not express a crisp band edge, so
+ * `render/GasGiant.ts`'s second rebuild moved banding into a hand-written
+ * `ShaderMaterial`, and a hand-written shader is never fed scene lights
+ * automatically. `giant.show` below is handed `sectorLight` directly instead,
+ * the same object this pair is built from, so the two never disagree — but
+ * that means `sun`/`sunFill` currently light nothing at all. They stay,
+ * unremoved: the comment two paragraphs up is still the design, not just the
+ * history — the *sector's* light is meant to be one physical thing a second
+ * lit body can pick up for free, and deleting the standing light because its
+ * one current consumer stopped using it would delete the part of the
+ * architecture that consumer never should have needed to know about.
  *
  * `MeshBasicMaterial`-family and additive materials — every hull, the HUD,
  * `Backdrop`'s painted bodies, `Planet`'s ring — ignore both lights below by
  * construction (`three.js` never samples scene lights for an unlit
- * material), so adding the sector's first-ever light source touches nothing
- * that was not already asking to be lit.
+ * material), so this pair currently touches nothing in the scene at all.
  */
 const sun = new DirectionalLight(0xffffff, 1.4);
 sun.position.copy(sectorLight.position);
@@ -1000,7 +1012,7 @@ function frame(now: number): void {
   // `show`/`follow` read `player.position` alone, not the camera, so unlike
   // `sky.follow(stage.camera)` below they do not have to wait for
   // `placeCamera` to run first — see `render/GasGiant.ts`'s own header.
-  giant.show(campaign.seed, campaign.current);
+  giant.show(campaign.seed, campaign.current, sectorLight);
   giant.follow(player.position);
   giant.update(dt);
 
