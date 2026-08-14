@@ -360,7 +360,9 @@ export class Session {
       // The fleet keeps flying and keeps shooting at the wreck. A frozen fleet
       // reads as a stopped program; a circling one reads as being finished off.
       // Nothing they fire can land — hit resolution is below this line.
-      for (const hostile of this.fleet.hostiles) hostile.update(dt, player, this.ordnance, this.mines);
+      for (const hostile of this.fleet.hostiles) {
+        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged);
+      }
       // The Warden keeps flying too — `kill()` has already told it to break
       // off, so the last thing a run shows you is your escort turning away.
       this.stepEscort(dt, player);
@@ -422,8 +424,12 @@ export class Session {
     // before anything moves this frame.
     this.stepComet(dt, player);
 
+    // Ahead of the hostile loop for the same reason `interference` is: every
+    // swarmer that reads the gate this frame should read this frame's answer.
+    this.fleet.updateEngagement(player);
+
     for (const hostile of this.fleet.hostiles) {
-      hostile.update(dt, player, this.ordnance, this.mines);
+      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged);
       // The one warning the forward view gives you. Everything before this
       // moment happened on the scanner — and the sound is the half of the
       // warning that works when you are pointed the wrong way.

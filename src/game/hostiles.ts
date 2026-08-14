@@ -275,7 +275,7 @@ export class Hostile {
     return this.cloak > HIDDEN_AT;
   }
 
-  update(dt: number, player: Ship, ordnance: Ordnance, mines: Minefield): void {
+  update(dt: number, player: Ship, ordnance: Ordnance, mines: Minefield, flank = false): void {
     this.revealed = false;
 
     const toPlayer = player.position.clone().sub(this.position);
@@ -292,9 +292,23 @@ export class Hostile {
 
     // Strafe perpendicular so they arc around rather than driving straight in,
     // which is what makes them feel like pilots instead of homing missiles.
-    const tangent = new Vector3(-toPlayer.z, 0, toPlayer.x).multiplyScalar(
-      this.spec.orbit * Math.sign(Math.sin(this.position.x * 0.7 + this.position.z * 0.3) || 1),
-    );
+    //
+    // While a Bastion is holding the player at range, swarmers bias that same
+    // strafe toward the player's stern instead of drawing it from a positional
+    // hash — attacking the facing decision rather than the shield itself: a
+    // player who turns to guard the stern leaves the bow, where the Bastion
+    // already is. Bias only — `orbit` still bounds the magnitude, range-holding
+    // and turn rate are untouched above and below this line, and it is inert
+    // the moment no brawler is engaged (wave one, every other class, and a
+    // Shroud's veiling retreat all keep the hash sign).
+    const sign =
+      flank && this.kind === "swarmer"
+        ? sternSign(
+            Math.atan2(this.position.x - player.position.x, this.position.z - player.position.z),
+            player.heading,
+          )
+        : Math.sign(Math.sin(this.position.x * 0.7 + this.position.z * 0.3)) || 1;
+    const tangent = new Vector3(-toPlayer.z, 0, toPlayer.x).multiplyScalar(this.spec.orbit * sign);
 
     const desired = toPlayer.clone().multiplyScalar(closing).add(tangent);
     if (desired.lengthSq() > 1e-6) desired.normalize();
@@ -504,6 +518,19 @@ function angleDelta(from: number, to: number): number {
   return delta;
 }
 
+/**
+ * Which tangent direction — the same sign the strafe above multiplies
+ * `orbit` by — carries a hostile at this bearing around toward the player's
+ * stern rather than away from it. The stern sits at `playerHeading + π`;
+ * `angleDelta` already picks the shorter way round, so its sign is the
+ * answer. The `>= 0` comparison always resolves to +1 or -1 — a dead-ahead
+ * or dead-astern source still has to pick a side, and it always does.
+ */
+export function sternSign(bearingFromPlayer: number, playerHeading: number): number {
+  const toStern = angleDelta(bearingFromPlayer, playerHeading + Math.PI);
+  return toStern >= 0 ? 1 : -1;
+}
+
 function turnToward(from: number, to: number, maxStep: number): number {
   return from + MathUtils.clamp(angleDelta(from, to), -maxStep, maxStep);
 }
@@ -523,7 +550,22 @@ export class Fleet {
     stalker: [],
   };
 
+  /**
+   * True while any live brawler holds the player inside its own fire range —
+   * the gate for the swarmer's stern-flanking bias. Computed once per step,
+   * fleet-wide, so every swarmer that update()s this frame reads the same
+   * answer rather than five slightly different ones from five call sites.
+   */
+  brawlerEngaged = false;
+
   constructor(private readonly makeShape: (kind: HostileKind) => VectorObject) {}
+
+  /** Recomputes `brawlerEngaged` against this frame's player position. */
+  updateEngagement(player: Ship): void {
+    this.brawlerEngaged = this.hostiles.some(
+      (h) => h.kind === "brawler" && h.position.distanceTo(player.position) < h.spec.fireRange,
+    );
+  }
 
   spawn(kind: HostileKind, position: Vector3, heading: number): Hostile {
     const spec = HOSTILE_SPECS[kind];

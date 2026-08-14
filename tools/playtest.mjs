@@ -240,6 +240,43 @@ check(
 );
 check("...and pads below 100", bearings[0] === "000" && bearings[1] === "005", bearings.slice(0, 2).join(" "));
 
+// ── swarmer flanking: sternSign ─────────────────────────────────────────────
+// The pure geometric core of facing-aware flanking — which tangent direction
+// carries a hostile toward the player's stern — asserted directly rather than
+// through a scripted fight, since spawning a controlled brawler+swarmer
+// encounter isn't reliably scriptable through the probe.
+const stern = await page.evaluate(async () => {
+  const { sternSign } = await import("/src/game/hostiles.ts");
+  return {
+    deadAhead: sternSign(0, 0),
+    plus: sternSign(Math.PI * 0.4, 0),
+    minus: sternSign(-Math.PI * 0.4, 0),
+    starboard: sternSign(Math.PI / 2, 0),
+  };
+});
+check(
+  "sternSign never returns 0 for a dead-ahead source",
+  stern.deadAhead === -1 || stern.deadAhead === 1,
+  `sternSign(0, 0)=${stern.deadAhead}`,
+);
+check(
+  "...and symmetric bearings pick opposite ways round",
+  stern.plus === -stern.minus,
+  `+0.4π=${stern.plus} -0.4π=${stern.minus}`,
+);
+// A hostile on the starboard beam (bearing +π/2, player heading 0) sits at
+// position (+X) relative to the player, so `toPlayer` (hostile→player) points
+// -X. The tangent `(-toPlayer.z, 0, toPlayer.x)` is then (0, 0, -1): a push
+// toward -Z. Applied at +X, that walks the hostile's bearing from +π/2 toward
+// +π (the stern, since heading is 0) rather than back toward 0 — so sign +1
+// is the one that closes on the stern here, matching the shorter-way delta
+// from +π/2 to the stern at heading+π=π, which is +π/2 (i.e. positive).
+check(
+  "...and a starboard-beam hostile gets the sign that closes toward the stern",
+  stern.starboard === 1,
+  `sternSign(π/2, 0)=${stern.starboard}`,
+);
+
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
 // — the same contract `Y` has. Checked before the first run, which is also the
