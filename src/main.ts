@@ -617,7 +617,15 @@ window.addEventListener("keydown", (event) => {
       // it again. Only the keys that just move a cursor come through: `Space`
       // spends salvage and `Enter` ends the visit, and neither should fire off
       // a press aimed at a screen the player had not seen yet.
-      if (NAVIGATION_KEYS.has(key)) handleCommandKey(key);
+      //
+      // Except when this press just ended the war: `enterCommand()` may have
+      // queued the final deck log on its way past, and a war-ending press
+      // doubling as the epilogue's first move would drive the command view
+      // out from under a crawl the player has not read yet — the one thing
+      // `briefing.active` exists to prevent everywhere else. So this press
+      // is spent opening the epilogue instead, the same way the very first
+      // key of a run is spent opening its briefing rather than flying it.
+      if (NAVIGATION_KEYS.has(key) && !presentation.briefing.active) handleCommandKey(key);
     }
   } else {
     // Any key takes the controls off the title screen or out of the demo.

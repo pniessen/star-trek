@@ -188,7 +188,7 @@ export class Presentation {
         if (this.session.death.phase !== "tally") break;
         // Then let the epitaph land before the chart comes up over it.
         this.tallyTime += realDt;
-        if (this.tallyTime >= TIMING.tally) this.enter("command");
+        if (this.tallyTime >= TIMING.tally) this.toCommand();
         break;
 
       case "command":
@@ -226,7 +226,7 @@ export class Presentation {
   /** Straight from the epitaph to the chart, for a player who does not want to wait. */
   enterCommand(): void {
     if (!this.report) this.resolveRun();
-    this.enter("command");
+    this.toCommand();
   }
 
   /**
@@ -238,6 +238,23 @@ export class Presentation {
     const rng = makeRng(this.campaign.seed, this.campaign.rngCursor);
     this.report = advanceCampaign(this.campaign, rng);
     this.persist(this.campaign);
+  }
+
+  /**
+   * Both roads from the tally to the chart — the dwell timing out and the
+   * player pressing past it — go through here, so the war's ending is
+   * decided in one place rather than twice. `isWon`/`isLost` are read before
+   * `enter("command")` runs: that call skips whatever briefing is currently
+   * up (there is none at the tally, but it is what makes `enter` safe to
+   * call from anywhere), not the campaign, so the order is for clarity, not
+   * correctness. The epilogue is queued after entering so it opens over a
+   * command view that is already current — the same layering the opening log
+   * uses over a run already begun.
+   */
+  private toCommand(): void {
+    const over = isWon(this.campaign) || isLost(this.campaign);
+    this.enter("command");
+    if (over) this.briefing.beginEpilogue(this.campaign, isWon(this.campaign));
   }
 
   private enter(mode: PresentationMode): void {

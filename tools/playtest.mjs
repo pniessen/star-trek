@@ -1536,6 +1536,115 @@ check(
   `returned ${found.seeded}`,
 );
 
+// ── the war can end: the victory epilogue ───────────────────────────────────
+// Last, and deliberately starting fresh via `enter("title")` + `startRun()`
+// the same way the comet-finding block above does, rather than depending on
+// whatever run state every earlier assertion left the session in — the "late
+// classes" block above this one needs mode "run" the whole way through, and
+// this test's own handoff ends that run and lands on "command".
+await page.evaluate(() => {
+  window.__presentation.enter("title");
+  window.__presentation.startRun();
+});
+state = await waitFor((s) => s.mode === "run", 5000);
+check("the victory run actually starts", state.mode === "run", `mode=${state.mode}`);
+
+// Every run opens on its own log; it has to be out of the way before
+// anything below can act on the session underneath it.
+await page.keyboard.press(" ");
+state = await waitFor((s) => !s.briefing, 3000);
+check(
+  "the victory run's own opening log can be skipped",
+  state.briefing === false,
+  `briefing=${state.briefing}`,
+);
+
+// Force the win directly on the board — `isWon` reads zero enemy sectors,
+// not anything this particular run did — and clear `incoming` too: a push
+// still in flight would land on the very next enemy turn (the one
+// `advanceCampaign` runs while resolving this death) and flip a sector
+// straight back to "theirs" before `isWon` ever gets to read what this test
+// just set.
+await page.evaluate(() => {
+  const c = window.__campaign;
+  for (const sector of c.sectors) sector.control = "ours";
+  c.incoming = [];
+});
+const theirsAfterForce = await page.evaluate(
+  () => window.__campaign.sectors.filter((s) => s.control === "theirs").length,
+);
+check("the board is forced to a win", theirsAfterForce === 0, `theirs remaining=${theirsAfterForce}`);
+
+await page.evaluate(() => { window.__player.hull = 0; });
+// A longer budget than the identical wait near the top of this file: this is
+// the same 2.45 game-second drift by the same dt-clamped clock, but by now
+// the page has been running one long-lived tab through everything above —
+// hundreds of debris shards, a reload, several restarts — and SwiftShader's
+// per-frame cost has grown with it, so real time buys less game time here
+// than it did at the top of the run.
+state = await waitFor((s) => s.death === "tally", 45000);
+check("the forced win still reaches the tally", state.death === "tally", `phase=${state.death}`);
+check(
+  "...with no epilogue yet — it opens at the command handoff, not at death",
+  state.briefing === false,
+  `briefing=${state.briefing}`,
+);
+
+// Same shape as the earlier death-and-restart block: press a direction once,
+// and require both that it opened the next screen AND that the press still
+// meant something. What is new here is that the next screen is a command
+// view standing under a final deck log, and this press must NOT also double
+// as the epilogue's first command — see the `!presentation.briefing.active`
+// guard next to `NAVIGATION_KEYS.has(key)` in main.ts, which exists so a
+// war-ending press is spent opening the epilogue rather than driving the
+// view out from under a crawl nobody has read yet.
+const winStep = await page.evaluate(() => {
+  const { indexOf, colOf, rowOf } = window.__chart;
+  const current = window.__campaign.current;
+  const col = colOf(current);
+  const row = rowOf(current);
+  const key = col < 7 ? "d" : "a";
+  const want = indexOf(col < 7 ? col + 1 : col - 1, row);
+  window.__chartCursor.set(indexOf(col < 7 ? col : 0, row === 7 ? 0 : 7));
+  return { key, want, current };
+});
+
+await page.keyboard.press(winStep.key);
+state = await waitFor((s) => s.mode === "command" && s.briefing === true, 5000);
+check(
+  "the win handoff opens the command view under the final deck log",
+  state.mode === "command" && state.briefing === true,
+  `mode=${state.mode} briefing=${state.briefing}`,
+);
+check(
+  "the epilogue actually says the invasion is broken",
+  state.briefingLines.join(" ").includes("THE INVASION IS BROKEN"),
+  `lines=${JSON.stringify(state.briefingLines)}`,
+);
+check(
+  "and the same key that ended the tally did not also move the chart cursor",
+  state.chartCursor === winStep.current,
+  `cursor=${state.chartCursor}, wanted it to stay at ${winStep.current}`,
+);
+
+// Any key skips it, exactly like the opening log — then the command view
+// takes input normally again.
+await page.keyboard.press(winStep.key);
+state = await waitFor((s) => s.briefing === false, 5000);
+check(
+  "the epilogue can be skipped like any other crawl",
+  state.briefing === false,
+  `briefing=${state.briefing}`,
+);
+
+await page.keyboard.press(winStep.key);
+state = await waitFor((s) => s.chartCursor === winStep.want, 5000);
+check(
+  "...after which the command view steps the cursor normally",
+  state.chartCursor === winStep.want,
+  `cursor=${state.chartCursor}, wanted ${winStep.want}`,
+);
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 await browser.close();
 process.exit(problems.length ? 1 : 0);

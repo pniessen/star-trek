@@ -312,7 +312,54 @@ export class Briefing {
    */
   begin(campaign: Campaign, teach: boolean): void {
     if (!this.enabled) return;
-    this.lines = layout(compose(campaign, teach));
+    this.start(layout(compose(campaign, teach)));
+  }
+
+  /**
+   * The other end of the same crawl: not a run's opening but a war's closing.
+   * Fired once, from `Presentation.toCommand`, exactly when the run that just
+   * ended also ended the war — `isWon`/`isLost` decide that, not this class.
+   * Same mechanism as `begin` top to bottom: composed once, scrolled by
+   * `update`, skippable by any key, silenced by the same `enabled` switch —
+   * a player who has turned the deck log off does not want it back for the
+   * one crawl they cannot fly past.
+   */
+  beginEpilogue(campaign: Campaign, won: boolean): void {
+    if (!this.enabled) return;
+    const commander = commanderOf(campaign.seed);
+    const theirs = countControl(campaign, "theirs");
+    const copy: [string, CrawlTone][] = won
+      ? [
+          ["DECK LOG   FINAL", "head"],
+          ["", "note"],
+          ["THE INVASION IS BROKEN", "body"],
+          [`${commander.surname} WITHDRAWS`, "body"],
+          [
+            `${campaign.runsElapsed} RUNS. THEY STILL HELD ${plural(theirs, "SECTOR")}. IT DID NOT MATTER.`,
+            "note",
+          ],
+          ["", "note"],
+          ["THE WAVES STOPPED", "body"],
+          ["WE GO HOME", "flag"],
+        ]
+      : [
+          ["DECK LOG   FINAL", "head"],
+          ["", "note"],
+          ["THE LAST STARBASE IS GONE", "body"],
+          [`${commander.surname} TAKES THE CHART`, "body"],
+          [`${campaign.runsElapsed} RUNS. IT WAS NOT ENOUGH.`, "note"],
+          ["COMMAND LOST", "flag"],
+        ];
+    this.start(layout(copy));
+  }
+
+  /**
+   * The reset tail shared by `begin` and `beginEpilogue`: composed lines in,
+   * a scroll ready to run out. Extracted rather than duplicated because the
+   * two crawls differ only in what they say, never in how they move.
+   */
+  private start(lines: readonly CrawlLine[]): void {
+    this.lines = lines;
     this.travel = 0;
     this.spoken = 0;
     this.elapsed = 0;
