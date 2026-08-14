@@ -990,5 +990,30 @@ check("an unrecorded era flies the baseline",
   loadoutOf([]).energyReserve === 1 && eraSpec(undefined).id === "constitution",
   "undefined -> constitution");
 
+// ── the enemy commander ─────────────────────────────────────────────────────
+const { commanderOf, warAct, guardClass } = await import("../.campaign-build/chart/commander.js");
+
+{
+  const a = commanderOf(42);
+  const b = commanderOf(42);
+  check("commander is deterministic per seed",
+    a.given === b.given && a.surname === b.surname &&
+    a.doctrine === b.doctrine && a.pronoun === b.pronoun,
+    JSON.stringify(a));
+  check("different seeds can differ",
+    [1, 2, 3, 4, 5, 6, 7, 8].some((s) => commanderOf(s).surname !== a.surname),
+    "eight seeds, one surname");
+  check("guard class follows doctrine",
+    guardClass("raider") === "swarmer" && guardClass("hammer") === "brawler" &&
+    guardClass("anvil") === "sniper", "");
+}
+
+{
+  const c = newCampaign(23);
+  check("a fresh war is a surge", warAct(c) === "surge", warAct(c));
+  c.exhausted = 1;
+  check("a ticking exhaustion counter is failing", warAct(c) === "failing", warAct(c));
+}
+
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 process.exit(problems.length ? 1 : 0);

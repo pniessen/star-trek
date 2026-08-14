@@ -1,9 +1,9 @@
 import { countControl, hasStructure, ENEMY_START_DEPTH, type Campaign, type Sector } from "./campaign.js";
 import { GRID, neighbours } from "./sectors.js";
-import { RESERVE } from "./reserve.js";
+import { RESERVE, reserveOf } from "./reserve.js";
 import type { Rng } from "./rng.js";
 
-export { RESERVE };
+export { RESERVE, reserveOf };
 
 /**
  * Retuned from strategy-layer.md's `3 + floor(runs / 4) + lost * 0.5`.
@@ -95,11 +95,6 @@ export function pressureBudget(campaign: Campaign): number {
   // drain are applied in `runEnemyTurn`, which is the only thing that takes a
   // turn.
   return Math.min(ambition, Math.floor(reserveOf(campaign) * RESERVE.commit));
-}
-
-/** Seeded on first read rather than in `newCampaign`, so saves stay unchanged. */
-export function reserveOf(campaign: Campaign): number {
-  return campaign.reserve ?? RESERVE.initial;
 }
 
 function defenceOf(sector: Sector): number {

@@ -3,13 +3,26 @@
  * one reason: `campaign.ts`'s `isWon` needs `RESERVE.brokenFor` to name a win,
  * and `enemyTurn.ts` already imports from `campaign.ts` (for `Campaign`,
  * `countControl`, `ENEMY_START_DEPTH`), so `campaign.ts` importing back from
- * `enemyTurn.ts` would be a cycle. This module has no imports of its own, so
- * both sides can read it without one.
+ * `enemyTurn.ts` would be a cycle. This module has no runtime imports of its
+ * own, so both sides can read it without one.
  *
  * `enemyTurn.ts` re-exports `RESERVE` from here, so everything that reads the
  * invasion's numbers — `reserveOf`, the chart, the instrument — still gets
  * them from `enemyTurn.js`, the same place it always has.
+ *
+ * `reserveOf` lives here too, for a second cycle `commander.ts` introduced:
+ * `warAct` needs `reserveOf`, and Task 5 needs `commander.ts`'s doctrine
+ * inside `enemyTurn.ts`, so `commander.ts` cannot import `enemyTurn.ts` and
+ * `enemyTurn.ts` cannot be where `reserveOf` alone lives without forcing a
+ * choice between the two. Moving the four-line function here — it reads
+ * nothing but `campaign.reserve` and this module's own `RESERVE.initial` —
+ * lets both `commander.ts` and `enemyTurn.ts` import it with no dependency
+ * on each other. Its `Campaign` parameter is a type-only import: erased at
+ * emit, so this module's runtime stays at zero imports even though
+ * `campaign.ts` imports `RESERVE` from here at runtime. A type-only cycle is
+ * legal in TypeScript; a runtime one is what this module exists to avoid.
  */
+import type { Campaign } from "./campaign.js";
 
 /**
  * **The invasion is finite.** The enemy has a reserve rather than an
@@ -134,3 +147,14 @@ export const RESERVE = {
    */
   brokenFor: 3,
 };
+
+/**
+ * Seeded on first read rather than in `newCampaign`, so saves stay unchanged.
+ * Moved here from `enemyTurn.ts` (still re-exported from there for existing
+ * callers) so `commander.ts` can read the reserve for `warAct` without
+ * importing `enemyTurn.ts` — see this module's header for why that import
+ * would be a cycle.
+ */
+export function reserveOf(campaign: Campaign): number {
+  return campaign.reserve ?? RESERVE.initial;
+}
