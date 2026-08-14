@@ -65,17 +65,13 @@ docblocks — they are the record of three measured mistakes.
 ### 1.2 Two corrections that ride along
 
 **The floor goes, then comes back.** Deleted 2026-08-13 on
-`campaign-balance.md` §5's own recommendation — pushing the enemy below its
-opening depth was free for them, and the term was made to go negative as the
-player pushed deep. Falsified by measurement the same day: unfloored, the
-term collapses ambition to zero within two to four runs of the player leading
-at all, independent of any `RESERVE` constant, and paralyses the invasion at
-every reach a competent player produces — the reserve mechanic this whole
-document is about never gets exercised. Restored 2026-08-14 by the owner's
-ruling. The unfairness is still answered, just through the correct ledger:
-`costPerStep` in `gainGround` already charges every retaken sector to the
-reserve directly, in stock rather than in ambition, so a deep push costs the
-invasion something without needing this term to remember it.
+`campaign-balance.md` §5's recommendation ("indefensible on its own terms").
+Falsified by measurement the same day: unfloored, the term collapses ambition
+to zero within two to four runs of any player lead, independent of any
+`RESERVE` constant, so the reserve mechanic this document is about never gets
+exercised. Restored 2026-08-14 by the owner's ruling — the fairness is
+answered instead by `costPerStep` in `gainGround`, which already charges
+retaken ground to the reserve directly, in stock rather than in ambition.
 
 **Patrols become the salvage sink.** `patrolCapacity` stops being "one plus a
 yard": the capacity check in `deployPatrol` is removed, so patrols are
