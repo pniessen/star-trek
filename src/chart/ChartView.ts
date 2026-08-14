@@ -5,7 +5,7 @@ import { GLYPH_ADVANCE } from "../hud/strokeFont.js";
 import { colOf, rowOf, GRID } from "./sectors.js";
 import { canDock, countControl, isLost, isWon, type Campaign, type Control } from "./campaign.js";
 import { DECISIONS, HEADINGS, intent, loadoutSummary, refusal, sectorCode } from "./command.js";
-import { isFitted, patrolCapacity, patrolCount, structureSpec, type RefitId, type RunReport } from "./economy.js";
+import { isFitted, patrolCount, structureSpec, type RefitId, type RunReport } from "./economy.js";
 import { regionName, stationName } from "./naming.js";
 import { jumpCharge, jumpEnergy, jumpReach, jumpSteps } from "./jump.js";
 
@@ -777,7 +777,7 @@ function drawReport(
   }
 
   hud.textRight(
-    `PATROLS ${patrolCount(campaign)} OF ${patrolCapacity(campaign)}   ${loadoutSummary(campaign)}`,
+    `PATROLS ${patrolCount(campaign)} IN THE FIELD   ${loadoutSummary(campaign)}`,
     right,
     FOOTER.report,
     1.6,

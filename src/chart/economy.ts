@@ -309,23 +309,27 @@ export function toggleRefit(campaign: Campaign, id: RefitId): boolean {
 
 /**
  * `strategy-layer.md` prices every structure and every refit and leaves the
- * patrol's own cost open, so these four numbers are first-draft guesses in the
- * same category as the flight-model constants — the cheapest thing on the list,
- * priced under a listening post, at a strength that makes the document's
- * "an unsupported patrol on the front dies in ~3 runs" literally true.
+ * patrol's own cost open, so these two numbers are first-draft guesses in the
+ * same category as the flight-model constants — the cheapest thing on the
+ * list, priced under a listening post, at a strength that makes the
+ * document's "an unsupported patrol on the front dies in ~3 runs" literally
+ * true.
+ *
+ * Deliberately repeatable rather than capped: `campaign-balance.md` §5 found
+ * that a finite invasion is the only candidate under which salvage does
+ * anything, and only if it has a sink — patrol capacity at "one plus a yard"
+ * saturates a player's spending inside a week, so the DEPLOY row stopped
+ * mattering once it did. Uncapping it is the cheapest sink that respects "one
+ * currency, four decisions, no submenus": no new row, no new screen, the
+ * player just keeps taking the decision they already had. One-per-sector and
+ * the strength ceiling still bound it, so it converts salvage into attrition
+ * rather than into an unbounded wall.
  */
 export const PATROL = {
   cost: 200,
   /** Fielded at full strength; reinforcing tops it back up to here. */
   maxStrength: 3,
-  /** How many can be in the field at once. A completed Yard adds one. */
-  baseCapacity: 1,
 } as const;
-
-export function patrolCapacity(campaign: Campaign): number {
-  const yards = campaign.sectors.filter((sector) => hasStructure(sector, "yard")).length;
-  return PATROL.baseCapacity + yards;
-}
 
 export function patrolCount(campaign: Campaign): number {
   return campaign.sectors.filter((sector) => sector.patrol).length;
@@ -333,15 +337,15 @@ export function patrolCount(campaign: Campaign): number {
 
 /**
  * Fields a new patrol, or reinforces one already there. Refuses in enemy-held
- * space — a patrol holds ground, it does not take it — and refuses a new one
- * over capacity, which is what a Yard is for.
+ * space — a patrol holds ground, it does not take it — and refuses to
+ * reinforce one already at full strength. No cap on how many can be fielded:
+ * one to a sector is the only ceiling, so salvage is the limit.
  */
 export function deployPatrol(campaign: Campaign, index: number): boolean {
   const sector = campaign.sectors[index];
   if (sector.control === "theirs") return false;
   const existing = sector.patrol;
   if (existing && existing.strength >= PATROL.maxStrength) return false;
-  if (!existing && patrolCount(campaign) >= patrolCapacity(campaign)) return false;
   if (!spendSalvage(campaign, PATROL.cost)) return false;
   if (existing) existing.strength = Math.min(PATROL.maxStrength, existing.strength + 1);
   else sector.patrol = { strength: PATROL.maxStrength };

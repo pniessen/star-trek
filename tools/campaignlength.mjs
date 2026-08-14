@@ -63,7 +63,7 @@ const { newCampaign, creditSalvage, hasStructure, isWon, isLost, ENEMY_START_DEP
   await import("../.campaign-build/chart/campaign.js");
 const {
   advanceCampaign, build, deployPatrol, gainGround,
-  patrolCapacity, patrolCount, toggleRefit, PATROL, REFITS,
+  toggleRefit, PATROL, REFITS,
 } = await import("../.campaign-build/chart/economy.js");
 const { pressureBudget, RESERVE } = await import("../.campaign-build/chart/enemyTurn.js");
 const { makeRng } = await import("../.campaign-build/chart/rng.js");
@@ -114,17 +114,6 @@ const ECONOMY_TAKES = [0, 300, 600, 1200, 2400, 6000];
  * either.
  */
 const CEILING = flag("ceiling", 200);
-/**
- * Patrol capacity, overridden.
- *
- * `--economy` shows salvage above about three hundred a run buying nothing,
- * because the spend list saturates and patrol capacity — one, plus one per
- * yard — is the binding constraint. This is here to test the obvious reply:
- * if salvage had a sink, would the chart start deciding wars? Reaching into
- * `PATROL` is deliberate and is why it lives in the instrument rather than in
- * `economy.ts`; it is a question being asked, not a rule being changed.
- */
-if (args.some((a) => a.startsWith("--patrols="))) PATROL.baseCapacity = flag("patrols", 1);
 
 /** The board the enemy opens holding. Every "how far has the front moved" reads against this. */
 const START_THEIRS = ENEMY_START_DEPTH * GRID;
@@ -179,12 +168,14 @@ function spend(campaign) {
   const line = frontLine(campaign);
   const held = campaign.sectors.filter((s) => s.control === "ours");
 
-  // Enough passes to exhaust the list even with `--patrols` raised well past
-  // its shipped value; the loop breaks as soon as nothing more can be bought.
+  // Enough passes to exhaust the list even with the whole front line bare;
+  // the loop breaks as soon as nothing more can be bought.
   for (let step = 0; step < 32; step++) {
-    // A patrol on undefended front-line ground, if there is room for one.
+    // A patrol on undefended front-line ground, while salvage allows —
+    // patrols are uncapped, so this is a salvage-and-frontage condition now,
+    // not a capacity one.
     const bare = line.find((i) => !campaign.sectors[i].patrol);
-    if (bare !== undefined && patrolCount(campaign) < patrolCapacity(campaign)) {
+    if (bare !== undefined && campaign.salvage >= PATROL.cost) {
       if (deployPatrol(campaign, bare)) continue;
     }
     // Top up one that the front has been grinding down.

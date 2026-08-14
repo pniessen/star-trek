@@ -298,7 +298,7 @@ check(
 
 const {
   STRUCTURES, REFITS, PATROL, NO_REFITS,
-  build, toggleRefit, deployPatrol, patrolCapacity, patrolCount,
+  build, toggleRefit, deployPatrol, patrolCount,
   loadoutOf, gainGround, advanceCampaign, campaignFor, restartCampaign,
   hasAnyStructure, structureSpec,
 } = await import("../.campaign-build/chart/economy.js");
@@ -524,9 +524,6 @@ const post = frontLineOf(held);
 check("a patrol can be fielded", deployPatrol(held, post), `sector ${post}`);
 check("...at full strength", held.sectors[post].patrol.strength === PATROL.maxStrength, `s=${held.sectors[post].patrol.strength}`);
 check("...and costs salvage", held.salvage === 5000 - PATROL.cost, `salvage=${held.salvage}`);
-check("a second patrol is refused without a yard",
-  patrolCapacity(held) === 1 && !deployPatrol(held, homeOf(held)),
-  `capacity=${patrolCapacity(held)}`);
 check("a patrol cannot be pushed into enemy space",
   !deployPatrol(held, held.sectors.findIndex((s) => s.control === "theirs")),
   "holds ground, does not take it");
@@ -548,6 +545,25 @@ check(
 );
 check("...and is gone for good without a yard", patrolCount(held) === 0, `patrols=${patrolCount(held)}`);
 
+// Uncapped: a second patrol costs salvage, not a yard, and the two things
+// that still refuse it — enemy ground, a facing already at full strength —
+// are the same refusals a first patrol always had.
+{
+  const c = newCampaign(17);
+  c.salvage = 1000;
+  const home = c.sectors.findIndex((s) => s.structures.length > 0);
+  const second = c.sectors.findIndex((s, i) => s.control === "ours" && i !== home);
+  check("a second patrol deploys with no yard",
+    deployPatrol(c, home) && deployPatrol(c, second),
+    `salvage=${c.salvage}`);
+  check("patrols still refuse enemy ground",
+    !deployPatrol(c, c.sectors.findIndex((s) => s.control === "theirs")),
+    "deployed into theirs");
+  check("a full-strength patrol still refuses reinforcement",
+    !deployPatrol(c, home),
+    "reinforced past maxStrength");
+}
+
 // A patrol behind the line takes no attrition at all: exposure, not time.
 const rear = newCampaign(105);
 creditSalvage(rear, 5000);
@@ -560,15 +576,13 @@ check(
   `strength=${rear.sectors[homeOf(rear)].patrol && rear.sectors[homeOf(rear)].patrol.strength}`,
 );
 
-// A yard rebuilds losses and fields a second patrol — both halves of what the
-// design says 2,400 salvage buys.
+// A yard rebuilds losses — the ceiling it used to raise is gone now that
+// patrols are uncapped, but the rebuild it always did stands on its own.
 const yarded = newCampaign(106);
 creditSalvage(yarded, 5000);
 yarded.sectors[homeOf(yarded)].structures.push({ kind: "yard", runsRemaining: 0 });
-check("a yard raises the patrol ceiling", patrolCapacity(yarded) === 2, `capacity=${patrolCapacity(yarded)}`);
 const yardPost = frontLineOf(yarded);
 deployPatrol(yarded, yardPost);
-check("...so a second patrol can be fielded", deployPatrol(yarded, homeOf(yarded)), "two in the field");
 for (let i = 0; i < 6; i++) advance(yarded);
 check(
   "a yard rebuilds a patrol the front grinds down",
