@@ -208,12 +208,21 @@ function compose(campaign: Campaign, teach: boolean): [string, CrawlTone][] {
     if (teach) {
       const commander = commanderOf(campaign.seed);
       out.push([`THEIR COMMANDER IS ${commander.given} ${commander.surname}`, "body"]);
-      const DOCTRINE_LINE: Record<Doctrine, string> = {
-        raider: "SPENDS SHIPS LIKE SHOT",
-        hammer: "MASSES BEFORE MOVING",
-        anvil: "PAYS FOR GROUND ONCE AND KEEPS IT",
+      // Two forms per doctrine, not one: the drawn pronoun must agree with its
+      // verb, and THEY takes the plural. SHE and HE share the singular.
+      const DOCTRINE_LINE: Record<Doctrine, { singular: string; plural: string }> = {
+        raider: { singular: "SPENDS SHIPS LIKE SHOT", plural: "SPEND SHIPS LIKE SHOT" },
+        hammer: { singular: "MASSES BEFORE MOVING", plural: "MASS BEFORE MOVING" },
+        anvil: {
+          singular: "PAYS FOR GROUND ONCE AND KEEPS IT",
+          plural: "PAY FOR GROUND ONCE AND KEEP IT",
+        },
       };
-      out.push([`${commander.pronoun} ${DOCTRINE_LINE[commander.doctrine]}`, "note"]);
+      const form = DOCTRINE_LINE[commander.doctrine];
+      out.push([
+        `${commander.pronoun} ${commander.pronoun === "THEY" ? form.plural : form.singular}`,
+        "note",
+      ]);
       gap();
       out.push(["CLEAR A SECTOR TO TAKE IT", "body"]);
       out.push(["THE WAR ENDS WHEN THEY HOLD NOTHING", "note"]);
