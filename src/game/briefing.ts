@@ -335,7 +335,9 @@ export class Briefing {
           ["THE INVASION IS BROKEN", "body"],
           [`${commander.surname} WITHDRAWS`, "body"],
           [
-            `${campaign.runsElapsed} RUNS. THEY STILL HELD ${plural(theirs, "SECTOR")}. IT DID NOT MATTER.`,
+            theirs > 0
+              ? `${campaign.runsElapsed} RUNS. THEY STILL HELD ${plural(theirs, "SECTOR")}. IT DID NOT MATTER.`
+              : `${campaign.runsElapsed} RUNS. THEY HELD NOTHING.`,
             "note",
           ],
           ["", "note"],

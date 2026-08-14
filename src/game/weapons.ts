@@ -153,6 +153,7 @@ const BEAM_LIFE = 0.11;
 interface Streak {
   readonly at: Vector3;
   readonly along: Vector3;
+  readonly color: Color;
   life: number;
 }
 
@@ -309,9 +310,15 @@ export class Ordnance {
    * `along` is expected normalized — it is scaled by `STREAK_HALF` on both
    * sides in `draw`, so an unnormalized caller would draw a streak the wrong
    * length rather than a wrong direction.
+   *
+   * `color` defaults to the bolt colour — a genuine near miss is a shot that
+   * swept close, and every shot in this game is amber. `stepWithdrawals`
+   * passes the hostile's own hue instead: the streak there marks an exit, not
+   * a shot, and the spec calls for it to read as that hostile leaving rather
+   * than as one more near-miss amber line.
    */
-  nearMiss(at: Vector3, along: Vector3): void {
-    this.streaks.push({ at: at.clone(), along: along.clone(), life: 0 });
+  nearMiss(at: Vector3, along: Vector3, color: Color = this.boltColor): void {
+    this.streaks.push({ at: at.clone(), along: along.clone(), color: color.clone(), life: 0 });
   }
 
   update(dt: number): void {
@@ -384,7 +391,7 @@ export class Ordnance {
         streak.at.x + streak.along.x * STREAK_HALF,
         streak.at.y + streak.along.y * STREAK_HALF,
         streak.at.z + streak.along.z * STREAK_HALF,
-        this.boltColor,
+        streak.color,
         2.2 * (1 - t),
       );
     }

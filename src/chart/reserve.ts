@@ -26,10 +26,11 @@ import type { Campaign } from "./campaign.js";
 
 /**
  * **The invasion is finite.** The enemy has a reserve rather than an
- * allowance. It replenishes from the ground it holds, everything it spends
- * comes out of it, and — this is the part a rate-only formula has no
- * equivalent of — **fighting drains it**. Every step of ground a run takes
- * costs the invasion strength it has to make back.
+ * allowance. It replenishes at a flat rate from beyond the chart — see
+ * `regenFlat` below for why that resupply is flat rather than territorial —
+ * everything it spends comes out of it, and — this is the part a rate-only
+ * formula has no equivalent of — **fighting drains it**. Every step of ground
+ * a run takes costs the invasion strength it has to make back.
  *
  * That last clause is why this is a different kind of term rather than a
  * third flavour of escalation. Both of those act on the enemy's *rate*; this

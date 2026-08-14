@@ -659,7 +659,11 @@ export class Fleet {
 
   retire(hostile: Hostile): void {
     const index = this.hostiles.indexOf(hostile);
-    if (index >= 0) this.hostiles.splice(index, 1);
+    // Idempotent: a hostile not found here has already been retired, and
+    // pushing its shape into the pool a second time would let two different
+    // live hostiles pop the same shape back out from under each other.
+    if (index < 0) return;
+    this.hostiles.splice(index, 1);
     hostile.shape.group.visible = false;
     this.pool[hostile.kind].push(hostile.shape);
   }

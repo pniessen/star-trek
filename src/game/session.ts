@@ -1004,7 +1004,13 @@ export class Session {
     for (const hostile of [...this.fleet.hostiles]) {
       if (!hostile.withdrawing) continue;
       if (hostile.position.distanceTo(player.position) < WITHDRAW.exitRange) continue;
-      this.ordnance.nearMiss(hostile.position, hostile.velocity.clone().normalize());
+      // The hostile's own hue, not the amber a genuine near miss draws — this
+      // streak marks a class leaving the fight, not a shot that swept close.
+      this.ordnance.nearMiss(
+        hostile.position,
+        hostile.velocity.clone().normalize(),
+        HOSTILE_COLORS[hostile.kind],
+      );
       sound.withdraw(hostile.position.x, hostile.position.z);
       this.fleet.retire(hostile);
     }
