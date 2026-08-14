@@ -117,51 +117,65 @@ export const GIANT = {
   heightSegments: 32,
 
   // ── colour ─────────────────────────────────────────────────────────────
-  // The owner lifted every hue/saturation constraint for this body — §4.1's
-  // "genuinely orange Jupiter" carve-out already exempted celestial bodies
-  // from the strokes' palette rule, and this task removed the narrower
-  // constraint the swatch build had additionally imposed on itself (a tight
-  // hue band, to close off a magenta roll that once collided with the
-  // Shroud's own colour). What is below is now a *choice*, sampled from
-  // `01_full-disc_belts-zones_PIA04866_cassini.jpg` and
-  // `03_belt-zone-boundary_closeup_PIA00574_galileo.jpg` rather than derived
-  // from a rule: warm cream zones, rust-to-brown belts, a cooler grey-blue
-  // at both the poles and the belt/zone boundary itself — because that is
-  // what a gas giant actually looks like, not because anything requires it.
+  // Unconstrained randomness has now produced a bad Jupiter twice — a
+  // magenta roll, then a washed-out cream one — and both times the fix that
+  // held was the same shape: the palette is not sampled per sector, it is
+  // fixed, from a Hubble full-disc reference, and only rolled around a
+  // narrow hue anchor plus band widths, turbulence detail and storm
+  // placement. Lightness and saturation are the load-bearing axes and they
+  // are hand-specified below, never randomised — the washed-out roll came
+  // from an *averaged* pixel sample (mixing turbulent zones and belts to one
+  // mid grey, the same mistake as reading a photograph of a forest as "the
+  // colour of a forest"), and averaging a continuous field was always going
+  // to erase exactly the contrast it was meant to capture. Four
+  // relationships are the actual specification and hold for every seed —
+  // see `assertPaletteContract` below, which throws rather than let a later
+  // tuning pass quietly flatten them again:
+  //  1. Lightness spans at least 0.30 to 0.90 across the disc — that range
+  //     is what "pops".
+  //  2. Saturation *contrasts*: zones near-neutral (~0.12-0.18), belts
+  //     properly saturated (~0.35-0.45). One saturation everywhere is mud.
+  //  3. Exactly one high-saturation accent — the storm, ~0.75 — and nothing
+  //     else may approach it, or the focal point is lost.
+  //  4. The poles are cool (h≈205) against warm bands; the complementary
+  //     contrast is what makes the warm read warmer.
 
-  /** The body's hue anchor, degrees, still rolled per sector — kept in the
-   * same warm range the swatch build used, now because the reference is
-   * warm, not because a wider roll is forbidden. */
-  baseHueMin: 24,
-  baseHueMax: 46,
-  /** Four colour stops the flow value `t` (see `flow` in `BODY_FRAGMENT`) is
+  /** The body's hue anchor, degrees, rolled per sector across a narrow band
+   * — "a few degrees," not the 22-degree spread the mud roll came from.
+   * Character varies; whether the planet has contrast never does. */
+  baseHueMin: 27,
+  baseHueMax: 35,
+  /** Six colour stops the flow value `t` (see `flow` in `BODY_FRAGMENT`) is
    * ramped across, each an offset from `uHue` plus its own saturation and
-   * lightness — pale cream zone, warm tan transition, rust belt, deep
-   * brown-red belt. This is the same "drama is in value, not hue" reading
-   * the Cassini reference gave the swatch build, expressed as a continuous
-   * ramp over a *continuous* field instead of a discrete lookup over a
-   * discrete one — the mechanism that made bands read as stripes no matter
-   * how the stops were tuned. */
+   * lightness — warm near-white zone, pale cream zone, tan transition,
+   * rust belt, dark rust-brown belt, deepest brown-red belt. Two more stops
+   * than the previous build: that one topped out at the pale-zone stop
+   * (l=0.8) and bottomed at one "deep" stop (l=0.22 but only s=0.36) — never
+   * hitting the near-white top the brief's own lightness floor requires, and
+   * never separating "belt" from "darkest belt" enough to read as two
+   * different depths rather than one long fade. The ramp over a *continuous*
+   * field, rather than a discrete lookup, is unchanged from the previous
+   * build — that is what keeps bands from reading as stripes — only the
+   * stops themselves are now anchored to the Hubble reference instead of
+   * chosen freehand. */
+  brightHueOffset: 10,
+  brightSaturation: 0.12,
+  brightLightness: 0.9,
   zoneHueOffset: 8,
-  zoneSaturation: 0.16,
-  /** Held below the swatch build's own 0.88-0.9 — `Stage.ts`'s bloom fires
-   * above a luminance of 0.5 (`UnrealBloomPass`'s own threshold, tuned for
-   * traces and never touched by this file), and a lightness this close to 1
-   * pushes most of the sunlit hemisphere over that line at once, which
-   * blooms the whole disc into a flat wash and erases the very texture item
-   * 1-4 exist to add. The swatch build never hit this because its bands were
-   * uniform patches large enough to still read as banded even blurred; a
-   * continuous noise field has no such patches to fall back on. */
+  zoneSaturation: 0.18,
   zoneLightness: 0.8,
-  midHueOffset: 3,
-  midSaturation: 0.3,
-  midLightness: 0.56,
-  beltHueOffset: -4,
-  beltSaturation: 0.44,
-  beltLightness: 0.44,
-  deepHueOffset: -10,
-  deepSaturation: 0.36,
-  deepLightness: 0.22,
+  midHueOffset: 2,
+  midSaturation: 0.28,
+  midLightness: 0.66,
+  beltHueOffset: -10,
+  beltSaturation: 0.4,
+  beltLightness: 0.5,
+  darkBeltHueOffset: -14,
+  darkBeltSaturation: 0.42,
+  darkBeltLightness: 0.36,
+  deepHueOffset: -16,
+  deepSaturation: 0.38,
+  deepLightness: 0.28,
   /** The boundary streamer's own colour — pale grey-blue, fixed rather than
    * relative to `uHue`, matching the turbulent cloud tone the Galileo
    * close-up shows precisely at a belt/zone transition and nowhere else.
@@ -261,12 +275,17 @@ export const GIANT = {
    * distortion the way real weather wraps around a vortex, instead of
    * sitting on top of it. */
   vortexStrength: 2.6,
-  /** The storm's own hue offset from `uHue`, saturation and lightness — a
-   * distinct warm rust-orange, the one place on the disc allowed to read as
-   * a single named feature rather than a texture. */
-  stormHueOffset: -22,
-  stormSaturation: 0.56,
-  stormLightness: 0.4,
+  /** The storm's own hue offset from `uHue`, saturation and lightness. The
+   * Hubble reference's Great Red Spot is not a different *hue* from the
+   * surrounding tan (it sits at the same offset as `midHueOffset`, both
+   * roughly 32° absolute) — it is a much more saturated one, s=0.75 against
+   * a belt ceiling of 0.42. That gap is relationship 3 of the palette
+   * contract: the storm is the one accent the eye is allowed to land on, and
+   * a second high-saturation feature anywhere else on the body would split
+   * that focal point. `assertPaletteContract` enforces the margin. */
+  stormHueOffset: 2,
+  stormSaturation: 0.75,
+  stormLightness: 0.55,
 
   // ── poles ──────────────────────────────────────────────────────────────
 
@@ -287,10 +306,13 @@ export const GIANT = {
    * the one hue constant in the file that is not an offset from `baseHue`. */
   poleHue: 205,
   /** The cap's own saturation and lightness once the blend above is complete
-   * — muted, and darker than every zone stop, so the poles read as
-   * "essentially bandless and dim" rather than as one more stripe. */
-  poleSaturation: 0.14,
-  poleLightness: 0.38,
+   * — muted, near-neutral like the zone stops rather than dark like the
+   * belts, so the poles read as their own cool, low-drama region rather than
+   * as one more (very dark) stripe. Relationship 4 of the palette contract
+   * is `poleHue` against `baseHueMin`/`baseHueMax` above, not this pair —
+   * see `assertPaletteContract`. */
+  poleSaturation: 0.12,
+  poleLightness: 0.46,
 
   // ── lighting (§3.1, done per fragment instead of by `MeshStandardMaterial`) ─
 
@@ -340,10 +362,92 @@ export const GIANT = {
   /** Fresnel exponent — higher pulls the glow tighter to the true silhouette. */
   limbPower: 2.6,
   /** Brightness multiplier at full fresnel, before bloom's own threshold.
-   * Above 1 on purpose — this is the one place on the body meant to cross
-   * it, the mechanism behind "phosphorescent" in the brief. */
-  limbIntensity: 1.7,
+   * Still above 1 on purpose — this is the one place on the body meant to
+   * cross it, the mechanism behind "phosphorescent" in the brief — but
+   * pulled down from 1.7. At 1.7 the fresnel rim was crossing bloom's
+   * threshold by enough that the pass spread it into a solid white ring that
+   * ate the true silhouette instead of rimming it; the edge read as a halo
+   * swallowing the planet rather than atmosphere sitting on top of one. 1.1
+   * still blooms — the rim is still lit past the threshold — it just no
+   * longer dominates it. */
+  limbIntensity: 1.1,
 } as const;
+
+/** Circular hue distance in degrees, 0-180. */
+function hueDistance(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+/**
+ * The four structural relationships from the task brief, checked against the
+ * literal `GIANT` numbers rather than left to a comment alone — a mud roll
+ * has already happened twice on this feature (once from an unconstrained hue
+ * roll, once from flattening every stop to one saturation), and a comment is
+ * exactly the kind of thing a future tuning pass reads once and then stops
+ * reading. This throws at import time, so a violation fails the build long
+ * before it fails a screenshot review. Nothing here depends on the per-sector
+ * seed roll — every quantity checked is a fixed constant — so it runs once,
+ * unconditionally, module-load, not per `show()`.
+ */
+function assertPaletteContract(): void {
+  const zoneStops = [
+    ["bright", GIANT.brightSaturation, GIANT.brightLightness],
+    ["zone", GIANT.zoneSaturation, GIANT.zoneLightness],
+  ] as const;
+  const beltStops = [
+    ["mid", GIANT.midSaturation, GIANT.midLightness],
+    ["belt", GIANT.beltSaturation, GIANT.beltLightness],
+    ["darkBelt", GIANT.darkBeltSaturation, GIANT.darkBeltLightness],
+    ["deep", GIANT.deepSaturation, GIANT.deepLightness],
+  ] as const;
+  const allStops = [...zoneStops, ...beltStops] as const;
+
+  // 1. Lightness spans at least 0.30 to 0.90.
+  const lightnesses = allStops.map(([, , l]) => l);
+  const lMin = Math.min(...lightnesses);
+  const lMax = Math.max(...lightnesses);
+  if (lMin > 0.3 || lMax < 0.9) {
+    throw new Error(
+      `GasGiant palette: lightness spans ${lMin.toFixed(2)}-${lMax.toFixed(2)}, ` +
+        `needs at least 0.30-0.90 or the body stops popping`,
+    );
+  }
+
+  // 2. Saturation contrasts — zones near-neutral, belts properly saturated.
+  for (const [name, s] of zoneStops) {
+    if (s > 0.2) {
+      throw new Error(`GasGiant palette: zone stop "${name}" at s=${s} is not near-neutral (>0.20)`);
+    }
+  }
+  for (const [name, s] of beltStops) {
+    if (s < 0.25) {
+      throw new Error(`GasGiant palette: belt stop "${name}" at s=${s} has flattened toward the zones (<0.25)`);
+    }
+  }
+
+  // 3. Exactly one high-saturation accent — the storm — and nothing else may
+  // approach it. "Approach" is drawn at 0.5: comfortably above every belt
+  // stop's own ceiling (~0.42) and comfortably below the storm's own 0.75,
+  // so tightening a belt for its own reasons cannot silently erode the
+  // storm's exclusivity without tripping this.
+  for (const [name, s] of allStops) {
+    if (s >= 0.5) {
+      throw new Error(`GasGiant palette: "${name}" at s=${s} rivals the storm — the focal point would be lost`);
+    }
+  }
+  if (GIANT.stormSaturation < 0.65) {
+    throw new Error(`GasGiant palette: storm saturation ${GIANT.stormSaturation} is no longer a clear accent`);
+  }
+
+  // 4. Poles are cool against warm bands — a wide hue separation from the
+  // body's own warm anchor, not merely "a different number".
+  const anchor = (GIANT.baseHueMin + GIANT.baseHueMax) / 2;
+  if (hueDistance(GIANT.poleHue, anchor) < 120) {
+    throw new Error(`GasGiant palette: pole hue ${GIANT.poleHue} is too close to the warm anchor ${anchor}`);
+  }
+}
+assertPaletteContract();
 
 /**
  * `limb`'s own material. A minimal fresnel shader rather than a stock
@@ -435,6 +539,9 @@ uniform float uEdgeGain;
 uniform float uEdgeLow;
 uniform float uEdgeHigh;
 uniform float uEdgeMix;
+uniform float uBrightHue;
+uniform float uBrightSaturation;
+uniform float uBrightLightness;
 uniform float uZoneHue;
 uniform float uZoneSaturation;
 uniform float uZoneLightness;
@@ -444,6 +551,9 @@ uniform float uMidLightness;
 uniform float uBeltHue;
 uniform float uBeltSaturation;
 uniform float uBeltLightness;
+uniform float uDarkBeltHue;
+uniform float uDarkBeltSaturation;
+uniform float uDarkBeltLightness;
 uniform float uDeepHue;
 uniform float uDeepSaturation;
 uniform float uDeepLightness;
@@ -642,15 +752,26 @@ void main() {
   // band still cannot paint the streamer color.
   float edge = smoothstepc(uEdgeLow, uEdgeHigh, abs(fEdge - fEdgeShift) * uEdgeGain);
 
+  // Six stops now, not four — see GIANT's own comment on why a fixed,
+  // hand-specified palette replaced a sampled one, and why bright/darkBelt
+  // were added rather than only retuning the original four. Five equal
+  // 0.2-wide segments instead of the old three uneven ones (0.4/0.3/0.3):
+  // uneven segments would let one pair of stops dominate the disc's area at
+  // the expense of the others, which is a second route to the same "reads
+  // as one mid-tone" failure the flattened saturation caused.
   float t = clamp(f * uFlowContrast * 0.5 + 0.5, 0.0, 1.0);
+  vec3 stopBright = hsl2rgb(hueFrac(uHue + uBrightHue), uBrightSaturation, uBrightLightness);
   vec3 stopZone = hsl2rgb(hueFrac(uHue + uZoneHue), uZoneSaturation, uZoneLightness);
   vec3 stopMid = hsl2rgb(hueFrac(uHue + uMidHue), uMidSaturation, uMidLightness);
   vec3 stopBelt = hsl2rgb(hueFrac(uHue + uBeltHue), uBeltSaturation, uBeltLightness);
+  vec3 stopDarkBelt = hsl2rgb(hueFrac(uHue + uDarkBeltHue), uDarkBeltSaturation, uDarkBeltLightness);
   vec3 stopDeep = hsl2rgb(hueFrac(uHue + uDeepHue), uDeepSaturation, uDeepLightness);
   vec3 albedo;
-  if (t < 0.4) albedo = mix(stopZone, stopMid, smoothstepc(0.0, 0.4, t));
-  else if (t < 0.7) albedo = mix(stopMid, stopBelt, smoothstepc(0.4, 0.7, t));
-  else albedo = mix(stopBelt, stopDeep, smoothstepc(0.7, 1.0, t));
+  if (t < 0.2) albedo = mix(stopBright, stopZone, smoothstepc(0.0, 0.2, t));
+  else if (t < 0.4) albedo = mix(stopZone, stopMid, smoothstepc(0.2, 0.4, t));
+  else if (t < 0.6) albedo = mix(stopMid, stopBelt, smoothstepc(0.4, 0.6, t));
+  else if (t < 0.8) albedo = mix(stopBelt, stopDarkBelt, smoothstepc(0.6, 0.8, t));
+  else albedo = mix(stopDarkBelt, stopDeep, smoothstepc(0.8, 1.0, t));
 
   vec3 streamer = hsl2rgb(hueFrac(uStreamerHue), uStreamerSaturation, uStreamerLightness);
   albedo = mix(albedo, streamer, edge * uEdgeMix);
@@ -780,6 +901,9 @@ export class GasGiant {
           uEdgeLow: { value: GIANT.edgeLow },
           uEdgeHigh: { value: GIANT.edgeHigh },
           uEdgeMix: { value: GIANT.edgeMix },
+          uBrightHue: { value: GIANT.brightHueOffset },
+          uBrightSaturation: { value: GIANT.brightSaturation },
+          uBrightLightness: { value: GIANT.brightLightness },
           uZoneHue: { value: GIANT.zoneHueOffset },
           uZoneSaturation: { value: GIANT.zoneSaturation },
           uZoneLightness: { value: GIANT.zoneLightness },
@@ -789,6 +913,9 @@ export class GasGiant {
           uBeltHue: { value: GIANT.beltHueOffset },
           uBeltSaturation: { value: GIANT.beltSaturation },
           uBeltLightness: { value: GIANT.beltLightness },
+          uDarkBeltHue: { value: GIANT.darkBeltHueOffset },
+          uDarkBeltSaturation: { value: GIANT.darkBeltSaturation },
+          uDarkBeltLightness: { value: GIANT.darkBeltLightness },
           uDeepHue: { value: GIANT.deepHueOffset },
           uDeepSaturation: { value: GIANT.deepSaturation },
           uDeepLightness: { value: GIANT.deepLightness },
