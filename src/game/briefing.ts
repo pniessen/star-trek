@@ -1,4 +1,5 @@
 import { canDock, countControl, type Campaign } from "../chart/campaign.js";
+import { commanderOf, warAct, type Doctrine } from "../chart/commander.js";
 import { planFixture } from "./comet.js";
 import { jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode, stationName } from "../chart/naming.js";
@@ -194,8 +195,26 @@ function compose(campaign: Campaign, teach: boolean): [string, CrawlTone][] {
       reach === 0 ? "WE ARE STANDING IN ONE" : `THEIR EDGE ${plural(reach, "SECTOR")} OUT`,
       "note",
     ]);
+    const act = warAct(campaign);
+    out.push([
+      act === "surge"
+        ? "THEIR SUPPLY RUNS DEEP"
+        : act === "failing"
+          ? "THEY ARE SPENDING THEIR LAST"
+          : "THEIR RESERVE STRAINS",
+      "note",
+    ]);
     gap();
     if (teach) {
+      const commander = commanderOf(campaign.seed);
+      out.push([`THEIR COMMANDER IS ${commander.given} ${commander.surname}`, "body"]);
+      const DOCTRINE_LINE: Record<Doctrine, string> = {
+        raider: "SPENDS SHIPS LIKE SHOT",
+        hammer: "MASSES BEFORE MOVING",
+        anvil: "PAYS FOR GROUND ONCE AND KEEPS IT",
+      };
+      out.push([`${commander.pronoun} ${DOCTRINE_LINE[commander.doctrine]}`, "note"]);
+      gap();
       out.push(["CLEAR A SECTOR TO TAKE IT", "body"]);
       out.push(["THE WAR ENDS WHEN THEY HOLD NOTHING", "note"]);
       gap();

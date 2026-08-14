@@ -335,6 +335,11 @@ check(
   truth.lines.includes("CLEAR A SECTOR TO TAKE IT"),
   JSON.stringify(truth.lines),
 );
+check(
+  "...and names the enemy commander",
+  truth.lines.some((line) => line.startsWith("THEIR COMMANDER IS")),
+  JSON.stringify(truth.lines),
+);
 
 // And any key ends it on the frame it arrives. Everything below this line
 // depends on that: the log holds the session, so a wave would never spawn.
