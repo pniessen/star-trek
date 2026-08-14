@@ -59,8 +59,20 @@ export const RESERVE = {
    * less, because the enemy's rate rising with its territory amplifies
    * whatever happened in the first few runs. Flat resupply is the only
    * version with no amplifier in it.
+   *
+   * Retuned from 22 to 24 on 2026-08-14, after the territory floor in
+   * `enemyTurn.ts`'s `sectorsHeldBeyondStart` was restored (see that
+   * function's own docblock). At 24, reach 4 — the low end of a competent
+   * player's plausible steps-per-run, per `campaign-balance.md` §6 — wins
+   * 83.4% of 1000 seeds inside 40 runs (median 26) and 100% inside 200
+   * (`--sweep --vary`, `--ceiling=40` and uncapped). That is a recorded
+   * compromise, not a clean hit on the 30–70% band: criterion (b) (median
+   * ≤~25, ≥60% resolved) was held as the tie-breaker per the owner's ruling,
+   * and every regenFlat that puts reach 4's win rate inside 30–70% pushes its
+   * median past 30. See `docs/campaign-balance.md`'s "Adopted, 2026-08-14"
+   * section for the full sweep.
    */
-  regenFlat: 22,
+  regenFlat: 24,
   /** Kept at zero. Non-zero reintroduces exactly the amplifier described above. */
   regenPerSector: 0,
   max: 40,
@@ -93,8 +105,16 @@ export const RESERVE = {
    *
    * At 3, against a player whose reach varies run to run, reach 3 comes out
    * 62/38 won to lost with the war still resolving, reach 2 is nearly always
-   * lost and reach 4 nearly always won. That is the first contested band this
-   * campaign has ever produced.
+   * lost and reach 4 nearly always won. That was the first contested band
+   * this campaign ever produced, measured before patrols were uncapped and
+   * before the territory floor below was restored — the band has since moved
+   * (see `regenFlat`), but the number this constant turns on has not.
+   *
+   * Re-measured on 2026-08-14, alongside the `regenFlat` retune: raising it
+   * does not widen the contested band, it erases it. At `costPerStep=4` or
+   * above, reach 4 jumps to 94%+ won regardless of `regenFlat`, because the
+   * exhaustion win starts firing before the territorial one has time to be
+   * in doubt. Left at 3.
    */
   costPerStep: 3,
   /**
