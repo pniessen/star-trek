@@ -1,7 +1,9 @@
 import { countControl, hasStructure, ENEMY_START_DEPTH, type Campaign, type Sector } from "./campaign.js";
 import { GRID, neighbours } from "./sectors.js";
-import { ENTRENCH, feedbackOn, RESERVE, SUPPLY } from "./feedback.js";
+import { RESERVE } from "./reserve.js";
 import type { Rng } from "./rng.js";
+
+export { RESERVE };
 
 /**
  * Retuned from strategy-layer.md's `3 + floor(runs / 4) + lost * 0.5`.
@@ -40,40 +42,31 @@ export interface EnemyAction {
 }
 
 /**
- * Sectors the enemy holds beyond the depth it opened with, floored at zero.
- * This is what `campaign.sectorsLost` was trying to be, read live off the
- * board instead of accumulated: `sectorsLost` only ever increments, so a
- * campaign that lost ground and then retook it stayed charged for ground it
- * no longer holds. Deriving it from the board means retaking a sector lowers
- * this — and the pressure budget with it — the instant control flips back.
+ * Sectors the enemy holds beyond the depth it opened with. This is what
+ * `campaign.sectorsLost` was trying to be, read live off the board instead of
+ * accumulated: `sectorsLost` only ever increments, so a campaign that lost
+ * ground and then retook it stayed charged for ground it no longer holds.
+ * Deriving it from the board means retaking a sector lowers this — and the
+ * pressure budget with it — the instant control flips back.
+ *
+ * Unfloored: pushing the enemy below the depth it opened with now lowers
+ * ambition below base rather than bottoming out at zero, so a deep advance
+ * buys something the old floor could not pay out. `pressureBudget` clamps the
+ * sum, not this term — see its own comment.
  */
 function sectorsHeldBeyondStart(campaign: Campaign): number {
-  return Math.max(0, countControl(campaign, "theirs") - ENEMY_START_DEPTH * GRID);
+  return countControl(campaign, "theirs") - ENEMY_START_DEPTH * GRID;
 }
 
 export function pressureBudget(campaign: Campaign): number {
   const clock = Math.floor(campaign.runsElapsed / PRESSURE.runsPerStep);
+  const ambition = Math.max(0, PRESSURE.base + clock + sectorsHeldBeyondStart(campaign));
 
-  // Candidate: supply lines. Everything the invasion spends, escalation
-  // included, is drawn from the ground it holds — so losing ground weakens it
-  // in proportion rather than only above the depth it opened with. Off unless
-  // `tools/campaignlength.mjs` turns it on; see `feedback.ts`.
-  if (feedbackOn("supply")) {
-    const share = countControl(campaign, "theirs") / (ENEMY_START_DEPTH * GRID);
-    return Math.max(SUPPLY.floor, Math.round((PRESSURE.base + clock) * share));
-  }
-
-  const ambition = PRESSURE.base + clock + sectorsHeldBeyondStart(campaign);
-
-  // Candidate: the invasion is finite. The formula above becomes what the
-  // enemy would like to spend; what it can spend is whatever is left in the
-  // reserve. Replenishment and the player's drain are applied in
-  // `runEnemyTurn`, which is the only thing that takes a turn.
-  if (feedbackOn("reserve")) {
-    return Math.min(ambition, Math.floor(reserveOf(campaign) * RESERVE.commit));
-  }
-
-  return ambition;
+  // The formula above is what the enemy would like to spend; what it can
+  // spend is whatever is left in the reserve. Replenishment and the player's
+  // drain are applied in `runEnemyTurn`, which is the only thing that takes a
+  // turn.
+  return Math.min(ambition, Math.floor(reserveOf(campaign) * RESERVE.commit));
 }
 
 /** Seeded on first read rather than in `newCampaign`, so saves stay unchanged. */
@@ -104,40 +97,39 @@ function defenceOf(sector: Sector): number {
 export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
   resolveIncoming(campaign);
 
-  // Candidate: the invasion is finite. Replenishment happens before the spend
-  // and from the board as it stands after last turn's pushes landed, so ground
-  // taken during the run is ground that does not pay for this turn's attack.
-  if (feedbackOn("reserve")) {
-    /**
-     * Exhaustion is measured on *arrival*, before the resupply lands, and it has
-     * to be — measured after, it is unreachable arithmetic.
-     *
-     * The first version counted an empty reserve at the end of the turn, after
-     * regen and after the spend. That can never happen. Regen puts at least
-     * `regenFlat` in the pot before anything is spent, and `commit` caps a turn's
-     * spending at a fraction of what is held, so the closing balance has a hard
-     * floor of about half the resupply. The counter never incremented, `isWon`
-     * never fired, and every measured campaign under this term ran to the turn
-     * cap unresolved — the exact "removes the defeat, supplies no victory"
-     * failure the term was written to avoid, arrived at by an off-by-one-phase
-     * rather than by the design being wrong.
-     *
-     * The player's fighting *was* draining it to nothing all along, in
-     * `economy.ts` as ground is taken. What was missing is that the drain was
-     * only ever observed one instant after being refilled.
-     *
-     * Arrival is also the reading that means something. "The invasion began this
-     * turn with nothing left" is what broken looks like from the board; "it spent
-     * down to nothing and was immediately resupplied" is just a busy turn.
-     */
-    const arrived = reserveOf(campaign);
-    campaign.exhausted = arrived < 1 ? (campaign.exhausted ?? 0) + 1 : 0;
+  /**
+   * Replenishment happens before the spend and from the board as it stands
+   * after last turn's pushes landed, so ground taken during the run is
+   * ground that does not pay for this turn's attack.
+   *
+   * Exhaustion is measured on *arrival*, before the resupply lands, and it has
+   * to be — measured after, it is unreachable arithmetic.
+   *
+   * The first version counted an empty reserve at the end of the turn, after
+   * regen and after the spend. That can never happen. Regen puts at least
+   * `regenFlat` in the pot before anything is spent, and `commit` caps a turn's
+   * spending at a fraction of what is held, so the closing balance has a hard
+   * floor of about half the resupply. The counter never incremented, `isWon`
+   * never fired, and every measured campaign under this term ran to the turn
+   * cap unresolved — the exact "removes the defeat, supplies no victory"
+   * failure the term was written to avoid, arrived at by an off-by-one-phase
+   * rather than by the design being wrong.
+   *
+   * The player's fighting *was* draining it to nothing all along, in
+   * `economy.ts` as ground is taken. What was missing is that the drain was
+   * only ever observed one instant after being refilled.
+   *
+   * Arrival is also the reading that means something. "The invasion began this
+   * turn with nothing left" is what broken looks like from the board; "it spent
+   * down to nothing and was immediately resupplied" is just a busy turn.
+   */
+  const arrived = reserveOf(campaign);
+  campaign.exhausted = arrived < 1 ? (campaign.exhausted ?? 0) + 1 : 0;
 
-    campaign.reserve = Math.min(
-      RESERVE.max,
-      arrived + RESERVE.regenFlat + RESERVE.regenPerSector * countControl(campaign, "theirs"),
-    );
-  }
+  campaign.reserve = Math.min(
+    RESERVE.max,
+    arrived + RESERVE.regenFlat + RESERVE.regenPerSector * countControl(campaign, "theirs"),
+  );
 
   let budget = pressureBudget(campaign);
   const spendable = budget;
@@ -182,13 +174,11 @@ export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
   // Only what was actually spent comes out — budget the enemy could not place
   // for want of a target stays in the reserve, which is what lets a compressed
   // invasion bank for one hard counter-attack instead of evaporating.
-  if (feedbackOn("reserve")) {
-    campaign.reserve = reserveOf(campaign) - (spendable - budget);
-    // The exhaustion counter is *not* touched here. It is measured on arrival,
-    // at the top of this function, for the reason given there: a closing balance
-    // has a floor built into it by regen and `commit`, so counting it here can
-    // never see zero and the victory can never fire.
-  }
+  campaign.reserve = reserveOf(campaign) - (spendable - budget);
+  // The exhaustion counter is *not* touched here. It is measured on arrival,
+  // at the top of this function, for the reason given there: a closing balance
+  // has a floor built into it by regen and `commit`, so counting it here can
+  // never see zero and the victory can never fire.
 
   return actions;
 }
@@ -201,12 +191,6 @@ function priceOf(
     // Assault only lands on ground already theirs, per the design table.
     if (sector.structures.length > 0) {
       return { kind: "assault", cost: ACTION_COST.assault };
-    }
-    // Candidate: entrenchment. Consolidate stays available until the ground is
-    // dug in as far as it goes, rather than stopping at threat 5 — which is
-    // where the enemy's own two back rows start, so today it stops at once.
-    if (feedbackOn("entrench") && (sector.entrenched ?? 0) < ENTRENCH.max) {
-      return { kind: "consolidate", cost: ACTION_COST.consolidate };
     }
     if (sector.threat < 5) return { kind: "consolidate", cost: ACTION_COST.consolidate };
     return { kind: null, cost: 0 };
@@ -222,11 +206,6 @@ function apply(campaign: Campaign, index: number, kind: EnemyAction["kind"]): vo
   switch (kind) {
     case "consolidate":
       sector.threat = Math.min(5, sector.threat + 1);
-      // Candidate: entrenchment. The same action, given something to buy once
-      // threat has topped out — which on the enemy's own ground it already has.
-      if (feedbackOn("entrench")) {
-        sector.entrenched = Math.min(ENTRENCH.max, (sector.entrenched ?? 0) + 1);
-      }
       break;
     case "assault":
       // Retaking ground costs more than holding it: what they break is gone.

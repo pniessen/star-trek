@@ -47,18 +47,17 @@
  *    being told a different thing about the model than one who never advances.
  *  - **`--sweep`**, which runs the whole reach ladder in one command and says
  *    outright whether there is a **contested band** — a range of reach values
- *    where the same rules produce both wins and losses. A candidate feedback
- *    term that only moves the threshold has failed, and the sweep is the one
- *    reading that shows the difference.
+ *    where the same rules produce both wins and losses. A rule change that
+ *    only moves the threshold has failed, and the sweep is the one reading
+ *    that shows the difference.
  *
  *   npm run campaignlength -- [trials] [--take=N] [--reach=N] [--refits] [--vary]
- *                             [--feedback=SPEC] [--tune=K=V,…] [--sweep] [--trace=SEED]
+ *                             [--tune=K=V,…] [--sweep] [--trace=SEED]
  *
- * `--feedback` selects the candidate terms in `chart/feedback.ts`, plus-joined
- * — `--feedback=supply+entrench`. The default is `none`, which is the shipped
- * game exactly. `--tune=reserve.regenPerSector=0.5` moves a candidate's own
- * constants, because a candidate is only worth a verdict once it has been tried
- * at more than the first numbers somebody wrote down.
+ * `--tune=reserve.regenPerSector=0.5` moves the shipped invasion's own
+ * constants — `RESERVE` in `chart/reserve.ts` — directly, because a balance
+ * pass is only worth a verdict once it has been tried at more than the first
+ * numbers somebody wrote down.
  */
 const { newCampaign, creditSalvage, hasStructure, isWon, isLost, ENEMY_START_DEPTH } =
   await import("../.campaign-build/chart/campaign.js");
@@ -66,9 +65,7 @@ const {
   advanceCampaign, build, deployPatrol, gainGround,
   patrolCapacity, patrolCount, toggleRefit, PATROL, REFITS,
 } = await import("../.campaign-build/chart/economy.js");
-const { pressureBudget } = await import("../.campaign-build/chart/enemyTurn.js");
-const { setFeedback, describeFeedback, describeTuning, tune } =
-  await import("../.campaign-build/chart/feedback.js");
+const { pressureBudget, RESERVE } = await import("../.campaign-build/chart/enemyTurn.js");
 const { makeRng } = await import("../.campaign-build/chart/rng.js");
 const { GRID, SECTOR_COUNT, neighbours } = await import("../.campaign-build/chart/sectors.js");
 
@@ -102,7 +99,6 @@ const REACH = flag("reach", 3);
 const BUY_REFITS = args.includes("--refits");
 /** Draw each run's reach from a Poisson about `--reach` rather than using it flat. */
 const VARY = args.includes("--vary");
-const FEEDBACK = text("feedback", "none");
 const SWEEP = args.some((a) => a === "--sweep" || a.startsWith("--sweep="));
 const SWEEP_REACHES = (text("sweep", "") || "1,2,3,4,5,6,7,8,10")
   .split(",").map(Number).filter((n) => Number.isFinite(n));
@@ -133,9 +129,16 @@ if (args.some((a) => a.startsWith("--patrols="))) PATROL.baseCapacity = flag("pa
 /** The board the enemy opens holding. Every "how far has the front moved" reads against this. */
 const START_THEIRS = ENEMY_START_DEPTH * GRID;
 
-setFeedback(FEEDBACK);
-tune(text("tune", ""));
-if (FEEDBACK !== "none") console.log(`terms       ${describeTuning()}`);
+const tuneSpec = text("tune", "");
+if (tuneSpec) {
+  for (const clause of tuneSpec.split(",")) {
+    const [path, raw] = clause.split("=");
+    const key = path.replace(/^reserve\./, "");
+    if (!(key in RESERVE)) throw new Error(`unknown tunable "${path}"`);
+    RESERVE[key] = Number(raw);
+  }
+  console.log(`tuned       ${tuneSpec}`);
+}
 
 // ── the model player ────────────────────────────────────────────────────────
 
@@ -395,7 +398,7 @@ function report(stats, label) {
 
 const label = (reach) =>
   `take=${TAKE}/run  reach=${reach}${VARY ? " mean (poisson)" : ""} steps/run  ` +
-  `refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`;
+  `refits=${BUY_REFITS ? "bought" : "not modelled"}`;
 
 if (TRACE !== null) {
   // One campaign, run by run. The aggregate says which way a war went; this
@@ -422,9 +425,8 @@ if (TRACE !== null) {
   // Does the chart participate in the war at all? Salvage buys patrols,
   // outposts, starbases and yards; if a run banking nothing and a run banking
   // five times the going rate resolve the same way, then the whole command
-  // view is decoration and no feedback term acting on the enemy will fix that.
+  // view is decoration and no rule change acting on the enemy will fix that.
   console.log(`trials      ${TRIALS} per row, reach=${REACH}${VARY ? " mean (poisson)" : " flat"}`);
-  console.log(`model       feedback=${describeFeedback()}`);
   console.log();
   console.log(" take    won     lost   unres   median   structures");
   for (const value of ECONOMY_TAKES) {
@@ -448,7 +450,7 @@ if (TRACE !== null) {
   console.log(`trials      ${TRIALS} per row`);
   console.log(
     `model       take=${TAKE}/run  reach=${VARY ? "poisson about the mean" : "flat"}  ` +
-    `refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`,
+    `refits=${BUY_REFITS ? "bought" : "not modelled"}`,
   );
   console.log();
   console.log("reach    won     lost   unres   median   deepest   turns at");
@@ -478,7 +480,7 @@ if (TRACE !== null) {
   if (band.length === 0) {
     console.log("NO CONTESTED BAND. Every row resolves the same way for nearly every seed, so");
     console.log("the war is decided by the ratio of two rates and not by anything that happens");
-    console.log("in it. A feedback term that only moves the threshold lands here too.");
+    console.log("in it. A rule change that only moves the threshold lands here too.");
   } else {
     console.log(`CONTESTED BAND at reach ${band.join(", ")} — ${band.length} of ${SWEEP_REACHES.length} rows`);
     console.log("produce both wins and losses with the war still resolving. This is the reading");

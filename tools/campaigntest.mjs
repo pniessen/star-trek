@@ -305,6 +305,70 @@ const {
 
 const { DECISIONS, decide, refusal } = await import("../.campaign-build/chart/command.js");
 
+// ── the finite invasion, shipped ────────────────────────────────────────────
+// pressureBudget, runEnemyTurn and gainGround are already imported above;
+// RESERVE and reserveOf are the only names this section needs that aren't.
+const { RESERVE, reserveOf } = await import("../.campaign-build/chart/enemyTurn.js");
+
+{
+  const c = newCampaign(7);
+  check("a fresh campaign reads a full reserve", reserveOf(c) === RESERVE.initial,
+    `reserve=${reserveOf(c)}`);
+
+  // Ground taken drains the reserve, unconditionally.
+  const before = reserveOf(c);
+  // front row of enemy ground: any sector with control "theirs"
+  const target = c.sectors.findIndex((s) => s.control === "theirs");
+  gainGround(c, target);
+  check("gainGround drains the reserve", reserveOf(c) === before - RESERVE.costPerStep,
+    `reserve=${reserveOf(c)} expected=${before - RESERVE.costPerStep}`);
+
+  // The budget is clamped by the committed share of the reserve.
+  c.reserve = 4;
+  check("budget is clamped by the reserve",
+    pressureBudget(c) <= Math.floor(4 * RESERVE.commit),
+    `budget=${pressureBudget(c)}`);
+}
+
+{
+  // Exhaustion, measured on arrival, wins the war.
+  const c = newCampaign(11);
+  c.reserve = 0;
+  const rng = makeRng(11, 0);
+  for (let i = 0; i < RESERVE.brokenFor; i++) {
+    c.reserve = 0;                 // the player kept draining it between turns
+    runEnemyTurn(c, rng);
+  }
+  check("an empty reserve for brokenFor turns wins the war", isWon(c),
+    `exhausted=${c.exhausted}`);
+}
+
+{
+  // Save compatibility: a campaign written before adoption has no reserve and
+  // no exhausted field. It must read a full reserve and take a turn unharmed.
+  const c = newCampaign(19);
+  delete c.reserve;
+  delete c.exhausted;
+  check("an old-shape save reads a full reserve", reserveOf(c) === RESERVE.initial,
+    `reserve=${reserveOf(c)}`);
+  runEnemyTurn(c, makeRng(19, 0));
+  check("an old-shape save survives a turn", typeof c.reserve === "number" && !isWon(c),
+    `reserve=${c.reserve}`);
+}
+
+{
+  // The floor is gone: pushing them below their opening depth lowers ambition
+  // below base. With the reserve full this is visible as a smaller clamp input;
+  // assert on the formula's own output with a huge reserve so ambition binds.
+  const c = newCampaign(13);
+  c.reserve = 10_000;
+  for (const s of c.sectors) s.control = "ours";
+  c.sectors[0].control = "theirs";           // one sector left of 24
+  check("deep pushes lower ambition below base",
+    pressureBudget(c) < 6,
+    `budget=${pressureBudget(c)}`);
+}
+
 /** The home starbase's sector, found the way the game finds it. */
 const homeOf = (campaign) => campaign.sectors.findIndex((s) => hasStructure(s, "starbase"));
 /** A sector you hold that the enemy is standing next to. Where the interesting decisions are. */
@@ -372,10 +436,13 @@ const paid = gamble.salvage;
 const buildingWhenLost = gamble.sectors[exposedSite].structures[0].runsRemaining;
 // The gamble the design describes: the sector falls while the yard is still
 // scaffolding. `runEnemyTurn` prices a held sector with structures as an
-// assault, so give it the ground and the budget to afford one.
+// assault, so give it the ground and enough turns to afford one — the
+// reserve now caps what the enemy can spend in any single turn, so the
+// assault has to wait its turn behind cheaper expansion rather than landing
+// on the first one.
 gamble.sectors[exposedSite].control = "theirs";
 gamble.runsElapsed = 30;
-for (let i = 0; i < 6 && gamble.sectors[exposedSite].structures.length > 0; i++) {
+for (let i = 0; i < 20 && gamble.sectors[exposedSite].structures.length > 0; i++) {
   const r = makeRng(gamble.seed, gamble.rngCursor);
   runEnemyTurn(gamble, r);
   gamble.rngCursor = r.cursor;
