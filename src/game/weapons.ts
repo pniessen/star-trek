@@ -202,6 +202,33 @@ export function sweepHits(projectile: Projectile, target: Vector3, radius: numbe
 }
 
 /**
+ * Where, on a projectile's travel this frame, it actually swept closest to
+ * `target` — the point `sweepDistance` measures the distance *to*, not the
+ * sampled endpoint `projectile.position`. Same clamped-t segment math, kept
+ * beside `sweepDistance` rather than folded into it: everything else here
+ * only ever needed the distance, and only the near-miss streak needs the
+ * point. Returns a fresh `Vector3` rather than a shared scratch one, because
+ * the streak holds onto it past the frame that produced it.
+ *
+ * The gap between this and `position` is real, not academic: a torpedo can
+ * cover ~3.7 units in one clamped frame (see `Projectile.previous`), so a
+ * streak drawn at `position` instead would sit visibly off wherever the shot
+ * actually crossed.
+ */
+export function sweepClosestPoint(projectile: Projectile, target: Vector3): Vector3 {
+  sweepStep.subVectors(projectile.position, projectile.previous);
+  sweepToTarget.subVectors(target, projectile.previous);
+
+  const lengthSq = sweepStep.lengthSq();
+  // Same first-frame case as `sweepDistance`: nothing to sweep yet, so the
+  // closest point is just where it is.
+  if (lengthSq < 1e-9) return projectile.position.clone();
+
+  const t = Math.max(0, Math.min(1, sweepToTarget.dot(sweepStep) / lengthSq));
+  return projectile.previous.clone().addScaledVector(sweepStep, t);
+}
+
+/**
  * How far off the nose a target is, measured as a **bearing** — the angle on
  * the floor, with height thrown away.
  *
@@ -278,6 +305,10 @@ export class Ordnance {
    * close enough to hit. Draws once per projectile — Session sets
    * `Projectile.noted` so a shot that lingers in the band does not restart
    * the streak every frame.
+   *
+   * `along` is expected normalized — it is scaled by `STREAK_HALF` on both
+   * sides in `draw`, so an unnormalized caller would draw a streak the wrong
+   * length rather than a wrong direction.
    */
   nearMiss(at: Vector3, along: Vector3): void {
     this.streaks.push({ at: at.clone(), along: along.clone(), life: 0 });

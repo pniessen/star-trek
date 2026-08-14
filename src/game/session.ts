@@ -12,6 +12,7 @@ import {
   phaserCostOf,
   phaserDamageAt,
   phaserRangeOf,
+  sweepClosestPoint,
   sweepDistance,
   sweepHits,
 } from "./weapons.js";
@@ -842,11 +843,15 @@ export class Session {
           // rather than turning into a bed of whooshes.
           if (!projectile.noted && distanceToPlayer < NEAR_MISS.outer) {
             projectile.noted = true;
+            // Where it actually crossed, not the sampled endpoint — see
+            // `sweepClosestPoint`. A fast torpedo can be a frame's travel
+            // past the point that swept closest to the hull.
+            const crossing = sweepClosestPoint(projectile, player.position);
             if (this.nearMissTimer <= 0) {
               this.nearMissTimer = NEAR_MISS.cooldown;
-              sound.nearMiss(projectile.position.x, projectile.position.z);
+              sound.nearMiss(crossing.x, crossing.z);
             }
-            this.ordnance.nearMiss(projectile.position, projectile.velocity.clone().normalize());
+            this.ordnance.nearMiss(crossing, projectile.velocity.clone().normalize());
           }
 
           // Stray fire, and only stray fire. Nothing in the game aims at the
