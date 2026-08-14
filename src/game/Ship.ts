@@ -117,6 +117,15 @@ export class Ship {
   torpedoCooldown = 0;
   /** Non-zero briefly after a hit; drives the HUD flash and the shake. */
   impact = 0;
+  /**
+   * Which quarter last absorbed a hit, and how bright its world-space arc
+   * still is — `shieldFx.ts` draws the flash, `takeHit` sets both and
+   * `update` decays `struckFlash` toward 0 at the same rate `impact` decays.
+   * `null` until the first hit of a run; `reset` puts it back there.
+   */
+  struckFacing: ShieldFacing | null = null;
+  /** 1 right after a hit, decayed at `× 3/s`; the HUD dial has no analogue. */
+  struckFlash = 0;
   /** True while the reserve is dry and the drive is running on impulse alone. */
   starved = false;
   /**
@@ -255,6 +264,7 @@ export class Ship {
     this.phaserCooldown = Math.max(0, this.phaserCooldown - dt);
     this.torpedoCooldown = Math.max(0, this.torpedoCooldown - dt);
     this.impact = Math.max(0, this.impact - dt * 3);
+    this.struckFlash = Math.max(0, this.struckFlash - dt * 3);
 
     // Drains first, then whatever is left trickles back into the reserve. A
     // bigger reserve is modelled as everything drawn from it costing
@@ -425,6 +435,8 @@ export class Ship {
     const absorbed = Math.min(this.shields[facing] * capacity, amount);
     this.shields[facing] -= absorbed / capacity;
     this.impact = 1;
+    this.struckFacing = facing;
+    this.struckFlash = 1;
 
     // The era's skin. A hull multiplier below one is the NX's whole character:
     // its facings are barely worth the name, so what gets past them has to hurt
@@ -486,6 +498,8 @@ export class Ship {
     this.hull = 1;
     this.torpedoes = this.torpedoCapacity;
     this.impact = 0;
+    this.struckFacing = null;
+    this.struckFlash = 0;
     this.interference = 0;
     this.ablative = this.loadout.ablative;
     for (const facing of FACINGS) this.shields[facing] = 1;

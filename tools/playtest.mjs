@@ -687,6 +687,39 @@ await page.evaluate(() => {
   window.__fleet.clear();
 });
 
+// ── shield fx: struck quarter flash ─────────────────────────────────────────
+// `Ship.takeHit` now records which facing absorbed a hit and starts a decaying
+// flash, so `shieldFx.ts` has something world-space to draw at the ship rather
+// than only on the HUD dial. `position.clone()` is used for the source rather
+// than a plain `{x,y,z}` literal because `takeHit` calls `.clone().sub(...)`
+// on it — it needs a real `Vector3`, and the ship's own position is one.
+// Offsetting it by `+Z` from a `heading` of 0 is dead ahead, which
+// `facingFrom`'s convention (relative bearing 0 → "fore") should route to the
+// bow.
+await page.evaluate(() => {
+  const p = window.__player;
+  p.heading = 0;
+  const source = p.position.clone();
+  source.z += 50;
+  p.takeHit(0.3, source);
+});
+const struck = await page.evaluate(() => ({
+  facing: window.__player.struckFacing,
+  flash: window.__player.struckFlash,
+}));
+check(
+  "a hit sets the struck facing and starts the flash",
+  struck.facing === "fore" && struck.flash > 0,
+  JSON.stringify(struck),
+);
+await page.waitForTimeout(400);
+const struckDecayed = await page.evaluate(() => window.__player.struckFlash);
+check(
+  "the struck flash decays over time",
+  struckDecayed < struck.flash && struckDecayed >= 0,
+  `flash=${struck.flash} -> ${struckDecayed}`,
+);
+
 // ── docking ─────────────────────────────────────────────────────────────────
 await page.evaluate(() => {
   const p = window.__player;

@@ -24,6 +24,7 @@ import { DEFAULT_ERA, ERAS, eraSpec } from "./chart/eras.js";
 import { Ship } from "./game/Ship.js";
 import { ALTITUDE, flight } from "./game/altitude.js";
 import { drawBeacons } from "./game/beacons.js";
+import { drawShieldFx } from "./game/shieldFx.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
 import { LOOM, Loom, encounters } from "./game/loom.js";
@@ -1038,6 +1039,9 @@ function frame(now: number): void {
   session.debris.draw(trace);
   session.death.draw(trace);
   session.docking.draw(trace, player);
+  // The shields, where the ship actually is: the struck quarter's decaying
+  // flash and the braced bow's steady overcharge aura. See `shieldFx.ts`.
+  drawShieldFx(trace, player);
   // The station's approach lights. Given the hull's own rotation so they turn
   // with the ring they sit on, and raised while the player is actually close
   // enough to dock — which is what makes them a guide rather than a garnish.
