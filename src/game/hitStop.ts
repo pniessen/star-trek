@@ -25,9 +25,9 @@ export const HIT_STOP = {
   impact: 0.055,
   /** A kill. */
   kill: 0.09,
-  /** A kill on a Brawler or Miner — a bigger hull earns a longer beat. Still
-   * bounded by `max`, which `strike` clamps to regardless. */
-  heavyKill: 0.09 * 1.5,
+  /** A kill on a Brawler or Miner — kill × 1.5. A bigger hull earns a longer
+   * beat. Still clamped by `max`, which `strike` applies regardless. */
+  heavyKill: 0.135,
   /** Something reaching your own hull. */
   breach: 0.075,
   /** Your ship coming apart — the only one long enough to read as a beat. */
