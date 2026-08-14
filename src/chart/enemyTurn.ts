@@ -64,26 +64,33 @@ export interface EnemyAction {
  * than closing one it has already pushed into.
  *
  * It was flattened toward 1 and put back. A weighting that flips that
- * ordering (`push-ours`/`push-contested` ≳ 0.9, verified empirically —
- * `defenceOf` is discrete, so there is no closed form for the crossover)
- * does bring Hammer's won% back down among the other two, but it does so by
- * erasing the same push-ours preference this file's own TDD test
- * (`tools/campaigntest.mjs`, "hammer fights heavier than raider") measures:
- * flattened enough to pass the guard, Hammer's assault+push-ours share
- * collapses to Raider's, and the test that is supposed to prove doctrine has
- * texture at all goes from GREEN to a tie. And flattening does not clear the
- * guard's 80% line regardless — weight 1 on every kind (no doctrine effect)
- * still won 82.9% at this band row, because that ceiling is Task 3's own
- * ~83% pooled baseline at reach 4, not something this module's weights sit
- * on top of. No doctrine weighting can put any doctrine under a ceiling the
- * *unweighted* game already sits on. See `task-5-report.md` for the swept
- * table and the full argument: the guard as written cannot pass at this band
- * row, and the fix is a Task 3 balance change (or a relaxed guard), not a
- * Task 5 weight — so these stay exactly the design table's values, and
- * Hammer's real texture (a doctrine that opens ground faster than it closes
- * it, and is measurably the easiest of the three to beat because of it) is
- * kept rather than sanded down to satisfy a threshold it cannot reach either
- * way.
+ * ordering (`push-ours`/`push-contested` ≳ 0.9) does bring Hammer's won%
+ * down among the other two, but only by erasing the same push-ours
+ * preference this file's own TDD test (`tools/campaigntest.mjs`, "hammer
+ * fights heavier than raider") measures — flattened enough to move the
+ * guard, Hammer's assault+push-ours share collapses to Raider's and that
+ * test goes from GREEN to a tie. It doesn't even clear the guard's original
+ * line: weight 1 on every kind (no doctrine effect at all) still won 82.9%
+ * at this band row.
+ *
+ * That is because the guard's absolute 20–80% was written against
+ * `campaign-balance.md`'s criterion (a) — reach 4 landing in the 30–70%
+ * pooled band. (a) was waived 2026-08-14: criterion (b) wins the conflict
+ * between them (`campaign-balance.md`'s addendum), and reach 4's ~83%
+ * pooled win rate is the adopted result of that ruling, not a bug this
+ * module inherited. A doctrine guard bounded against a criterion the owner
+ * has already waived can't be met by any weight table — 80% sits below the
+ * unweighted baseline itself.
+ *
+ * Resolved the same day: the guard is **relative**, not absolute — no
+ * doctrine may deviate more than ±10 points won from the no-weights
+ * baseline at the band row, which keeps its actual intent (doctrine changes
+ * texture, not difficulty) without inheriting a bound the owner has already
+ * moved past. 2026-08-14 measurement, `node tools/campaignlength.mjs 1000
+ * --sweep=4 --vary --ceiling=40`, reach 4: baseline (weight 1 throughout)
+ * 82.9%; raider 84.3% (+1.4), hammer 90.9% (+8.0), anvil 82.2% (+0.7) — all
+ * inside ±10, Hammer nearest the edge. Weights below are the design table's
+ * exact values, unflattened.
  */
 export const DOCTRINE_WEIGHTS: Record<Doctrine, Record<EnemyAction["kind"], number>> = {
   raider: { "push-contested": 0.6, "push-ours": 1.2, assault: 1.4, consolidate: 1.0 },
