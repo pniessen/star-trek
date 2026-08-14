@@ -41,7 +41,7 @@ import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
 import { intercept } from "../chart/enemyTurn.js";
-import { commanderOf, guardClass, warAct } from "../chart/commander.js";
+import { commanderOf, guardClass, warAct, type WarAct } from "../chart/commander.js";
 import { creditSalvage, type Campaign } from "../chart/campaign.js";
 import { gainGround, loadoutOf } from "../chart/economy.js";
 import { jumpCharge } from "../chart/jump.js";
@@ -230,6 +230,19 @@ export class Session {
    * past the wave it was set for.
    */
   private forceGuard = false;
+  /**
+   * `warAct` latched for the length of a run. See that function's own
+   * docblock for why: it reads `campaign.reserve` live, and this run's own
+   * `gainGround` calls are about to start draining it, so calling `warAct`
+   * fresh mid-run would call a war "failing" a couple of waves into any
+   * ordinary run — not because the war is failing, but because the run is
+   * doing its job. `restart` sets this once, before anything in the run has
+   * spent anything; `spawnWave`'s guard gate and the dispatch fallback in
+   * `update` both read this instead of calling `warAct` again. The initial
+   * value here is never observed — `restart` always runs before either
+   * reader does.
+   */
+  private actAtRunStart: WarAct = "contested";
 
   /**
    * 1 at the instant of arrival, decaying to 0. Read by `main.ts` to kick the
@@ -400,7 +413,7 @@ export class Session {
      * one.
      */
     const engaged = this.state === "fighting" && this.fleet.hostiles.length > 0;
-    if (this.dispatches.update(dt, this.campaign, this.escalation, engaged, Math.random())) {
+    if (this.dispatches.update(dt, this.campaign, this.escalation, engaged, Math.random(), this.actAtRunStart)) {
       sound.dispatch();
     }
 
@@ -1500,12 +1513,14 @@ export class Session {
       this.fleet.spawn(kind, position, angle + Math.PI);
     });
 
-    // The commander's guard. `warAct` is the attract firewall: the demo runs
-    // on a throwaway campaign (`campaignFor`, `chart/economy.ts`) that is
-    // never in the failing act, so a guard only ever turns up in a real war
-    // under real pressure — never in the demo, and never in the early or
-    // contested bands of one.
-    const act = warAct(this.campaign);
+    // The commander's guard. `actAtRunStart` — `warAct` latched at `restart`,
+    // see its own docblock — is the attract firewall: the demo runs on a
+    // throwaway campaign (`campaignFor`, `chart/economy.ts`) that is never in
+    // the failing act at the moment a run begins, so a guard only ever turns
+    // up in a real war under real pressure — never in the demo, and never in
+    // a run that started in the early or contested bands, even if this run's
+    // own fighting would have pushed a live read to "failing" by now.
+    const act = this.actAtRunStart;
     if (
       act === "failing" &&
       (this.forceGuard || Math.random() < GUARD.chance) &&
@@ -1607,6 +1622,9 @@ export class Session {
     this.hyperwarpDestination = -1;
     this.arrivedByJump = false;
     this.guardSpawnedThisRun = false;
+    // Latched here and nowhere else, before any of this run's own ground
+    // taken can drain the reserve — see `actAtRunStart`'s own docblock.
+    this.actAtRunStart = warAct(this.campaign);
     this.arrivalCard = 0;
     // A jump moves `campaign.current`, and without this a "fresh" run drops
     // you wherever the last one's hyperwarp last left you — including a
