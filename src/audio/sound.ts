@@ -332,6 +332,24 @@ export class Sound {
     });
   }
 
+  /** A shot that went past, not into. Quieter than a hit, panned where it crossed. */
+  nearMiss(x: number, z: number): void {
+    const { level, pan } = this.place(x, z);
+    if (level < 0.06) return;
+    this.synth.play({
+      kind: "noise",
+      bus: "weapon",
+      filter: "bandpass",
+      q: 2.2,
+      freq: 1900,
+      to: 420,
+      level: 0.12 * level,
+      attack: 0.002,
+      decay: 0.22,
+      pan,
+    });
+  }
+
   // ── things landing ───────────────────────────────────────────────────────
 
   /** A torpedo on a hull that survives it. */

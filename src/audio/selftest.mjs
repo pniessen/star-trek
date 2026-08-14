@@ -275,6 +275,7 @@ function everyCue(s) {
   s.torpedo(false);
   s.torpedo(true);
   s.hostileFire(3, 3);
+  s.nearMiss(3, 3);
   s.impact(2, 2);
   s.kill(4, 4, 1.4);
   s.shieldHit(1, 1);
@@ -675,6 +676,38 @@ let chain;
     `shell tops at ${Math.max(shellTone.from, shellTone.to)}, phaser bottoms at ${phaserBand[0]}`,
   );
   ok("one is pitched, the other percussive", miss.every((v) => v.kind === "tone") && shell.filter((v) => v.kind === "noise").length === 3);
+}
+
+// ── 6. the near miss ────────────────────────────────────────────────────────
+// A shot that swept past but not in — quieter than hostileFire, panned the
+// same way, and gone entirely once it is too far off to hear.
+
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () {
+    return ctx;
+  };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  const near = mark();
+  s.nearMiss(5, 5);
+  const close = voicesSince(near);
+
+  ok("a near miss is one voice", close.length === 1, `${close.length}`);
+  ok("it is a noise sweep, not a tone", close[0].kind === "noise");
+  ok("it rides a bandpass filter — the weapon bus's own shape", close[0].filter === "bandpass");
+  ok("it sweeps down from 1900 Hz", close[0].from === 1900, `${close[0].from}`);
+  ok("and lands at 420 Hz — the doppler-past character", close[0].to === 420, `${close[0].to}`);
+  ok("it is placed, like every other positioned cue", close[0].panned);
+  ok("quieter than a hit landing", close[0].level < 0.12, `${close[0].level}`);
+
+  const far = mark();
+  s.nearMiss(400, 400);
+  const gone = voicesSince(far);
+  ok("out of earshot, it plays nothing", gone.length === 0, `${gone.length}`);
 }
 
 // ── report ─────────────────────────────────────────────────────────────────

@@ -79,6 +79,19 @@ const WAVE_BREAK = 2.6;
 const PLAYER_RADIUS = 2.6;
 
 /**
+ * A hostile shot that swept past the hull rather than into it. `outer` is
+ * measured from the same point `sweepDistance` already reports; `inner` is
+ * the player's own hit radius, computed per-hull in `resolveProjectiles`
+ * rather than fixed here, so a bigger hull does not get a wider near-miss
+ * band for free. `cooldown` keeps a dense wave from turning the cue into a
+ * bed — one voice at a time is what makes it read as a specific event.
+ */
+const NEAR_MISS = {
+  outer: 4.5,
+  cooldown: 0.4,
+} as const;
+
+/**
  * Seconds the arrival card holds. Short on purpose: it has to say "you are now
  * here" and then stop being in the way, because the fight it arrived into is
  * already running. Slightly under `WAVE_BREAK`, so the card is gone by the
@@ -222,6 +235,8 @@ export class Session {
 
   /** Seconds until the next Warden. See `ESCORT`. */
   private escortTimer = Infinity;
+  /** Seconds until another near-miss cue may play. See `NEAR_MISS.cooldown`. */
+  private nearMissTimer = 0;
   /** What the next one will be here for, decided by the sector, not by the clock. */
   private escortDuty: Duty = "passing";
 
@@ -420,7 +435,7 @@ export class Session {
     this.stepEscort(dt, player);
     this.stepLoom(dt, player);
     this.ordnance.update(dt);
-    this.resolveProjectiles(player);
+    this.resolveProjectiles(dt, player);
     this.mines.update(dt, player, () => this.breach());
     this.debris.update(dt);
     this.docking.update(
@@ -743,7 +758,8 @@ export class Session {
     return this.tube;
   }
 
-  private resolveProjectiles(player: Ship): void {
+  private resolveProjectiles(dt: number, player: Ship): void {
+    this.nearMissTimer -= dt;
     for (const projectile of this.ordnance.projectiles) {
       if (projectile.dead) continue;
 
@@ -808,29 +824,46 @@ export class Session {
           projectile.dead = true;
           if (this.mines.strike(mine, projectile.damage)) this.pending += MINE.value * this.salvageScale;
         }
-      } else if (sweepHits(projectile, player.position, PLAYER_RADIUS * player.loadout.hullRadius)) {
-        projectile.dead = true;
-        // A facing eating a bolt and a bolt reaching the hull are different
-        // events and have to sound like it — that distinction is the whole
-        // reason four shields exist.
-        if (player.takeHit(projectile.damage, projectile.position)) this.breach();
-        else sound.shieldHit(projectile.position.x, projectile.position.z);
-      } else if (
-        this.wing.escort &&
-        sweepHits(projectile, this.wing.escort.position, WARDEN.radius)
-      ) {
-        // Stray fire, and only stray fire. Nothing in the game aims at the
-        // Warden — hostiles lead the player and always have — so what kills an
-        // escort is the volume of ordnance in the air around a fight it chose
-        // to fly into. Checked after the player because the bolt was never
-        // meant for it, and a projectile only ever hits one thing.
-        //
-        // The player cannot hurt it at all: friendly projectiles resolve
-        // against hostiles above, and the phaser's target search never sees it.
-        // Friendly fire would turn a gift into a trap, and every arcade minute
-        // spent learning not to shoot the cyan ship is a minute lost.
-        projectile.dead = true;
-        this.wing.escort.damage(projectile.damage);
+      } else {
+        const hitRadius = PLAYER_RADIUS * player.loadout.hullRadius;
+        const distanceToPlayer = sweepDistance(projectile, player.position);
+        if (distanceToPlayer <= hitRadius) {
+          projectile.dead = true;
+          // A facing eating a bolt and a bolt reaching the hull are different
+          // events and have to sound like it — that distinction is the whole
+          // reason four shields exist.
+          if (player.takeHit(projectile.damage, projectile.position)) this.breach();
+          else sound.shieldHit(projectile.position.x, projectile.position.z);
+        } else {
+          // A shot that passed close but not close enough to hit — the dodge
+          // made audible and visible instead of just expiring quietly. Once
+          // per projectile (`noted`), and the cue itself is rate-limited
+          // separately (`nearMissTimer`) so a dense wave streaks silently
+          // rather than turning into a bed of whooshes.
+          if (!projectile.noted && distanceToPlayer < NEAR_MISS.outer) {
+            projectile.noted = true;
+            if (this.nearMissTimer <= 0) {
+              this.nearMissTimer = NEAR_MISS.cooldown;
+              sound.nearMiss(projectile.position.x, projectile.position.z);
+            }
+            this.ordnance.nearMiss(projectile.position, projectile.velocity.clone().normalize());
+          }
+
+          // Stray fire, and only stray fire. Nothing in the game aims at the
+          // Warden — hostiles lead the player and always have — so what kills
+          // an escort is the volume of ordnance in the air around a fight it
+          // chose to fly into. Checked after the player because the bolt was
+          // never meant for it, and a projectile only ever hits one thing.
+          //
+          // The player cannot hurt it at all: friendly projectiles resolve
+          // against hostiles above, and the phaser's target search never sees
+          // it. Friendly fire would turn a gift into a trap, and every arcade
+          // minute spent learning not to shoot the cyan ship is a minute lost.
+          if (this.wing.escort && sweepHits(projectile, this.wing.escort.position, WARDEN.radius)) {
+            projectile.dead = true;
+            this.wing.escort.damage(projectile.damage);
+          }
+        }
       }
     }
   }

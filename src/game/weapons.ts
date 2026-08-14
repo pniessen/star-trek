@@ -131,6 +131,12 @@ export interface Projectile {
   readonly friendly: boolean;
   readonly kind: "torpedo" | "bolt";
   dead: boolean;
+  /**
+   * Has this shot already been logged as a near miss? Session sets this the
+   * first time `sweepDistance` lands it in the near-miss band, so a bolt that
+   * lingers near the hull for several frames streaks once, not every frame.
+   */
+  noted: boolean;
 }
 
 /** A phaser discharge, kept only long enough to be drawn. */
@@ -142,6 +148,17 @@ interface Beam {
 }
 
 const BEAM_LIFE = 0.11;
+
+/** A near miss, kept only long enough to be drawn. See `Ordnance.nearMiss`. */
+interface Streak {
+  readonly at: Vector3;
+  readonly along: Vector3;
+  life: number;
+}
+
+const STREAK_LIFE = 0.35;
+/** Half-length of the drawn streak, so the full line spans 6 units. */
+const STREAK_HALF = 3;
 
 const sweepStep = new Vector3();
 const sweepToTarget = new Vector3();
@@ -223,6 +240,7 @@ export function blastDamageAt(distance: number, radius: number): number {
 export class Ordnance {
   readonly projectiles: Projectile[] = [];
   private readonly beams: Beam[] = [];
+  private readonly streaks: Streak[] = [];
   private readonly boltColor = PALETTE.amber.clone();
   private readonly torpedoColor = new Color(0xff8fd0);
 
@@ -247,11 +265,22 @@ export class Ordnance {
       friendly,
       kind,
       dead: false,
+      noted: false,
     });
   }
 
   discharge(from: Vector3, to: Vector3, hit: boolean): void {
     this.beams.push({ from: from.clone(), to: to.clone(), life: 0, hit });
+  }
+
+  /**
+   * A hostile shot that swept close enough to the player to count, but not
+   * close enough to hit. Draws once per projectile — Session sets
+   * `Projectile.noted` so a shot that lingers in the band does not restart
+   * the streak every frame.
+   */
+  nearMiss(at: Vector3, along: Vector3): void {
+    this.streaks.push({ at: at.clone(), along: along.clone(), life: 0 });
   }
 
   update(dt: number): void {
@@ -271,6 +300,10 @@ export class Ordnance {
     for (let i = this.beams.length - 1; i >= 0; i--) {
       this.beams[i].life += dt;
       if (this.beams[i].life >= BEAM_LIFE) this.beams.splice(i, 1);
+    }
+    for (let i = this.streaks.length - 1; i >= 0; i--) {
+      this.streaks[i].life += dt;
+      if (this.streaks[i].life >= STREAK_LIFE) this.streaks.splice(i, 1);
     }
   }
 
@@ -310,10 +343,25 @@ export class Ordnance {
         intensity,
       );
     }
+
+    for (const streak of this.streaks) {
+      const t = streak.life / STREAK_LIFE;
+      trace.push(
+        streak.at.x - streak.along.x * STREAK_HALF,
+        streak.at.y - streak.along.y * STREAK_HALF,
+        streak.at.z - streak.along.z * STREAK_HALF,
+        streak.at.x + streak.along.x * STREAK_HALF,
+        streak.at.y + streak.along.y * STREAK_HALF,
+        streak.at.z + streak.along.z * STREAK_HALF,
+        this.boltColor,
+        2.2 * (1 - t),
+      );
+    }
   }
 
   clear(): void {
     this.projectiles.length = 0;
     this.beams.length = 0;
+    this.streaks.length = 0;
   }
 }
