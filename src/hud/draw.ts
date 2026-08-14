@@ -1502,12 +1502,14 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
   if (!best.hostile) return;
   // Withdrawing is appended rather than swapping the class name out — the
   // player still needs to know what it was, only now with "and it is
-  // leaving" folded in. Task 15 adds a guard tag above this in precedence;
-  // withdrawal is the only state today, so there is nothing yet to order it
-  // against.
-  const label = best.hostile.withdrawing
-    ? `${HOSTILE_NAMES[best.hostile.kind]} WITHDRAWING`
-    : HOSTILE_NAMES[best.hostile.kind];
+  // leaving" folded in. The guard's name outranks both: it is the more
+  // specific fact, so a guard that is also withdrawing still reads by its
+  // name rather than by the class label underneath it.
+  const label = best.hostile.guardName
+    ? `${best.hostile.guardName}'S GUARD`
+    : best.hostile.withdrawing
+      ? `${HOSTILE_NAMES[best.hostile.kind]} WITHDRAWING`
+      : HOSTILE_NAMES[best.hostile.kind];
   hud.text(label, x + r + 7, y + 3, 1.5, HOSTILE_COLORS[best.hostile.kind]);
   hud.text(`${pad(best.distance, 3)}`, x + r + 7, y - 11, 1.4, PALETTE.traceDim);
 }

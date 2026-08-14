@@ -1558,6 +1558,48 @@ check(
 
 await page.evaluate(() => { clearInterval(window.__hullPin); delete window.__hullPin; });
 
+// ── the commander's guard ───────────────────────────────────────────────────
+// Task 15: once the war reaches its failing act (`warAct`), a wave has a
+// small chance of fielding one veteran of the commander's own doctrine — a
+// stat-and-name variant of an existing class. Force the act and force the
+// roll through the probe seam (`forceGuard`, `arrivedByJump`'s pattern —
+// private in TypeScript, plainly settable on the live object from here),
+// then hand the clock back to the wave scheduler and look for the veteran in
+// the roster it actually spawns.
+await page.evaluate(() => {
+  window.__fleet.clear();
+  window.__session.breakTimer = Infinity; // no wave spawn to contaminate the setup
+});
+await page.evaluate(() => {
+  window.__campaign.exhausted = 1; // the failing act — see chart/commander.ts warAct
+  window.__session.forceGuard = true;
+  window.__session.guardSpawnedThisRun = false;
+});
+await page.evaluate(() => {
+  window.__session.breakTimer = 0; // hand the clock back to the wave scheduler
+});
+state = await waitFor((s) => s.hostiles > 0, 10000);
+const guard = await page.evaluate(async () => {
+  const { HOSTILE_SPECS } = await import("/src/game/hostiles.ts");
+  const g = window.__fleet.hostiles.find((h) => h.guardName);
+  if (!g) return null;
+  return { guardName: g.guardName, kind: g.kind, value: g.spec.value, book: HOSTILE_SPECS[g.kind].value };
+});
+// Restore what this block touched — the victory epilogue below forces a win
+// straight on the board and does not want a leftover "failing" act, or a
+// leftover forced roll, poisoning it.
+await page.evaluate(() => {
+  window.__campaign.exhausted = 0;
+  window.__session.forceGuard = false;
+});
+check(
+  "the commander's guard appears in the failing act, named and stronger than its class's book value",
+  guard !== null && guard.value > guard.book,
+  guard
+    ? `${guard.guardName}'S GUARD (${guard.kind}) value=${guard.value} book=${guard.book}`
+    : "no guard found in the forced wave",
+);
+
 // ── beauty shots: full size, every effect on ────────────────────────────────
 await page.setViewportSize({ width: 1280, height: 800 });
 await page.evaluate(() => {

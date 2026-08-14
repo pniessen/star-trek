@@ -9,6 +9,7 @@ import {
   WITHDRAW,
   type Hostile,
   type HostileKind,
+  type HostileSpec,
 } from "./hostiles.js";
 import {
   Ordnance,
@@ -40,6 +41,7 @@ import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
 import { intercept } from "../chart/enemyTurn.js";
+import { commanderOf, guardClass, warAct } from "../chart/commander.js";
 import { creditSalvage, type Campaign } from "../chart/campaign.js";
 import { gainGround, loadoutOf } from "../chart/economy.js";
 import { jumpCharge } from "../chart/jump.js";
@@ -152,6 +154,24 @@ const ESCORT = {
 } as const;
 
 /**
+ * The commander's guard. Once the war reaches its failing act (`warAct`,
+ * `chart/commander.ts`), every wave rolls a small chance of fielding one
+ * veteran of the commander's own doctrine — a stat-and-name variant of an
+ * existing class, never a new hull or new behaviour. One axis is boosted per
+ * doctrine, echoing what that doctrine already means for the enemy turn
+ * (Task 5): a raider commander's guard is faster, a hammer's tougher, an
+ * anvil's harder-hitting. Every guard is worth more salvage regardless of
+ * doctrine — it is still the commander's own hull, wherever it stands.
+ */
+const GUARD = {
+  chance: 0.3,
+  hull: 1.6,
+  speed: 1.25,
+  damage: 1.35,
+  value: 2.5,
+} as const;
+
+/**
  * The rules of a run.
  *
  * The centre of gravity here is the multiplier. It climbs with every kill and
@@ -185,6 +205,21 @@ export class Session {
    * committed attack, which is a free win the player never earned.
    */
   private arrivedByJump = false;
+
+  /**
+   * True once a wave has fielded the commander's guard, for the rest of this
+   * run — one veteran per war-band excursion, not one per wave that happens
+   * to roll while the act is failing. Reset in `restart`.
+   */
+  private guardSpawnedThisRun = false;
+  /**
+   * Localhost-probe seam, `arrivedByJump`'s pattern: TypeScript keeps it
+   * private, but a headless test can still poke it directly on the live
+   * object to force the guard roll rather than waiting out `GUARD.chance`.
+   * `spawnWave` clears it the instant it is consumed, so it never survives
+   * past the wave it was set for.
+   */
+  private forceGuard = false;
 
   /**
    * 1 at the instant of arrival, decaying to 0. Read by `main.ts` to kick the
@@ -1455,6 +1490,42 @@ export class Session {
       this.fleet.spawn(kind, position, angle + Math.PI);
     });
 
+    // The commander's guard. `warAct` is the attract firewall: the demo runs
+    // on a throwaway campaign (`campaignFor`, `chart/economy.ts`) that is
+    // never in the failing act, so a guard only ever turns up in a real war
+    // under real pressure — never in the demo, and never in the early or
+    // contested bands of one.
+    const act = warAct(this.campaign);
+    if (
+      act === "failing" &&
+      (this.forceGuard || Math.random() < GUARD.chance) &&
+      !this.guardSpawnedThisRun
+    ) {
+      this.guardSpawnedThisRun = true;
+      this.forceGuard = false;
+      const commander = commanderOf(this.campaign.seed);
+      const kind = guardClass(commander.doctrine) as HostileKind;
+      const base = HOSTILE_SPECS[kind];
+      const spec: HostileSpec = {
+        ...base,
+        value: Math.round(base.value * GUARD.value),
+        ...(commander.doctrine === "raider" ? { maxSpeed: base.maxSpeed * GUARD.speed } : {}),
+        ...(commander.doctrine === "hammer" ? { hull: base.hull * GUARD.hull } : {}),
+        ...(commander.doctrine === "anvil" ? { damageScale: base.damageScale * GUARD.damage } : {}),
+      };
+      // Ring it in the same way the roster is ringed — the guard is a
+      // veteran of an existing class, not a set-piece that needs its own
+      // staging.
+      const angle = offset + Math.random() * Math.PI * 2;
+      const range = 95 + Math.random() * 45;
+      const position = new Vector3(
+        player.position.x + Math.sin(angle) * range,
+        0,
+        player.position.z + Math.cos(angle) * range,
+      );
+      this.fleet.spawn(kind, position, angle + Math.PI, { spec, guardName: commander.surname });
+    }
+
     // The Loom, at the break and never mid-wave.
     //
     // This is the last thing `spawnWave` does, and the placement is the whole
@@ -1522,6 +1593,7 @@ export class Session {
     this.hyperwarp.cancel();
     this.hyperwarpDestination = -1;
     this.arrivedByJump = false;
+    this.guardSpawnedThisRun = false;
     this.arrivalCard = 0;
     // A jump moves `campaign.current`, and without this a "fresh" run drops
     // you wherever the last one's hyperwarp last left you — including a

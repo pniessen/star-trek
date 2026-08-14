@@ -251,6 +251,15 @@ export class Hostile {
   withdrawing = false;
 
   /**
+   * Set when this hull is the commander's guard — a stat-and-name variant of
+   * its class fielded once the war reaches its failing act (Task 15). Null
+   * for every ordinary hostile. Public: the HUD reads it to outrank the
+   * class name in the lead-pip label, and `Fleet.spawn`'s `override` is the
+   * only place that ever sets it.
+   */
+  guardName: string | null = null;
+
+  /**
    * How badly this contact's instruments are being jammed, 0-1. Set each frame
    * by `Session` from the comet; not owned here, because the comet is a thing
    * in the sector and a hostile has no idea it is in one.
@@ -621,8 +630,20 @@ export class Fleet {
     );
   }
 
-  spawn(kind: HostileKind, position: Vector3, heading: number): Hostile {
-    const spec = HOSTILE_SPECS[kind];
+  /**
+   * `override` is Task 15's seam for the commander's guard: a spec that
+   * differs from the class's book values, plus the name that goes with it.
+   * Everything else about spawning a guard is identical to spawning any
+   * other hostile of its `kind` — same shape, same pool, same behaviour —
+   * because the guard is a stat-and-name variant, never a new hull.
+   */
+  spawn(
+    kind: HostileKind,
+    position: Vector3,
+    heading: number,
+    override?: { spec: HostileSpec; guardName: string },
+  ): Hostile {
+    const spec = override?.spec ?? HOSTILE_SPECS[kind];
     const shape = this.pool[kind].pop() ?? this.makeShape(kind);
     shape.group.visible = true;
     shape.group.scale.setScalar(spec.scale);
@@ -631,6 +652,7 @@ export class Fleet {
     const hostile = new Hostile(kind, spec, shape);
     hostile.position.copy(position);
     hostile.heading = heading;
+    if (override) hostile.guardName = override.guardName;
     this.hostiles.push(hostile);
     return hostile;
   }
