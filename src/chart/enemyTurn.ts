@@ -49,18 +49,46 @@ export interface EnemyAction {
  * Deriving it from the board means retaking a sector lowers this — and the
  * pressure budget with it — the instant control flips back.
  *
- * Unfloored: pushing the enemy below the depth it opened with now lowers
- * ambition below base rather than bottoming out at zero, so a deep advance
- * buys something the old floor could not pay out. `pressureBudget` clamps the
- * sum, not this term — see its own comment.
+ * Floored at zero, and that floor has a history worth keeping.
+ *
+ * The floor was deleted 2026-08-13 on `campaign-balance.md` §5's own
+ * recommendation: it called the old behaviour "indefensible on its own
+ * terms", because retaking ground below the enemy's opening depth was free
+ * for them — the term bottomed out at zero going either direction, so a
+ * deep advance bought the player nothing the formula could pay out.
+ *
+ * Measurement falsified the combination the same day. Candidate C's
+ * contested band — the one `campaign-balance.md` §3 measured and
+ * recommended — was measured *with* this floor intact. Unfloored, this term
+ * goes sharply negative the instant the player leads at all, and it
+ * collapses `ambition` (and with it the enemy's entire spend) to zero within
+ * two to four runs of that lead opening — independent of any `RESERVE`
+ * constant, because `pressureBudget` clamps to `min(ambition, reserve ×
+ * commit)` and no reserve value can raise a term that is stuck at zero. A
+ * traced campaign at reach 4 showed the budget go 4 → 2 → 1 → 0 by run four
+ * and never recover; every reach from 3 upward then resolves as pure
+ * territorial arithmetic, with the invasion paralysed and the whole reserve
+ * mechanic this module exists for never once exercised.
+ *
+ * Restored 2026-08-14 by the owner's ruling. The unfairness the deletion was
+ * answering is real, but it is now paid through the correct ledger: every
+ * step of ground the player retakes drains the reserve directly, via
+ * `costPerStep` in `gainGround`. A deep push already costs the invasion
+ * something under this term — in *stock*, which this module tracks, rather
+ * than in *ambition*, which this function computes fresh every turn and has
+ * no memory. The floor stays; the drain is where "the enemy pays for lost
+ * ground" now actually lives.
  */
 function sectorsHeldBeyondStart(campaign: Campaign): number {
-  return countControl(campaign, "theirs") - ENEMY_START_DEPTH * GRID;
+  return Math.max(0, countControl(campaign, "theirs") - ENEMY_START_DEPTH * GRID);
 }
 
 export function pressureBudget(campaign: Campaign): number {
   const clock = Math.floor(campaign.runsElapsed / PRESSURE.runsPerStep);
-  const ambition = Math.max(0, PRESSURE.base + clock + sectorsHeldBeyondStart(campaign));
+  // No outer floor needed: `sectorsHeldBeyondStart` is floored at zero on its
+  // own, and `PRESSURE.base` is always positive, so the sum never goes
+  // negative.
+  const ambition = PRESSURE.base + clock + sectorsHeldBeyondStart(campaign);
 
   // The formula above is what the enemy would like to spend; what it can
   // spend is whatever is left in the reserve. Replenishment and the player's

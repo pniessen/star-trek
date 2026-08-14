@@ -357,15 +357,17 @@ const { RESERVE, reserveOf } = await import("../.campaign-build/chart/enemyTurn.
 }
 
 {
-  // The floor is gone: pushing them below their opening depth lowers ambition
-  // below base. With the reserve full this is visible as a smaller clamp input;
+  // The territory term floors at zero: pushing the enemy below the depth it
+  // opened with does not lower ambition below base, because that deep push
+  // is already being charged to the reserve instead, via costPerStep in
+  // gainGround. With the reserve full this is visible as a full clamp input;
   // assert on the formula's own output with a huge reserve so ambition binds.
   const c = newCampaign(13);
   c.reserve = 10_000;
   for (const s of c.sectors) s.control = "ours";
   c.sectors[0].control = "theirs";           // one sector left of 24
-  check("deep pushes lower ambition below base",
-    pressureBudget(c) < 6,
+  check("the territory term floors at zero — deep pushes are charged to the reserve instead",
+    pressureBudget(c) === 6,
     `budget=${pressureBudget(c)}`);
 }
 
