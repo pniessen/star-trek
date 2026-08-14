@@ -56,6 +56,20 @@ starbase sits at one fixed world position however the chart is drawn. Either
 make per-sector docking real or stop claiming it. Listed again under §3 because
 making it true is a design decision, not a bug fix.
 
+### 1.3 "Small and distant stays desaturated" has no implementation
+
+`CLAUDE.md`'s colour-is-information amendment (`docs/environment.md` §4.1)
+names three requirements a body's colour exemption holds only if all three are
+true, and the third — a body below an apparent-size threshold keeps the old,
+muted rule — was never built. No such threshold exists anywhere in the code.
+The hero giant has never exposed the gap because `GIANT.range`/`radius` keep
+it frame-filling by construction, so nothing has forced the question yet, but
+a small moon at range or the comet's own head (both stroke-built, both
+candidates for `light.ts`'s still-unused `shadeAt`) would sit exactly in the
+case the ruling was written for and currently gets no muting at all. Either
+implement the threshold or fold it into the ruling's own text as aspirational
+rather than built.
+
 ---
 
 ## 2. Tuning — needs a human at the keyboard, not more reasoning
@@ -329,8 +343,10 @@ coincidence rather than design, from the abandoned stroke build's own 2 (a
 `widthSegments: 48` × `heightSegments: 32`, down from an initial 96×64 once
 colour moved into the fragment shader and tessellation only had to keep the
 silhouette round. No stroke-buffer count applies to the shipped version —
-the flow band pushes nothing into `skyTrace` (a `begin`/`end` pair holds it
-at zero length). **No frame-time figure was captured** on the machine of the
+the flow band is a fragment shader, not strokes, and the scratch-pad
+`TraceBuffer` it once would have pushed into (`skyTrace`) has since been
+deleted from `main.ts` rather than kept at zero length for no producer.
+**No frame-time figure was captured** on the machine of the
 day; only draw calls and geometry counts were measured, which is short of
 §4.4's own ask and worth closing before a detail-tier decision is made.
 

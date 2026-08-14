@@ -170,7 +170,10 @@ src/render/   Stage (post chain), VectorObject (the two draw modes),
               PhosphorPass, CrtPass, TraceBuffer, palette, Backdrop (the
               per-sector sky, derived from the campaign seed, camera-pinned),
               GasGiant (the hero body — a filled, lit mesh, not strokes) and
-              light (the sector's one real light: `planLight`, `shadeAt`)
+              light (the sector's one real light: `planLight`, seeded and in
+              use; `shadeAt`, its per-stroke shading term, written for a
+              stroke-built body and not yet called by any — stage 2 wants it
+              for the comet's head and the ringed planet)
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
 src/game/     Ship, altitude (the slab, its constants and its switch), session
               (rules), docking, death, hostiles, allies (the Warden), weapons,
@@ -216,9 +219,16 @@ to an sRGB display and every dim trace is crushed to black.
   never appears on it as a contact, so anything ambiguous in the canopy is
   resolved by the tube, which is already trustworthy; **pulse and flash stay
   reserved for hostiles** — a body may be any colour but must never blink,
-  throb or flare; and **small and distant stays desaturated** — a
+  throb or flare; and **small and distant should stay desaturated** — a
   frame-filling planet cannot be mistaken for a ship, a small moon at range
-  can, so bodies below an apparent-size threshold keep the old, muted rule.
+  can, so a body below an apparent-size threshold would need to keep the
+  old, muted rule. **Not yet implemented** — no apparent-size threshold
+  exists anywhere in the code, only the ruling that one should. The hero
+  giant has never exposed the gap because `GIANT.range`/`radius` keep it
+  frame-filling by construction (see "Also built" below), but this is a
+  requirement on record without an enforcement mechanism, and the gap is
+  `docs/todo.md`'s to close before a moon or the comet's head — both far
+  smaller on screen — inherits it silently.
   The luminance half of the old rule had already failed once in practice
   before this ruling: applied to the comet's plume it made the plume
   invisible until the luminance was raised (`docs/todo.md` §2, `COMET_COLOR`).
@@ -311,8 +321,15 @@ look like wallpaper." One body per sector, real world-space geometry rather
 than a `Backdrop` painting: a filled, lit `body` mesh shaded per-fragment by
 domain-warped flow noise sheared by latitude — texture that happens to be
 banded, not bands with texture painted on — plus a fresnel `limb` mesh for
-bloom-as-atmosphere, both lit by a real `DirectionalLight` positioned from
-the sector seed. Scale and leash (`GIANT.range`/`radius`/`minRange`) let it
+bloom-as-atmosphere. **Neither is lit by a scene `DirectionalLight`**: `body`
+reads `uLightColor`/`vLightDirView` uniforms set straight from
+`render/light.ts`'s `planLight` (a hand-rolled Lambertian, because a
+hand-written `ShaderMaterial` is never fed scene lights automatically), and
+`limb` takes no light input at all — it is a view-space fresnel, dim to
+bright at grazing angle regardless of where the star is. A real
+`DirectionalLight` is still added to the scene, positioned from the same
+seed, for a second lit body to pick up later; it currently lights nothing
+`main.ts` draws. Scale and leash (`GIANT.range`/`radius`/`minRange`) let it
 dominate roughly a third of the frame with real parallax on approach. **Took
 four rebuilds to get here** — see `docs/environment.md` §1.5 and §8.1: the
 first three rounds built it out of strokes and never produced a planet; only
@@ -380,9 +397,11 @@ sits at one fixed world position however the chart is drawn).
   generator makes. **`__giant` is the hero body's own instance**, unwrapped
   rather than boxed, so `.object`/`.body`/`.limb` are readable straight off
   it for a live position or material check. **`__light` exposes
-  `planLight`/`shadeAt` directly** — the same functions every body's shading
-  calls — so a sector's real light position and colour can be read without
-  guessing them from a screenshot. None of the five has a key, for the same
+  `planLight`/`shadeAt` directly** — `planLight` is what every body's
+  shading reads its light from (the giant takes the `SectorLight` it
+  returns straight into its own uniforms; `shadeAt` is not yet called by
+  any body in a run) — so a sector's real light position and colour can be
+  read without guessing them from a screenshot. None of the five has a key, for the same
   reason: the control surface is full, and a binding spent on something that
   appears once in fourteen waves — or that you only look at — is a binding
   spent on nothing.

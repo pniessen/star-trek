@@ -26,18 +26,27 @@ const DEFAULT_MAX_SEGMENTS = 5000;
  * elbowing out the strokes that draw the sector around them — and the comet's
  * tail alone already spends 779 segments of a 5000 budget. Two buffers means
  * each has a ceiling that means something on its own, rather than one number
- * two unrelated draw calls are racing to exhaust. `main.ts` keeps the combat
- * default and gives scenery 20000 — 480 KB of vertex data, which is nothing.
+ * two unrelated draw calls are racing to exhaust. `main.ts` keeps combat's
+ * default; a scenery instance at 20000 segments would cost 960 KB of vertex
+ * data — 480 KB each for `positions` and `colors`, the two `Float32Array`s
+ * this class allocates per instance — which is nothing. **No scenery
+ * instance exists right now**: the giant, the only body that ever pushed
+ * strokes into one, moved to a lit mesh (`docs/environment.md` §1.5) before
+ * that buffer had a second consumer, so it was deleted rather than kept
+ * empty. These two parameters are what a later stage's own scenery buffer
+ * — gas shoals, dust — will pass; this class does not depend on one
+ * existing.
  *
- * `fog` is a second, independent reason the two buffers cannot be one.
- * `Stage`'s scene fog (`45..260`) mixes an additively-blended stroke toward
- * black as it approaches the far bound, and at or past it the stroke
- * contributes nothing at all — it does not dim, it disappears. That is
- * correct for combat's `trace`, whose contents live at engagement range, and
- * wrong for scenery's `skyTrace`: a body worth flying toward (`GasGiant`'s
- * hero body sits 640-1160 units out) would be silently invisible the whole
- * time it is worth looking at. `main.ts` keeps combat's default `fog: true`
- * and gives scenery `false`.
+ * `fog` is a second, independent reason two buffers with different
+ * producers cannot share one. `Stage`'s scene fog (`45..260`) mixes an
+ * additively-blended stroke toward black as it approaches the far bound,
+ * and at or past it the stroke contributes nothing at all — it does not
+ * dim, it disappears. That is correct for combat's `trace`, whose contents
+ * live at engagement range, and would be wrong for a body worth flying
+ * toward (`GasGiant`'s hero body sits 640-1160 units out): fogged the same
+ * way, it would be silently invisible the whole time it is worth looking
+ * at. `main.ts` keeps combat's default `fog: true`; a scenery instance
+ * would want `false`.
  */
 export class TraceBuffer {
   readonly object: LineSegments;

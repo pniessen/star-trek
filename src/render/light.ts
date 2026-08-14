@@ -77,6 +77,32 @@ export const STAR = {
    * lit has just traded one failure for the other.
    */
   floor: 0.08,
+  /**
+   * Hue roll bounds, in two bands rather than the full circle. Black-body
+   * colour temperature never produces cyan, green or magenta at *any*
+   * temperature — the Planckian locus runs red through orange, yellow and
+   * white, then off toward blue-white, and stops there — so shaping the
+   * roll to that locus is physically motivated, not merely a narrower
+   * guess. `warmHueMax` is the red-through-yellow half; `coolHueMin`/
+   * `coolHueMax` is the blue-white half a hot star rolls into instead.
+   *
+   * The full-circle roll this replaced was the same defect class as
+   * `GasGiant.ts`'s own `assertPaletteContract` exists to catch, one file
+   * over: an unconstrained roll landing on a reserved hue. `uLightColor`
+   * multiplies the giant's albedo (`GasGiant.ts` line ~811), so a star near
+   * 300° turned the near-white zone stops pink-violet — the magenta this
+   * game reserves for an unresolved contact (`palette.ts`) — and a star
+   * near 90° did the same with Lance's acid green. Both are unreachable by
+   * construction now; `assertPaletteContract` checks the bound, not the
+   * roll, the way it already checks every fixed `GIANT` stop.
+   */
+  warmHueMax: 48,
+  coolHueMin: 205,
+  coolHueMax: 235,
+  /** Real stellar populations skew redder than bluer — cooler stars are
+   * simply more common — so this is that skew, not a coin flip between the
+   * two bands. */
+  warmChance: 0.7,
 } as const;
 
 const DEG = Math.PI / 180;
@@ -124,10 +150,13 @@ export function planLight(seed: number, sector: number): SectorLight {
   const horizontal = Math.cos(elevation) * STAR.distance;
   const height = Math.sin(elevation) * STAR.distance;
 
-  // Full hue range, not a narrow band — real stars run blue-white through
-  // red, and §4.1 licenses exactly that here. Saturation and luminance stay
-  // high because this is meant to look like a light source, not a pigment.
-  const hue = rng.next() * 360;
+  // Two bands, not the full circle — see STAR's own comment on
+  // warmHueMax/coolHueMin/coolHueMax for why the shape is a black body's,
+  // not an arbitrary narrowing. §4.1 still licenses full saturation and
+  // luminance within that shape; this is meant to look like a light
+  // source, not a pigment.
+  const warm = rng.next() < STAR.warmChance;
+  const hue = warm ? rng.next() * STAR.warmHueMax : STAR.coolHueMin + rng.next() * (STAR.coolHueMax - STAR.coolHueMin);
   const saturation = 0.25 + rng.next() * 0.45;
   const luminance = 0.65 + rng.next() * 0.2;
 

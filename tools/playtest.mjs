@@ -175,6 +175,41 @@ check(
   `depthTest=${giant.limbDepthTested}`,
 );
 
+// ── the giant is seeded, not merely cached ──────────────────────────────────
+// `show`'s key cache (`this.key`) is what every other check above reads
+// through — the live instance, whatever sector the run happens to be in —
+// so none of them would notice a hash mix that accidentally correlated with
+// `planLight`'s own: two different-looking inputs producing the same-looking
+// giant is exactly the furniture problem `show`'s own comment warns against,
+// and nothing above forces two sectors apart to check it. This calls `show`
+// directly instead, the way the fixture-seeding check below calls `plan`
+// directly, and alternates the sector on each call so the key-cache's own
+// early return is never what makes two calls agree.
+const giantSeeded = await page.evaluate(() => {
+  const g = window.__giant;
+  const { planLight } = window.__light;
+  const seed = 4242;
+  const a = 3;
+  const b = 9;
+  g.show(seed, a, planLight(seed, a));
+  const hue1 = g.body.material.uniforms.uHue.value;
+  g.show(seed, b, planLight(seed, b));
+  const hue2 = g.body.material.uniforms.uHue.value;
+  g.show(seed, a, planLight(seed, a));
+  const hue3 = g.body.material.uniforms.uHue.value;
+  return { hue1, hue2, hue3 };
+});
+check(
+  "the giant repeats for the same seed and sector",
+  giantSeeded.hue1 === giantSeeded.hue3,
+  `hue1=${giantSeeded.hue1} hue3=${giantSeeded.hue3}`,
+);
+check(
+  "...and differs for a different sector",
+  giantSeeded.hue1 !== giantSeeded.hue2,
+  `hue1=${giantSeeded.hue1} hue2=${giantSeeded.hue2}`,
+);
+
 // ── the fixture is seeded ───────────────────────────────────────────────────
 // Also pure, and checked here for the same reason: `planFixture(seed, sector,
 // null)` is deterministic in `seed` and `sector` alone. `COMET.fixtureChance`

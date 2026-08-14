@@ -10,7 +10,7 @@ import {
   Vector3,
 } from "three";
 import { makeRng } from "../chart/rng.js";
-import type { SectorLight } from "./light.js";
+import { STAR, type SectorLight } from "./light.js";
 
 /**
  * The hero gas giant — `docs/environment.md` §1.5, the rebuild that replaced
@@ -385,9 +385,19 @@ function hueDistance(a: number, b: number): number {
  * has already happened twice on this feature (once from an unconstrained hue
  * roll, once from flattening every stop to one saturation), and a comment is
  * exactly the kind of thing a future tuning pass reads once and then stops
- * reading. This throws at import time, so a violation fails the build long
- * before it fails a screenshot review. Nothing here depends on the per-sector
- * seed roll — every quantity checked is a fixed constant — so it runs once,
+ * reading. This throws at *module load* — `vite build` never evaluates a
+ * module body, so this is a dev-server and playtest gate, not a build gate;
+ * an earlier draft of this comment claimed it "fails the build", which is
+ * not what a `tsc --noEmit` typecheck or a `vite build` bundle-and-emit
+ * pass actually does. Gated to `location.hostname` the same way `main.ts`
+ * gates `DEBUG_PROBE`, so a violation that slips past dev and playtest
+ * cannot black-screen the shipped page from frame zero. Checks item 5 too
+ * now: `render/light.ts`'s `STAR` hue bands, the one input to this shader
+ * that is not a `GIANT` constant but still multiplies every stop below
+ * (line ~811's `uLightColor`) — the mud roll this function exists to catch
+ * happened a third time, in that file, before this check was added.
+ * Nothing here depends on the per-sector seed roll — every quantity checked
+ * is a fixed constant or a fixed bound on a roll — so it runs once,
  * unconditionally, module-load, not per `show()`.
  */
 function assertPaletteContract(): void {
@@ -446,8 +456,49 @@ function assertPaletteContract(): void {
   if (hueDistance(GIANT.poleHue, anchor) < 120) {
     throw new Error(`GasGiant palette: pole hue ${GIANT.poleHue} is too close to the warm anchor ${anchor}`);
   }
+
+  // 5. The light term. `render/light.ts`'s STAR.warmHueMax/coolHueMin/
+  // coolHueMax bound the per-sector roll, not a fixed colour, so this
+  // checks the bound stays clear of every hue this game reserves —
+  // rather than sampling the roll, which could pass a thousand times and
+  // still be one bad seed from the collision this whole check exists for.
+  // Margin is 25° each side of the band, the same shape of tolerance
+  // item 3's 0.5 threshold gives the storm's own exclusivity.
+  const HUE_MARGIN = 25;
+  const RESERVED_HUES = [
+    ["cyan — ours (palette.trace)", 178],
+    ["Lance's acid green (palette.lance)", 89],
+    ["magenta — unresolved contact (palette.magenta)", 333],
+  ] as const;
+  const bands = [
+    ["warm", 0, STAR.warmHueMax],
+    ["cool", STAR.coolHueMin, STAR.coolHueMax],
+  ] as const;
+  for (const [reservedName, reservedHue] of RESERVED_HUES) {
+    for (const [bandName, bandMin, bandMax] of bands) {
+      const distance =
+        reservedHue >= bandMin && reservedHue <= bandMax
+          ? 0
+          : Math.min(hueDistance(reservedHue, bandMin), hueDistance(reservedHue, bandMax));
+      if (distance < HUE_MARGIN) {
+        throw new Error(
+          `GasGiant palette: STAR's ${bandName} hue band [${bandMin}-${bandMax}] comes within ` +
+            `${distance.toFixed(0)}° of ${reservedName} — needs ${HUE_MARGIN}°+ or a coloured star ` +
+            `recolours the body into a reserved hue`,
+        );
+      }
+    }
+  }
 }
-assertPaletteContract();
+// `main.ts`'s own `DEBUG_PROBE` gate, duplicated rather than imported —
+// `src/main.ts` pulls in the DOM, the renderer and the whole game, and this
+// module has stayed free of all three on purpose (see this file's own
+// header). A production `location.hostname` fails this check and the throw
+// above never fires there, so a violation degrades to whatever the shader
+// actually renders instead of a black screen at frame zero.
+const ON_LOCALHOST =
+  typeof location !== "undefined" && (location.hostname === "127.0.0.1" || location.hostname === "localhost");
+if (ON_LOCALHOST) assertPaletteContract();
 
 /**
  * `limb`'s own material. A minimal fresnel shader rather than a stock
@@ -698,7 +749,12 @@ vec3 flowPoint(float lon, float lat) {
 void main() {
   vec3 n = normalize(vObjectNormal);
   float lat = asin(clamp(n.y, -1.0, 1.0));
-  float lon = atan(n.x, n.z) + uRotation;
+  // +1e-6 on the second argument: GLSL's two-arg atan is atan2, undefined
+  // by spec at (0, 0), which is exactly the interpolated normal a pole
+  // rounds to. The offset breaks the tie toward a fixed, arbitrary lon
+  // there instead of a NaN that would otherwise propagate through flow(p)
+  // into the poleT blend already built to hide exactly this seam.
+  float lon = atan(n.x, n.z + 1e-6) + uRotation;
   float latNorm = clamp(lat / 1.5707963, -0.9999, 0.9999);
   float absLat = abs(latNorm);
 

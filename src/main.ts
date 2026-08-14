@@ -62,24 +62,16 @@ try {
 
 const grid = createGrid();
 const trace = new TraceBuffer();
-/**
- * Scenery's own scratch pad, separate from combat's `trace` so a busy
- * firefight never silently deletes the sky — the comet's tail alone already
- * spends 779 of combat's 5000 segments. 20000 segments is 480 KB of vertex
- * data, which is nothing. `fog: false` — see `TraceBuffer`'s own header —
- * because scenery, unlike combat's near-field strokes, routinely sits past
- * the scene's 260-unit fog far plane and an additive stroke fogged that far
- * does not dim, it disappears.
- */
-const skyTrace = new TraceBuffer(20000, false);
-// Nothing pushes into this buffer any more — the giant was its only consumer
-// and `docs/environment.md` §1.5 retired its strokes in favour of a lit mesh
-// — but the buffer stays (gas shoals and dust want it later, per the spec's
-// own staging) and needs one `begin`/`end` pair so its draw range is 0
-// rather than the geometry's default (whole, zero-initialised, buffer),
-// which would otherwise render 20000 degenerate lines stacked at the origin.
-skyTrace.begin();
-skyTrace.end();
+// A scenery scratch pad — `skyTrace`, `TraceBuffer(20000, false)`, `fog:
+// false` for the reason `TraceBuffer`'s own header gives, kept separate
+// from combat's `trace` so a busy firefight could never silently delete the
+// sky — lived here until the giant, its only producer, moved to a lit mesh
+// per `docs/environment.md` §1.5. Deleted along with it: an unused buffer
+// needing a no-op `begin`/`end` pair just to stop it drawing 20000
+// degenerate lines was a cost paid for nothing rather than for gas shoals
+// or dust, which do not exist yet. `TraceBuffer`'s `(capacity, fog)`
+// constructor parameters stay — they are what a later stage's own scratch
+// pad will pass — this is only the premature instance.
 const starfield = createStarfield();
 // The sky of whichever sector the run is in. Added once and then only ever
 // rebuilt in place; it draws between the starfield and the grid and is pinned
@@ -96,7 +88,6 @@ stage.scene.add(
   grid.object,
   starfield.object,
   trace.object,
-  skyTrace.object,
   sky.object,
   planet.object,
 );
@@ -180,7 +171,8 @@ stage.scene.add(comet.object);
  * of spawn rather than seeded like `Planet`'s bearing — `render/GasGiant.ts`'s
  * own header explains why a body built to be looked at cannot risk rolling
  * behind the player. `object` holds the whole thing now, body and limb shell
- * together; nothing here pushes into `skyTrace` any more.
+ * together — there is no scratch-pad `TraceBuffer` for it to push strokes
+ * into any more.
  */
 const giant = new GasGiant();
 stage.scene.add(giant.object);
@@ -453,7 +445,9 @@ function applyShapeMode(): void {
   planet.setMode(settings.shape);
   // The giant has no wireframe mode — `docs/environment.md` §1.5 rules that
   // "occluded geometry, not pure wireframe" governs hulls, not celestial
-  // bodies, and a lit `MeshStandardMaterial` has nothing for `G` to toggle.
+  // bodies, and the hand-written `ShaderMaterial` `GasGiant.ts` shades it
+  // with (its second rebuild, after `MeshStandardMaterial` proved unable to
+  // hold a crisp band edge) has nothing for `G` to toggle either.
   for (const hostile of fleet.hostiles) hostile.shape.setMode(settings.shape);
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
@@ -1317,10 +1311,14 @@ if (DEBUG_PROBE) {
       model: session.comet,
     },
     /**
-     * The sector's star (`render/light.ts`) — pure maths. `sun`/`sunFill`
-     * above are its only consumer now that `GasGiant.body` is lit by the
-     * scene's real `DirectionalLight` rather than a per-stroke `shadeAt`
-     * call; this exposure predates that change and is kept the same way
+     * The sector's star (`render/light.ts`) — pure maths. Neither `sun` nor
+     * `sunFill` above is `GasGiant.body`'s light source — that shader reads
+     * `uLightColor`/`vLightDirView` uniforms `giant.show` sets directly from
+     * this same `SectorLight`, not the scene's `DirectionalLight` (see
+     * `sun`'s own declaration for why the standing light stays anyway) — so
+     * `shadeAt` currently lights nothing this run draws; it is the
+     * per-stroke shading pass a future stroke-built body (the comet's head,
+     * the ringed planet) still wants. Exposed here the same way
      * `__comet.plan`/`interferenceAt` are: a harness can prove `planLight` is
      * seeded and `shadeAt` is a real Lambertian term without flying anywhere
      * or waiting for a body to exist.
