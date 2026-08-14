@@ -147,6 +147,31 @@ The consequence that matters: **ignore a sector for four runs and it falls, and
 it stays fallen.** Retaking ground costs more than holding it, so the map
 punishes drift rather than punishing mistakes.
 
+**The player's own move — `gainGround`.** The table above is the enemy's
+half of the ledger; this is the other half, and it belongs beside it rather
+than left implicit. Every wave cleared in the sector you are standing in
+moves the front your way, by the same two-step ladder the enemy's own table
+runs in reverse — yours → contested, contested → theirs — at the same price
+the enemy pays to push it back. It is deliberately not a constant: "one step
+per wave cleared" is the rule, and the resulting *rate* is emergent from how
+a run is actually flown, which is what keeps this the one place flying well
+pays directly into the war rather than a number the player cannot move.
+(Ruling recorded in `docs/campaign-balance.md` §6.)
+
+**The invasion is finite.** The enemy does not spend from an allowance, it
+spends from a stock: a **reserve** that resupplies at a flat rate from
+beyond the chart every turn, regardless of how much ground it currently
+holds — a rate proportional to territory was tried and measured to be the
+same amplifier that makes an undecided war decide itself early, so the
+resupply is flat on purpose. Each turn it commits no more than half of what
+it is holding, and every action in the table above is paid for out of it.
+**Fighting drains it too**: every step `gainGround` takes costs the invasion
+strength it has to make back, whether or not the sector it was taken from
+ever changes colour — so holding a line you cannot advance is still winning
+the war underneath. **Three consecutive turns at nothing left is
+exhaustion**, and exhaustion is the win: "the invasion is broken," above, is
+now a rule the reserve enforces, not only a sentence describing the board.
+
 ## The rule that keeps this an arcade game
 
 **Into the Breach, not Stellaris.** Enforced, not aspirational:

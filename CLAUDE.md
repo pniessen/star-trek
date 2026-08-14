@@ -320,6 +320,66 @@ a filled mesh did, immediately. Behind no flag and no key — one giant is
 always seeded per sector, fixed at bearing 0 so it could be looked at
 without hunting for it. See `render/GasGiant.ts` and `render/light.ts`.
 
+Also built: **the finite invasion**, the answer to `campaign-balance.md`'s
+finding that a war with one input — `gainGround` — can only be passed or
+failed, never contested. The enemy now spends from a **reserve** rather than
+an allowance (`RESERVE` in `chart/reserve.ts`, unconditional — the candidate
+switch that measured it against the shipped rules is gone): flat resupply
+from beyond the chart every turn (`regenFlat = 24`), never more than half
+committed in a single turn (`commit = 0.5`), and every step of ground a run
+retakes costs the invasion strength it has to make back (`costPerStep = 3`).
+**Three consecutive turns at nothing left is exhaustion**, and exhaustion is
+a second win condition (`brokenFor = 3`, read by `campaign.ts`'s `isWon`)
+independent of whether the last sector has changed colour —
+`strategy-layer.md`'s "the invasion is broken" is now a rule rather than a
+phrase. `sectorsHeldBeyondStart`'s zero floor, briefly deleted on the same
+recommendation that adopted the reserve, was restored by the owner's ruling
+after the deletion was measured to collapse the enemy's whole spend to zero
+within two to four runs of any player lead — see
+`docs/campaign-balance.md`'s 2026-08-14 addendum for the full retune
+(`regenFlat = 24` lands reach 4 at 83.4% won, median 26 runs inside a
+40-run ceiling, the recorded compromise between a clean contested band and a
+war that actually resolves). Patrols are uncapped, which is the salvage sink
+this needed: the command view's four decisions now have somewhere to spend
+beyond three hundred a run.
+
+Also built: **the commander**, a face for the war, derived from the campaign
+seed the same arithmetic-not-storage way every sector and station name are
+(`chart/commander.ts`): given name, surname, pronoun, and a **doctrine** —
+raider, hammer, or anvil — that reweights the enemy's own turn
+(`DOCTRINE_WEIGHTS` in `chart/enemyTurn.ts`, a per-action multiplier on the
+cost-sorted target list) and names which hostile class stands guard over it
+(`guardClass`). `warAct` reads the war's current band live off the board —
+surge, contested, or failing — rather than storing it, so nothing can
+disagree with the campaign it describes. The war now has a voice: the deck
+log gains a commander stanza and a reserve line, HQ dispatches
+(`game/dispatch.ts`) are named to the commander and fall back to an
+act-aware topic (failing/losing/winning) when nothing is inbound, and the
+command view draws a reserve bar. Victory and defeat both end in a final
+deck log.
+
+Also built: **the combat feel pass** — near-miss streaks (a hostile shot
+that sweeps past the hull leaves a trace and, once per `NEAR_MISS.cooldown`,
+a doppler cue through `sound.nearMiss`), world-space shield arcs
+(`game/shieldFx.ts`: a decaying flash on the facing struck and a steady aura
+on the bow while the brace's overcharge holds, both drawn around the ship
+rather than only on the HUD dial), class-scaled kill rings
+(`HIT_STOP.heavyKill = 0.135`, a longer beat on a Brawler or Miner kill),
+stern-flanking swarmers (`sternSign`, gated on `Fleet.brawlerEngaged` so the
+bias only applies while a Brawler is holding the player in its own fire
+range), and **withdrawal** — a hull that crosses `WITHDRAW.threshold` (a
+fifth of its own hull) on the way down rolls, per class, to turn tail rather
+than fight to the kill, and pays nothing once clear of `WITHDRAW.exitRange`,
+the same precedent the Warden's kills already set. The commander's own guard
+now spawns in the failing act (`GUARD` in `game/session.ts`): a
+stat-and-name veteran of the commander's doctrine, boosted on the one axis
+that doctrine already means for the enemy turn — a raider's guard is faster
+(`GUARD.speed`), a hammer's tougher (`GUARD.hull`), and an anvil's fires
+faster rather than harder (`GUARD.cadence` divides `fireInterval`, because
+`HostileSpec.damageScale` is dead code game-wide — nothing in the weapons
+pipeline reads it — and wiring a dead field live for one class would be a
+game-wide balance change dressed up as a small one).
+
 Not built: mouse aim, leaderboards, and per-sector docking (the starbase still
 sits at one fixed world position however the chart is drawn).
 
@@ -341,14 +401,12 @@ sits at one fixed world position however the chart is drawn).
    which is now the newest thing here** — `ceiling` and `decay` are the two that
    decide whether the brace is a tactic, and the question behind them is whether
    having to keep the shooter on your nose reads as a decision or a straitjacket.
-   Needs a human at the keyboard with the speakers on.
-2. **Campaign balance.** The command view is built and the campaign is not
-   yet winnable at plausible rates — `npm run campaignlength` finds a cliff
-   between five steps of ground per run (0% wins) and six (93%), with no
-   contested band, and capping the pressure formula turns losses into
-   deadlocks rather than into wins. See `docs/status.md` §3. This wants a
-   design answer, not a constant.
-3. **Revise the audio against the research.** `docs/audio-prior-art.md` landed
+   **The combat-feel pass joins the list now too** — `DOCTRINE_WEIGHTS`,
+   `GUARD`, `WITHDRAW`, `NEAR_MISS` and the shield arc's `RADIUS` are
+   first-draft guesses in exactly the same way; `docs/todo.md` §2 has the
+   per-constant question for each. Needs a human at the keyboard with the
+   speakers on.
+2. **Revise the audio against the research.** `docs/audio-prior-art.md` landed
    after the audio layer was built and disagrees with it: the alert should be a
    pulse rather than a bed, escalation should add partials rather than raise
    level (CHI 2024, n=1,699 — amplification alone hurt perceived competence),
