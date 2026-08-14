@@ -65,8 +65,31 @@ heard. This is the one block of work that cannot be done by thinking harder.
 
 **Flight and combat**
 `Ship.TURN_ACCEL / TURN_DAMP / MAX_TURN / DRAG`, `PHASER.falloffStart/End`,
-`WAVE_BREAK`, multiplier gain, `HIT_STOP`, the death sequence's `TIMING`, the
-attract loop's dwell times, the scanner sweep rate.
+`WAVE_BREAK`, multiplier gain, `HIT_STOP` (now including `heavyKill = kill ×
+1.5`, the Brawler/Miner beat), the death sequence's `TIMING`, the attract
+loop's dwell times, the scanner sweep rate.
+
+**Kill rings** — `DebrisField.ring` in `src/game/debris.ts`, drawn at 24
+segments per ring, radius `2 + 22t` over 0.7s, dead by the end. Reasoned, not
+flown: whether a 1.4×-scaled Bastion ring actually reads as heavier than a
+1×-scaled Raider's, or whether the difference only shows up in the hit-stop
+beat, is a keyboard question. Worth the same sitting as `HIT_STOP.heavyKill`
+above, since the two are meant to read as one punctuation, not two.
+
+Segment budget, arithmetic rather than measured (no live capture was taken
+for this pass — worth confirming against a real machine the way the comet's
+779 was): the comet's tail alone already spends **779 of `TraceBuffer`'s
+shared 5000** (§2 below). On top of that, a busy wave adds kill rings (24
+segments each; a torpedo blast catching a cluster of swarmers plus a couple
+of trailing phaser kills inside one ring's 0.7s life is a reasonable worst
+case at 5 concurrent rings, 120 segments), near-miss streaks (1 segment each,
+live for 0.35s; call it 8 concurrent in the same dense wave), and shield arcs
+(10 segments per arc, up to 2 at once — the bow's brace aura plus a flash on
+a different struck facing — so ≤20). That totals roughly 779 + 120 + 8 + 20 ≈
+927 segments in a worst-case combat frame, well under a fifth of the 5000
+budget — but it stacks with the debris shards a multi-kill wave is also
+bursting at the same moment, which this arithmetic does not include, so it is
+a floor on the worst case rather than the whole of it.
 
 **The altitude slab — the newest block, and the one to fly first.** Everything
 in `src/game/altitude.ts` was reasoned about and none of it has been flown.

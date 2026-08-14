@@ -895,8 +895,10 @@ export class Session {
       impulse,
       size,
     );
+    this.debris.ring(hostile.position, HOSTILE_COLORS[hostile.kind], size);
 
-    this.hitStop.strike(HIT_STOP.kill);
+    // A bigger hull earns a longer beat, still bounded by `HIT_STOP.max`.
+    this.hitStop.strike(size > 1 ? HIT_STOP.heavyKill : HIT_STOP.kill);
     // One scalar for the burst and the blast, so what you see come apart and
     // what you hear come apart are the same size.
     sound.kill(hostile.position.x, hostile.position.z, size);
@@ -940,6 +942,10 @@ export class Session {
       impulse,
       size,
     );
+    // The ring is world-facing, same as the burst — only the ledger below is
+    // where this diverges from `destroy`. No hit-stop: that stays a feel
+    // reward for the player's own kill, per this method's own docblock.
+    this.debris.ring(hostile.position, HOSTILE_COLORS[hostile.kind], size);
     sound.kill(hostile.position.x, hostile.position.z, size);
     this.fleet.retire(hostile);
     escort.scored();
