@@ -633,25 +633,35 @@ expose a deliberately narrow probe on the deployed build, or make the Loom a
 scheduled event at a known escalation index so a run that gets far enough is
 guaranteed to meet one.
 
-### 6.2 A known flaky pair in `tools/playtest.mjs`
+### 6.2 Known flakes in `tools/playtest.mjs`
 
-Two pre-existing checks have each been observed to fail independently,
-against unmodified code, on otherwise-clean runs — recorded across this
-branch's task reports (`task-9-report.md`, `task-13-report.md`) rather than
-fixed, since neither reproduces from a cold isolated run and neither touches
-anything either task actually changed:
+Three pre-existing checks have each been observed to fail independently,
+against unmodified code, on otherwise-clean runs — recorded rather than
+fixed, since none reproduces from a cold isolated run and none touches
+anything any task here actually changed:
 
 - **The brace-energy threshold** — `brace.energy >= 0.6`, missed by as
   little as 0.0003 on one observed run. Reads as timing/scheduling
   sensitivity under the harness's software-GL setup, not a logic bug.
+  Documented in `task-9-report.md`.
 - **The Shroud-in-comet-tail chain** — three assertions that all depend on
   the harness locating a Shroud on the board within a fixed search budget;
   when the search comes back empty, all three fail together, which is one
-  flake wearing three names rather than three separate bugs.
+  flake wearing three names rather than three separate bugs. Documented in
+  `task-9-report.md`.
+- **"The forced win still reaches the tally," phase = `drift`** — a
+  five-check cascade at the very end of the death-handoff test. Diagnosed
+  in `task-9-report.md` as a timing race against a fixed ms budget under
+  SwiftShader's software-GL cost, which grows as a long-lived test tab
+  accumulates state over ~150 prior assertions; the wait for this one check
+  was already widened there, from 20000ms to 45000ms. `task-13-report.md`
+  observed it recur twice regardless, under extra load from a concurrent
+  browser tab, and confirmed the same diagnosis on a clean, uncontended
+  retry.
 
-Worth a maintainer's attention if either starts failing CI intermittently,
-but it is a known pair rather than a new defect, and out of scope for a docs
-pass to chase down.
+Worth a maintainer's attention if any starts failing CI intermittently, but
+these are known rather than new defects, and out of scope for a docs pass to
+chase down.
 
 - `npm run typecheck` before every commit. There is no lint step.
 - `npm run playtest` needs a Playwright browser and a **fresh** dev server — a

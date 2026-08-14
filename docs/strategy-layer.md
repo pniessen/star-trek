@@ -151,12 +151,12 @@ punishes drift rather than punishing mistakes.
 half of the ledger; this is the other half, and it belongs beside it rather
 than left implicit. Every wave cleared in the sector you are standing in
 moves the front your way, by the same two-step ladder the enemy's own table
-runs in reverse — yours → contested, contested → theirs — at the same price
-the enemy pays to push it back. It is deliberately not a constant: "one step
-per wave cleared" is the rule, and the resulting *rate* is emergent from how
-a run is actually flown, which is what keeps this the one place flying well
-pays directly into the war rather than a number the player cannot move.
-(Ruling recorded in `docs/campaign-balance.md` §6.)
+runs in reverse — theirs → contested, contested → ours — at the same price
+the enemy pays to push it back the other way. It is deliberately not a
+constant: "one step per wave cleared" is the rule, and the resulting *rate*
+is emergent from how a run is actually flown, which is what keeps this the
+one place flying well pays directly into the war rather than a number the
+player cannot move. (Ruling recorded in `docs/campaign-balance.md` §6.)
 
 **The invasion is finite.** The enemy does not spend from an allowance, it
 spends from a stock: a **reserve** that resupplies at a flat rate from
