@@ -45,7 +45,7 @@ export const STRUCTURES: readonly StructureSpec[] = [
   },
   { kind: "outpost", label: "OUTPOST", cost: 600, runs: 2, effect: "DOCK  REFUEL AND REARM" },
   { kind: "starbase", label: "STARBASE", cost: 1600, runs: 4, effect: "DOCK  REPAIR AND REFIT" },
-  { kind: "yard", label: "YARD", cost: 2400, runs: 5, effect: "A SECOND PATROL  REBUILDS LOSSES" },
+  { kind: "yard", label: "YARD", cost: 2400, runs: 5, effect: "REBUILDS WORN PATROLS" },
 ];
 
 export function structureSpec(kind: StructureKind): StructureSpec {
