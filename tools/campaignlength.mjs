@@ -476,14 +476,20 @@ if (TRACE !== null) {
       `${p(mean(bad.map((r) => r.deepestAt)).toFixed(1), 8)}`,
     );
     // Doctrine breakdown, right under the pooled row: the guard is per-doctrine
-    // (spec §2.2), and a pooled won% can hide one doctrine winning far more or
-    // less often than the others.
-    console.log(
-      "            " +
-      byDoctrine(results)
-        .map((d) => `${d.doctrine}=${pct(d.won, Math.max(1, d.trials))}(n=${d.trials})`)
-        .join("  "),
-    );
+    // (spec §2.2), and a pooled won/lost/unresolved split can hide one
+    // doctrine winning (or stalling, or losing) far more or less often than
+    // the others. Same three figures as the pooled row above, just per
+    // doctrine — won/lost/unres, one line per doctrine so a wide terminal
+    // doesn't wrap it.
+    console.log("            doctrine   won    lost   unres   n");
+    for (const d of byDoctrine(results)) {
+      const of = Math.max(1, d.trials);
+      console.log(
+        `            ${d.doctrine.padEnd(9)}` +
+        `${p(pct(d.won, of), 6)}  ${p(pct(d.lost, of), 6)}  ${p(pct(d.unresolved, of), 6)}` +
+        `  n=${d.trials}`,
+      );
+    }
     // Contested: both outcomes genuinely occur, and the war still ends. A row
     // that is 50% won and 50% deadlocked is not a contest, it is a coin flip
     // between winning and nothing happening.

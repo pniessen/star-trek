@@ -224,13 +224,18 @@ check(
 // same and only shuffle order decides which get funded first.
 //
 // Seed 13 (Task 5) draws a Hammer commander, whose weights make push-ours
-// (0.7×) strictly cheaper than push-contested (1.2×) at every defence level —
-// Hammer always finds a fresh sector to open rather than closing one it has
-// already contested, so under Hammer specifically the fall reliably lands on
-// the fifth run, not the fourth. That is doctrine texture, not a broken
-// promise: seed 1 draws Raider, whose weights point the other way (0.6× on
-// push-contested), and closes a contested sector out inside the window this
-// test asserts.
+// (0.7×) strictly cheaper than push-contested (1.2×) at every defence level.
+// The check right below this comment — the fall itself, ours to anything
+// else — still lands on schedule under Hammer, since that first step is
+// push-ours's job and push-ours is exactly what Hammer prefers. What Hammer
+// delays past run four is the *next* check, "losing ground is recorded":
+// `sectorsLost` only increments on contested → theirs, which is
+// push-contested's job, and Hammer prices push-contested high, so it always
+// finds a fresh sector to open rather than closing one it has already
+// contested. That is doctrine texture, not a broken promise: seed 1 draws
+// Raider, whose weights point the other way (0.6× on push-contested), and
+// closes a contested sector out — fall and full loss both — inside the
+// window both checks below assert.
 const neglected = newCampaign(1);
 const startedOurs = neglected.sectors.map((s) => s.control === "ours");
 for (let run = 1; run <= 4; run++) {
