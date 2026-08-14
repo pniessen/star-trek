@@ -278,7 +278,10 @@ existing "COMMAND LOST" resting state.
 
 ## 6. Out of scope, explicitly
 
-- Commander succession, flagships, or any in-run appearance of the commander.
+- Commander succession and flagships. The commander's one in-run appearance —
+  the guard, a stat-and-name wave variant in the failing act — is specified in
+  [2026-08-13-combat-experience-design.md](2026-08-13-combat-experience-design.md)
+  §2.3 rather than here.
 - A war-scaled salvage sink beyond uncapped patrols (open question, to
   `todo.md`).
 - Backdrop/sky mood coupled to the war's act.
