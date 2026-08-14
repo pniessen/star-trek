@@ -1500,7 +1500,14 @@ function drawLeadPip(hud: Hud, view: HudView, width: number, height: number): vo
   // this to anyone who has learned them; the words are for everyone who has
   // not, and the range is the number that decides whether to fire at all.
   if (!best.hostile) return;
-  const label = HOSTILE_NAMES[best.hostile.kind];
+  // Withdrawing is appended rather than swapping the class name out — the
+  // player still needs to know what it was, only now with "and it is
+  // leaving" folded in. Task 15 adds a guard tag above this in precedence;
+  // withdrawal is the only state today, so there is nothing yet to order it
+  // against.
+  const label = best.hostile.withdrawing
+    ? `${HOSTILE_NAMES[best.hostile.kind]} WITHDRAWING`
+    : HOSTILE_NAMES[best.hostile.kind];
   hud.text(label, x + r + 7, y + 3, 1.5, HOSTILE_COLORS[best.hostile.kind]);
   hud.text(`${pad(best.distance, 3)}`, x + r + 7, y - 11, 1.4, PALETTE.traceDim);
 }

@@ -283,6 +283,7 @@ function everyCue(s) {
   s.mineBlast(5, 5);
   s.mineLay(6, 6);
   s.decloak(7, 7);
+  s.withdraw(6, 6);
   s.wave(3);
   s.hyperwarpCharge(2);
   s.hyperwarpAbort();
@@ -706,6 +707,38 @@ let chain;
 
   const far = mark();
   s.nearMiss(400, 400);
+  const gone = voicesSince(far);
+  ok("out of earshot, it plays nothing", gone.length === 0, `${gone.length}`);
+}
+
+// ── 7. withdrawal ────────────────────────────────────────────────────────────
+// A hostile clearing the fight, not joining it — `hostileFire`'s own shape
+// run backwards, so a departure cannot be mistaken for a quieter threat.
+
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () {
+    return ctx;
+  };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  const near = mark();
+  s.withdraw(6, 6);
+  const close = voicesSince(near);
+
+  ok("a withdrawal is one voice", close.length === 1, `${close.length}`);
+  ok("it is a tone, not noise", close[0].kind === "tone");
+  ok("it is a sawtooth, on the weapon bus's own timbre", close[0].wave === "sawtooth");
+  ok("it rises from 300 Hz", close[0].from === 300, `${close[0].from}`);
+  ok("...to 640 Hz — the opposite motion of hostileFire's fall", close[0].to === 640, `${close[0].to}`);
+  ok("it is placed, like every other positioned cue", close[0].panned);
+  ok("quieter than a hit landing", close[0].level < 0.12, `${close[0].level}`);
+
+  const far = mark();
+  s.withdraw(400, 400);
   const gone = voicesSince(far);
   ok("out of earshot, it plays nothing", gone.length === 0, `${gone.length}`);
 }

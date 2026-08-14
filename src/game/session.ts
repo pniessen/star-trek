@@ -2,7 +2,14 @@ import { Vector3 } from "three";
 import { DebrisField } from "./debris.js";
 import { DeathSequence } from "./death.js";
 import { HIT_STOP, HitStop } from "./hitStop.js";
-import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
+import {
+  Fleet,
+  HOSTILE_COLORS,
+  HOSTILE_SPECS,
+  WITHDRAW,
+  type Hostile,
+  type HostileKind,
+} from "./hostiles.js";
 import {
   Ordnance,
   PHASER,
@@ -438,6 +445,7 @@ export class Session {
         sound.decloak(hostile.position.x, hostile.position.z);
       }
     }
+    this.stepWithdrawals(player);
 
     this.stepEscort(dt, player);
     this.stepLoom(dt, player);
@@ -913,6 +921,35 @@ export class Session {
     this.multiplier = Math.min(9.9, this.multiplier + 0.2);
     this.fleet.retire(hostile);
     void player;
+  }
+
+  /**
+   * A hostile that broke off and cleared the field, let go for free.
+   *
+   * The ledger is the Warden's own precedent (`destroyByAlly`, just below):
+   * no salvage, no multiplier, no kill count, no tally entry. `damage()` in
+   * `hostiles.ts` already decided whether this hostile runs at all — this is
+   * only the moment its escape actually completes, `WITHDRAW.exitRange` past
+   * the player, and it has to cost exactly as little as being spared did.
+   * Paying for a withdrawal would make crippling something and finishing it
+   * off the same event with two different prices, and the game already spent
+   * the Warden establishing which of those prices is real.
+   *
+   * The exit itself borrows Task 10's near-miss streak rather than inventing
+   * a second one — a bright line at the point something *leaves* is the same
+   * grammar run in reverse, not new machinery.
+   *
+   * Iterates a copy: `Fleet.retire` mutates `fleet.hostiles`, which a live
+   * `for...of` over the original array cannot survive.
+   */
+  private stepWithdrawals(player: Ship): void {
+    for (const hostile of [...this.fleet.hostiles]) {
+      if (!hostile.withdrawing) continue;
+      if (hostile.position.distanceTo(player.position) < WITHDRAW.exitRange) continue;
+      this.ordnance.nearMiss(hostile.position, hostile.velocity.clone().normalize());
+      sound.withdraw(hostile.position.x, hostile.position.z);
+      this.fleet.retire(hostile);
+    }
   }
 
   // ── the Warden ───────────────────────────────────────────────────────────

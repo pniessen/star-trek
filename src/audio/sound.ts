@@ -332,6 +332,26 @@ export class Sound {
     });
   }
 
+  /**
+   * A hostile clearing the fight rather than joining it. `hostileFire`'s own
+   * shape, run backwards — rising instead of falling — because a departure
+   * has to read as the opposite of a threat, not as a quieter version of one.
+   */
+  withdraw(x: number, z: number): void {
+    const { level, pan } = this.place(x, z);
+    if (level < 0.06) return;
+    this.synth.play({
+      bus: "weapon",
+      wave: "sawtooth",
+      freq: 300,
+      to: 640,
+      level: 0.09 * level,
+      attack: 0.003,
+      decay: 0.3,
+      pan,
+    });
+  }
+
   /** A shot that went past, not into. Quieter than a hit, panned where it crossed. */
   nearMiss(x: number, z: number): void {
     const { level, pan } = this.place(x, z);

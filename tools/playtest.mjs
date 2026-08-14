@@ -1242,6 +1242,66 @@ await page.evaluate(() => {
 
 await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
+// ── withdrawal ───────────────────────────────────────────────────────────────
+// The roll itself is chance-based (`WITHDRAW.chance`), so the honest seam for
+// a deterministic test is forcing the flag directly rather than farming hits
+// until the dice cooperate — the same shortcut `__loom.seed()` and
+// `__comet.seed()` already take for their own rare rolls. What is asserted
+// is everything downstream of the flag: an escaped hostile is retired for
+// free, and the wave clears behind it exactly as if it had been killed.
+await page.evaluate(() => {
+  window.__fleet.clear();
+  window.__session.breakTimer = Infinity; // no fresh wave contaminating this fleet
+});
+const withdrawTest = await page.evaluate(async () => {
+  const player = window.__player;
+  const session = window.__session;
+  const fleet = window.__fleet;
+  const { WITHDRAW } = await import("/src/game/hostiles.ts");
+
+  const before = { kills: session.kills, pending: session.pending, multiplier: session.multiplier };
+
+  const hostile = fleet.spawn("swarmer", player.position.clone(), 0);
+  // Past exitRange from the moment it exists — this is a test of the retire
+  // path, not of how long it takes to fly there.
+  hostile.position.set(player.position.x + WITHDRAW.exitRange + 40, player.position.y, player.position.z);
+  hostile.withdrawing = true;
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let present = true;
+  for (let i = 0; i < 60 && present; i++) {
+    await wait(50);
+    present = fleet.hostiles.includes(hostile);
+  }
+
+  return {
+    before,
+    after: { kills: session.kills, pending: session.pending, multiplier: session.multiplier },
+    gone: !present,
+    state: session.state,
+  };
+});
+await page.evaluate(() => {
+  window.__session.breakTimer = 0; // hand the clock back to the wave scheduler
+});
+check(
+  "a withdrawing hostile past exitRange is retired",
+  withdrawTest.gone,
+  JSON.stringify(withdrawTest),
+);
+check(
+  "...and pays nothing: kills, pending and the multiplier are unchanged",
+  withdrawTest.after.kills === withdrawTest.before.kills &&
+    withdrawTest.after.pending === withdrawTest.before.pending &&
+    withdrawTest.after.multiplier === withdrawTest.before.multiplier,
+  JSON.stringify(withdrawTest),
+);
+check(
+  "...and the wave still clears once nothing else is alive",
+  withdrawTest.state !== "fighting",
+  `state=${withdrawTest.state}`,
+);
+
 // ── hyperwarp ───────────────────────────────────────────────────────────────
 // Pinned for the whole charge-and-arrive sequence below purely so the ship
 // survives the two-second charge next to a live wave: this does NOT guard the
