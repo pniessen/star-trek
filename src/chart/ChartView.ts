@@ -4,7 +4,9 @@ import type { Hud } from "../hud/Hud.js";
 import { GLYPH_ADVANCE } from "../hud/strokeFont.js";
 import { colOf, rowOf, GRID } from "./sectors.js";
 import { canDock, countControl, isLost, isWon, type Campaign, type Control } from "./campaign.js";
+import { commanderOf } from "./commander.js";
 import { DECISIONS, HEADINGS, intent, loadoutSummary, refusal, sectorCode } from "./command.js";
+import { RESERVE, reserveOf } from "./enemyTurn.js";
 import { isFitted, patrolCount, structureSpec, type RefitId, type RunReport } from "./economy.js";
 import { regionName, stationName } from "./naming.js";
 import { jumpCharge, jumpEnergy, jumpReach, jumpSteps } from "./jump.js";
@@ -493,6 +495,8 @@ export function drawCommand(hud: Hud, campaign: Campaign, frame: CommandFrame): 
     PALETTE.traceDim,
   );
 
+  drawReserveBar(hud, campaign, right, height - 138);
+
   const optionsX = left + COLUMN.options;
   const costX = right;
 
@@ -834,6 +838,38 @@ function rule(hud: Hud, cx: number, y: number, halfWidth: number, color: Color):
     flat.push(cx + x, y, cx + Math.min(x + 13, halfWidth), y);
   }
   hud.segments(flat, color);
+}
+
+/**
+ * The war has a face and a stock: the commander's surname, and ten ticks for
+ * how much of `RESERVE.max` the invasion has left to spend. Right-aligned to
+ * the same edge as the HELD/THEIRS line above it, because both are read the
+ * same way — glance right, read the state of the enemy.
+ *
+ * Ticks rather than the stroke font's block glyphs: the font has none (see
+ * the brief), so the bar is drawn the way every other gauge on this screen
+ * is, with `hud.segments`. Amber is reused for "theirs" exactly as
+ * `CONTROL_COLOR.theirs` already does; it never pulses, because a wartime
+ * dashboard the player checks between runs is a report, not an alarm.
+ */
+function drawReserveBar(hud: Hud, campaign: Campaign, right: number, y: number): void {
+  const surname = commanderOf(campaign.seed).surname;
+  const ticks = 10;
+  const gap = 10;
+  const tickHeight = 8; // matches GLYPH_HEIGHT (5) at the label's own scale (1.6)
+  const barLeft = right - (ticks - 1) * gap;
+  const fill = Math.max(0, Math.min(ticks, Math.round((reserveOf(campaign) / RESERVE.max) * ticks)));
+
+  hud.textRight(surname, barLeft - 14, y, 1.6, PALETTE.traceDim);
+
+  const filled: number[] = [];
+  const empty: number[] = [];
+  for (let i = 0; i < ticks; i++) {
+    const x = barLeft + i * gap;
+    (i < fill ? filled : empty).push(x, y, x, y + tickHeight);
+  }
+  hud.segments(filled, PALETTE.amber);
+  hud.segments(empty, PALETTE.traceDim);
 }
 
 /** Slow enough to read as a cursor rather than a fault. Time-based, not frame-based. */
