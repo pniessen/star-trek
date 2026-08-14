@@ -92,6 +92,14 @@ alternatives deliberately.
   lets a shallow slab work with no pitch input; do not revisit it.
 - **Occluded geometry, not pure wireframe.** Glowing edges over near-void opaque
   faces. Pure wireframe is unreadable the moment two ships overlap.
+  **Scoped, owner's ruling (`docs/environment.md` §1.5): this governs hulls,
+  not celestial bodies.** The justification above is about ships overlapping
+  in combat, and a planet does not overlap a planet — the hero gas giant
+  (`render/GasGiant.ts`) is a filled, lit mesh with no wireframe/occluded
+  toggle at all. The hero body's first three rounds were built out of strokes
+  anyway, on the unexamined assumption that this was a blanket house art
+  style rather than an argument about combat legibility, and never produced
+  a planet; only a filled mesh did, immediately, once the medium changed.
 - **One energy pool** feeds thrust, shields and weapons.
 - **Four shield facings**, depleting separately. Turning a fresh quarter toward
   the shooter is the defensive skill.
@@ -160,7 +168,9 @@ alternatives deliberately.
 ```
 src/render/   Stage (post chain), VectorObject (the two draw modes),
               PhosphorPass, CrtPass, TraceBuffer, palette, Backdrop (the
-              per-sector sky, derived from the campaign seed, camera-pinned)
+              per-sector sky, derived from the campaign seed, camera-pinned),
+              GasGiant (the hero body — a filled, lit mesh, not strokes) and
+              light (the sector's one real light: `planLight`, `shadeAt`)
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
 src/game/     Ship, altitude (the slab, its constants and its switch), session
               (rules), docking, death, hostiles, allies (the Warden), weapons,
@@ -196,6 +206,22 @@ to an sRGB display and every dim trace is crushed to black.
   because it never resolves). Never introduce a decorative colour, and note
   that the ally deliberately did not get one: an ally needs to say "not a
   target", which cyan already says, not "another class".
+  **Amended, owner's ruling (`docs/environment.md` §4.1): this now governs
+  strokes, beams, contacts and hulls — celestial bodies are exempt** and may
+  be saturated and bright, a genuinely orange gas giant or a red sun. The old
+  rule was written for a HUD vocabulary where every hue is committed; a body
+  is never read as a contact, so the exemption cannot be mistaken for a
+  ship's own signal, but only if three things hold, and they are
+  requirements, not hopes: **the scanner is the arbiter**, because a body
+  never appears on it as a contact, so anything ambiguous in the canopy is
+  resolved by the tube, which is already trustworthy; **pulse and flash stay
+  reserved for hostiles** — a body may be any colour but must never blink,
+  throb or flare; and **small and distant stays desaturated** — a
+  frame-filling planet cannot be mistaken for a ship, a small moon at range
+  can, so bodies below an apparent-size threshold keep the old, muted rule.
+  The luminance half of the old rule had already failed once in practice
+  before this ruling: applied to the comet's plume it made the plume
+  invisible until the luminance was raised (`docs/todo.md` §2, `COMET_COLOR`).
 - **Transient strokes go through `TraceBuffer`** — beams, debris, corridor
   guides — not new objects and materials.
 - **Every sound goes through the same two voices** — a pitched oscillator that
@@ -279,6 +305,21 @@ binding** — the same reasoning `game/loom.ts` already gives: the control
 surface is full, and a binding spent on something a run meets at most once is
 a binding spent on nothing. See `game/comet.ts` and `docs/comet.md`.
 
+Also built: **the hero gas giant**, answering `docs/environment.md`'s
+complaint that "the planets, comets, and other non-ship related items just
+look like wallpaper." One body per sector, real world-space geometry rather
+than a `Backdrop` painting: a filled, lit `body` mesh shaded per-fragment by
+domain-warped flow noise sheared by latitude — texture that happens to be
+banded, not bands with texture painted on — plus a fresnel `limb` mesh for
+bloom-as-atmosphere, both lit by a real `DirectionalLight` positioned from
+the sector seed. Scale and leash (`GIANT.range`/`radius`/`minRange`) let it
+dominate roughly a third of the frame with real parallax on approach. **Took
+four rebuilds to get here** — see `docs/environment.md` §1.5 and §8.1: the
+first three rounds built it out of strokes and never produced a planet; only
+a filled mesh did, immediately. Behind no flag and no key — one giant is
+always seeded per sector, fixed at bearing 0 so it could be looked at
+without hunting for it. See `render/GasGiant.ts` and `render/light.ts`.
+
 Not built: mouse aim, leaderboards, and per-sector docking (the starbase still
 sits at one fixed world position however the chart is drawn).
 
@@ -327,18 +368,24 @@ sits at one fixed world position however the chart is drawn).
   design, and so is one with no audio device — the first failure retires the
   whole audio layer rather than raising in the frame loop.
 - `window.__probe`, `__session`, `__player`, `__fleet`, `__stage`,
-  `__presentation`, `__sound`, `__loom`, `__sky`, `__comet` are exposed on
-  localhost only, for headless inspection. **`__loom.seed()` opens a Loom on
-  demand** — it appears at a wave break with a one-in-ten chance from
-  escalation index four, so waiting for one is not a way to tune one.
-  **`__comet.seed()` drops a wanderer on the player** for the same reason —
-  `interferenceAt`, `plan(seed, sector)` and `constants` (`COMET`) stay
-  reachable too, the pure half unwired from any run at all. **`__sky.next()`
-  walks the backdrop from sector to sector** without playing a war, which is
-  the only practical way to review what the generator makes. None of the
-  three has a key, for the same reason: the control surface is full, and a
-  binding spent on something that appears once in fourteen waves — or that
-  you only look at — is a binding spent on nothing.
+  `__presentation`, `__sound`, `__loom`, `__sky`, `__comet`, `__giant`,
+  `__light` are exposed on localhost only, for headless inspection.
+  **`__loom.seed()` opens a Loom on demand** — it appears at a wave break
+  with a one-in-ten chance from escalation index four, so waiting for one is
+  not a way to tune one. **`__comet.seed()` drops a wanderer on the player**
+  for the same reason — `interferenceAt`, `plan(seed, sector)` and
+  `constants` (`COMET`) stay reachable too, the pure half unwired from any
+  run at all. **`__sky.next()` walks the backdrop from sector to sector**
+  without playing a war, which is the only practical way to review what the
+  generator makes. **`__giant` is the hero body's own instance**, unwrapped
+  rather than boxed, so `.object`/`.body`/`.limb` are readable straight off
+  it for a live position or material check. **`__light` exposes
+  `planLight`/`shadeAt` directly** — the same functions every body's shading
+  calls — so a sector's real light position and colour can be read without
+  guessing them from a screenshot. None of the five has a key, for the same
+  reason: the control surface is full, and a binding spent on something that
+  appears once in fourteen waves — or that you only look at — is a binding
+  spent on nothing.
   `__probe.state` is still only `clear`/`fighting`/`dead`; the title and attract
   screens are `__probe.mode`, which is the shell around a run, not a combat
   phase. **A headless run must launch itself** — the page now lands on the

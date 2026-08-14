@@ -262,6 +262,17 @@ Five decisions were taken before it was built, and they are the whole of it:
    information colour, and never at information intensity. Cyan is forbidden
    outright — it means *ours*. A magenta gas giant that could be read as an
    unresolved contact is a bug wearing a look.
+   **Amended: this still governs `Backdrop`'s own painted sky — camera-pinned,
+   nothing flies through it — but no longer anything with real geometry.**
+   The owner has ruled (`docs/environment.md` §4.1, `CLAUDE.md`) that a
+   celestial body built as world-space geometry — the hero gas giant, the
+   ringed planet, the comet — is exempt from the luminance half of this rule
+   and may be saturated and bright, provided the scanner stays the arbiter,
+   pulse and flash stay reserved for hostiles, and small/distant bodies stay
+   desaturated. The rule as written here had already failed once in practice
+   before this ruling: applied to the comet's plume — real geometry, not
+   backdrop, mistakenly held to the backdrop's own stricter rule — it made
+   the plume invisible until the luminance was raised.
 5. **Behind a flag, no new key.** The same shape as `flight.threeD`: off, the
    game is exactly what it was. The control surface is full and documented as
    full, so it gets a localhost debug hook instead of a binding.

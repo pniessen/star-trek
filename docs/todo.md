@@ -316,6 +316,68 @@ surprise:
 - **The half-angle drift** noted under `fixtureLength` above — not a bug, but
   a mismatch between two numbers that used to agree and now do not.
 
+**The hero gas giant** — `GIANT` in `src/render/GasGiant.ts`, unflown like
+`ALTITUDE`/`LOOM`/`COMET` and on the same footing, but with a wrinkle those
+three don't have: it was rebuilt from scratch mid-task (`docs/environment.md`
+§1.5, §8.1), so these numbers belong to the second build, not the abandoned
+stroke one.
+
+**Measured, on the machine of the day:** the shipped body draws through **2
+draw calls** — the `body` mesh and the `limb` mesh — unchanged, by
+coincidence rather than design, from the abandoned stroke build's own 2 (a
+`VectorObject` shell's face+edge pair). `body`'s geometry is
+`widthSegments: 48` × `heightSegments: 32`, down from an initial 96×64 once
+colour moved into the fragment shader and tessellation only had to keep the
+silhouette round. No stroke-buffer count applies to the shipped version —
+the flow band pushes nothing into `skyTrace` (a `begin`/`end` pair holds it
+at zero length). **No frame-time figure was captured** on the machine of the
+day; only draw calls and geometry counts were measured, which is short of
+§4.4's own ask and worth closing before a detail-tier decision is made.
+
+The levers that decide whether it works, first:
+
+- **`flowScale: 2.2`, `latStretch: 8.0`, `flowContrast: 1.7`.** The texture
+  is domain-warped noise sheared by latitude; these three decide whether
+  that reads as bands at all or reverts to "one muddy mid-tone," a failure
+  already found and fixed once. `flowContrast` is the late add and does the
+  most single load-bearing job of the three — summed noise octaves cluster
+  near the middle of their own range, and this is the only thing pushing
+  values back out toward the ends.
+- **`jetFreqMin`/`Max` (3-6), `shearAmpMin`/`Max` (0.5-1.0).** The shear
+  that turns latitude bands into flow instead of stripes. Never flown
+  against a reference beyond the report's own three fixed camera angles.
+- **`ambientFloor: 0.32`**, a body-local floor replacing the borrowed
+  `STAR.floor` (0.08) because a correct band pattern needs a flatter
+  terminator to survive multiplication by the lit/dark swing — every other
+  body in `light.ts` still uses the shared, steeper one. Worth flying
+  against a real terminator sweep, not just fixed angles.
+- **`limbIntensity: 1.1`, `limbDarkFloor: 0.35`, `limbDarkPower: 1.6`,
+  `scatterStrength: 0.14`, `scatterPower: 3.0`.** Bloom-as-atmosphere (§3.2)
+  lives entirely here; two earlier values (1.6, then 1.7) each blew the limb
+  into a solid ring eating the silhouette, so this has already cost two
+  rounds and is worth checking past the three seeds captured so far.
+- **`rotationRate: 0.035`** rad/s — unflown, same species as `LOOM`/
+  `COMET`'s own rotation constants, now driving a `uRotation` uniform rather
+  than mesh rotation.
+- **`range: 950`, `radius: 215`, `minRange: 550`.** Scale and leash, pulled
+  back once already (from 900/260, which swallowed the HUD) — the number
+  that decides whether "dominates the frame" reads as spectacle or as
+  obstruction.
+- **The eight palette stops** (`brightLightness` 0.9 down to
+  `deepLightness` 0.28, `baseHueMin`/`Max` 27°-35°), locked to
+  `assertPaletteContract()` (lightness spans at least 0.30-0.90, zone
+  saturation ≤0.20, belt saturation ≥0.25, the storm alone ≥0.65) so a
+  tuning pass cannot silently flatten it back to mud. **Known softness, not
+  a defect:** in practice the disc reads mid-tan rather than near-white —
+  `zoneLightness` (0.8) is what most pixels land on, and `brightLightness`
+  (0.9), the contract's own top bound, is rarely reached, because summed
+  noise octaves cluster near the middle of the flow field's own range even
+  after `flowContrast`'s gain. The lightness range the eye actually sees is
+  narrower than the 0.30-0.90 the contract guarantees exists in the stop
+  table — the contract bounds what the palette *can* express, not what
+  fraction of the disc a given seed's noise actually visits. Worth flying
+  `flowContrast` next against this specifically.
+
 ---
 
 ## 3. Design questions — open, and not answerable by a constant

@@ -396,6 +396,29 @@ guard against regression rather than prove beauty.
 1. **The medium may not carry it.** §3 is a bet that density, light and bloom add
    up to richness in a stroke renderer. Stage 1 exists to test that bet for the
    price of one body.
+
+   **The bet paid — the six levers were right, tested against the wrong
+   medium.** Stage 1 shipped seven rounds, not one. The first three fixed real
+   bugs in the stroke build named in §1.5 — a far-side cull correct only for an
+   infinitely distant viewer, a belt tilt measured in absolute longitude
+   instead of a filament's own local progress, an unconstrained hue roll — and
+   never produced a planet: transparent balloon, ball of thread, ball of straw.
+   Only the fourth round changed the medium itself, to a filled, lit mesh with
+   real depth occlusion, and it read as a planet immediately. Three more rounds
+   after that — banding moved into a fragment shader, then replaced again with
+   domain-warped flow noise sheared by latitude, then a palette pinned to a
+   fixed contract enforced in code — took that medium from a legible band
+   pattern to weather that holds its contrast on a second seed and stays
+   readable against a gold Raider mid-wave, the specific colour-ambiguity risk
+   this section names below. §3's six levers — light, bloom-as-atmosphere,
+   density, occlusion, scale, layered motion — hold up exactly as written; none
+   of them was the mistake. **The mistake was spending four of the seven
+   rounds refining an approach that should have been abandoned after round
+   one.** The question that ended it — *do we have to use stroke structure at
+   all?* — came from the owner, looking at a screenshot, not from this
+   document or from the implementation process; nothing here was built to ask
+   it. That is the most useful thing on this page for whoever plans stages
+   2–8: test the medium against the bar before spending rounds tuning it.
 2. **Colour ambiguity**, accepted by ruling in §4.1. The mitigations are
    requirements; if a small warm moon still reads as a Raider in play, the
    apparent-size threshold is the dial.
