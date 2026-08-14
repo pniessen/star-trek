@@ -1572,6 +1572,14 @@ await page.evaluate(() => {
 });
 await page.evaluate(() => {
   window.__campaign.exhausted = 1; // the failing act — see chart/commander.ts warAct
+  // `spawnWave`'s guard gate reads `Session.actAtRunStart` — `warAct` latched
+  // at the run's own `restart()` — rather than a live `warAct(campaign)` read
+  // (see that field's docblock: reading live mid-run would call a healthy war
+  // "failing" a couple of waves into any ordinary run). This block forces the
+  // act via the probe seam without a real restart, so the latch has to be
+  // forced along with it, or the guard gate still sees whatever the actual
+  // run-start act was.
+  window.__session.actAtRunStart = "failing";
   window.__session.forceGuard = true;
   window.__session.guardSpawnedThisRun = false;
 });
@@ -1587,10 +1595,17 @@ const guard = await page.evaluate(async () => {
 });
 // Restore what this block touched — the victory epilogue below forces a win
 // straight on the board and does not want a leftover "failing" act, or a
-// leftover forced roll, poisoning it.
+// leftover forced roll, poisoning it. Also clear the fleet and top the hull
+// back off: unlike before the latch fix, the guard actually spawns now, and
+// `hullPin` just went away above — leaving a live, deliberately over-tuned
+// guard (2.5x value, plus its doctrine's own boost) free to land a real hit
+// on the way to the beauty shots below has nothing to do with what this
+// block is testing.
 await page.evaluate(() => {
   window.__campaign.exhausted = 0;
   window.__session.forceGuard = false;
+  window.__fleet.clear();
+  window.__player.hull = 1;
 });
 check(
   "the commander's guard appears in the failing act, named and stronger than its class's book value",
