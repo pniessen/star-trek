@@ -1,6 +1,7 @@
 import { countControl, hasStructure, ENEMY_START_DEPTH, type Campaign, type Sector } from "./campaign.js";
 import { GRID, neighbours } from "./sectors.js";
 import { RESERVE, reserveOf } from "./reserve.js";
+import { commanderOf, type Doctrine } from "./commander.js";
 import type { Rng } from "./rng.js";
 
 export { RESERVE, reserveOf };
@@ -40,6 +41,55 @@ export interface EnemyAction {
   sector: number;
   cost: number;
 }
+
+/**
+ * The commander's doctrine (Task 4's `commanderOf`) is a bias on which of a
+ * turn's priced options gets funded first, not a second budget: it multiplies
+ * `cost` before the sort in `runEnemyTurn`, so a weight below 1 makes that
+ * action sort cheaper — preferred — and a weight above 1 makes it sort more
+ * expensive, spent only once cheaper options run out. Raider spreads its
+ * budget over contested ground; Hammer commits deep, into the player's own
+ * sectors and dug-in positions; Anvil holds what it has taken. The two-phase
+ * split in `runEnemyTurn` (expansion before consolidate) is untouched —
+ * weights reorder *within* each phase, they do not move consolidate ahead of
+ * expansion or the reverse.
+ *
+ * These are the design table's values, unflattened. §2.2's per-doctrine
+ * balance guard (`node tools/campaignlength.mjs 1000 --sweep=4 --vary
+ * --ceiling=40`, checked against the per-doctrine breakdown in
+ * `campaignlength.mjs`) found Hammer running noticeably hot at Task 3's band
+ * row — 88–91% won at reach 4 against Raider/Anvil's 81–85%, because weighted
+ * `push-ours` (base 3 × 0.7) undercuts weighted `push-contested` (base 2 ×
+ * 1.2) at every defence level, so Hammer always opens a fresh front rather
+ * than closing one it has already pushed into.
+ *
+ * It was flattened toward 1 and put back. A weighting that flips that
+ * ordering (`push-ours`/`push-contested` ≳ 0.9, verified empirically —
+ * `defenceOf` is discrete, so there is no closed form for the crossover)
+ * does bring Hammer's won% back down among the other two, but it does so by
+ * erasing the same push-ours preference this file's own TDD test
+ * (`tools/campaigntest.mjs`, "hammer fights heavier than raider") measures:
+ * flattened enough to pass the guard, Hammer's assault+push-ours share
+ * collapses to Raider's, and the test that is supposed to prove doctrine has
+ * texture at all goes from GREEN to a tie. And flattening does not clear the
+ * guard's 80% line regardless — weight 1 on every kind (no doctrine effect)
+ * still won 82.9% at this band row, because that ceiling is Task 3's own
+ * ~83% pooled baseline at reach 4, not something this module's weights sit
+ * on top of. No doctrine weighting can put any doctrine under a ceiling the
+ * *unweighted* game already sits on. See `task-5-report.md` for the swept
+ * table and the full argument: the guard as written cannot pass at this band
+ * row, and the fix is a Task 3 balance change (or a relaxed guard), not a
+ * Task 5 weight — so these stay exactly the design table's values, and
+ * Hammer's real texture (a doctrine that opens ground faster than it closes
+ * it, and is measurably the easiest of the three to beat because of it) is
+ * kept rather than sanded down to satisfy a threshold it cannot reach either
+ * way.
+ */
+export const DOCTRINE_WEIGHTS: Record<Doctrine, Record<EnemyAction["kind"], number>> = {
+  raider: { "push-contested": 0.6, "push-ours": 1.2, assault: 1.4, consolidate: 1.0 },
+  hammer: { "push-contested": 1.2, "push-ours": 0.7, assault: 0.6, consolidate: 1.1 },
+  anvil: { "push-contested": 1.1, "push-ours": 1.3, assault: 1.2, consolidate: 0.5 },
+};
 
 /**
  * Sectors the enemy holds beyond the depth it opened with. This is what
@@ -177,10 +227,11 @@ export function runEnemyTurn(campaign: Campaign, rng: Rng): EnemyAction[] {
     [targets[i], targets[j]] = [targets[j], targets[i]];
   }
 
+  const weights = DOCTRINE_WEIGHTS[commanderOf(campaign.seed).doctrine];
   const priced = targets
     .map((index) => ({ index, ...priceOf(campaign.sectors[index], held[index]) }))
     .filter((option) => option.kind !== null)
-    .sort((a, b) => a.cost - b.cost);
+    .sort((a, b) => a.cost * weights[a.kind!] - b.cost * weights[b.kind!]);
 
   // Expansion first, consolidate only with what's left — see the docblock
   // above for why the order matters.

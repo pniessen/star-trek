@@ -68,6 +68,7 @@ const {
 const { pressureBudget, RESERVE } = await import("../.campaign-build/chart/enemyTurn.js");
 const { makeRng } = await import("../.campaign-build/chart/rng.js");
 const { GRID, SECTOR_COUNT, neighbours } = await import("../.campaign-build/chart/sectors.js");
+const { commanderOf } = await import("../.campaign-build/chart/commander.js");
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -313,7 +314,24 @@ function runCampaign(seed, reach) {
     deepestAt,
     structures: campaign.sectors.reduce((n, s) => n + s.structures.length, 0),
     ours: count(campaign, "ours"),
+    // Tagged by the same seed the war's commander is drawn from (Task 4/5),
+    // so a sweep row can be split out by doctrine without re-simulating.
+    doctrine: commanderOf(seed).doctrine,
   };
+}
+
+/**
+ * Per-doctrine won/lost/unresolved, for the balance guard: doctrine reweights
+ * which options the enemy turn prefers (Task 5), so a row's pooled won% can
+ * hide one doctrine winning far more or less often than the others.
+ */
+function byDoctrine(results) {
+  const doctrines = ["raider", "hammer", "anvil"];
+  return doctrines.map((doctrine) => {
+    const rows = results.filter((r) => r.doctrine === doctrine);
+    const of = (outcome) => rows.filter((r) => r.outcome === outcome).length;
+    return { doctrine, trials: rows.length, won: of("won"), lost: of("lost"), unresolved: of("unresolved") };
+  });
 }
 
 // ── reporting ───────────────────────────────────────────────────────────────
@@ -456,6 +474,15 @@ if (TRACE !== null) {
       `${p(reach, 5)}  ${p(pct(s.won, s.trials), 6)}  ${p(pct(s.lost, s.trials), 6)}  ` +
       `${p(pct(s.unresolved, s.trials), 6)}  ${p(s.median, 6)}   ${p(mean(bad.map((r) => r.deepest)).toFixed(1), 7)}   ` +
       `${p(mean(bad.map((r) => r.deepestAt)).toFixed(1), 8)}`,
+    );
+    // Doctrine breakdown, right under the pooled row: the guard is per-doctrine
+    // (spec §2.2), and a pooled won% can hide one doctrine winning far more or
+    // less often than the others.
+    console.log(
+      "            " +
+      byDoctrine(results)
+        .map((d) => `${d.doctrine}=${pct(d.won, Math.max(1, d.trials))}(n=${d.trials})`)
+        .join("  "),
     );
     // Contested: both outcomes genuinely occur, and the war still ends. A row
     // that is 50% won and 50% deadlocked is not a contest, it is a coin flip

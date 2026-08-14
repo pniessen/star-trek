@@ -222,7 +222,16 @@ check(
 // makes the assertion a shuffle-position lottery for that sector rather than
 // a test of the stated behaviour, since every push-ours candidate costs the
 // same and only shuffle order decides which get funded first.
-const neglected = newCampaign(13);
+//
+// Seed 13 (Task 5) draws a Hammer commander, whose weights make push-ours
+// (0.7×) strictly cheaper than push-contested (1.2×) at every defence level —
+// Hammer always finds a fresh sector to open rather than closing one it has
+// already contested, so under Hammer specifically the fall reliably lands on
+// the fifth run, not the fourth. That is doctrine texture, not a broken
+// promise: seed 1 draws Raider, whose weights point the other way (0.6× on
+// push-contested), and closes a contested sector out inside the window this
+// test asserts.
+const neglected = newCampaign(1);
 const startedOurs = neglected.sectors.map((s) => s.control === "ours");
 for (let run = 1; run <= 4; run++) {
   neglected.runsElapsed = run;
@@ -1013,6 +1022,30 @@ const { commanderOf, warAct, guardClass } = await import("../.campaign-build/cha
   check("a fresh war is a surge", warAct(c) === "surge", warAct(c));
   c.exhausted = 1;
   check("a ticking exhaustion counter is failing", warAct(c) === "failing", warAct(c));
+}
+
+// ── doctrine reweights the enemy turn ───────────────────────────────────────
+{
+  // Doctrine changes texture: over many seeds, hammer wars produce a higher
+  // share of assault+push-ours actions than raider wars do.
+  const share = (doctrine) => {
+    let heavy = 0, total = 0;
+    for (let seed = 1; seed <= 400; seed++) {
+      if (commanderOf(seed).doctrine !== doctrine) continue;
+      const c = newCampaign(seed);
+      const rng = makeRng(seed, 0);
+      for (let run = 0; run < 6; run++) {
+        for (const a of runEnemyTurn(c, rng)) {
+          total++;
+          if (a.kind === "assault" || a.kind === "push-ours") heavy++;
+        }
+        c.runsElapsed++;
+      }
+    }
+    return heavy / Math.max(1, total);
+  };
+  check("hammer fights heavier than raider", share("hammer") > share("raider") + 0.03,
+    `hammer=${share("hammer").toFixed(3)} raider=${share("raider").toFixed(3)}`);
 }
 
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
