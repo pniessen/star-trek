@@ -159,15 +159,25 @@ const ESCORT = {
  * veteran of the commander's own doctrine — a stat-and-name variant of an
  * existing class, never a new hull or new behaviour. One axis is boosted per
  * doctrine, echoing what that doctrine already means for the enemy turn
- * (Task 5): a raider commander's guard is faster, a hammer's tougher, an
- * anvil's harder-hitting. Every guard is worth more salvage regardless of
- * doctrine — it is still the commander's own hull, wherever it stands.
+ * (Task 5): a raider commander's guard is faster, a hammer's tougher, and an
+ * anvil's guard keeps its perch and fires faster — not harder. `damageScale`
+ * is dead in the weapons pipeline (`Ordnance.fire` uses the flat module-level
+ * `BOLT` damage; nothing reads `HostileSpec.damageScale`), so boosting it
+ * would have been a no-op dressed up as a buff, and wiring it live is a
+ * game-wide balance change — every hostile's differing `damageScale` would
+ * suddenly start applying — well outside what this task is for. `cadence`
+ * divides `fireInterval` instead: `Hostile.update` sets
+ * `this.cooldown = this.spec.fireInterval` the instant it fires, and that
+ * cooldown is the only gate on the next shot, so a smaller `fireInterval`
+ * is a real, live rate-of-fire increase. Every guard is worth more salvage
+ * regardless of doctrine — it is still the commander's own hull, wherever it
+ * stands.
  */
 const GUARD = {
   chance: 0.3,
   hull: 1.6,
   speed: 1.25,
-  damage: 1.35,
+  cadence: 1.35,
   value: 2.5,
 } as const;
 
@@ -1511,7 +1521,10 @@ export class Session {
         value: Math.round(base.value * GUARD.value),
         ...(commander.doctrine === "raider" ? { maxSpeed: base.maxSpeed * GUARD.speed } : {}),
         ...(commander.doctrine === "hammer" ? { hull: base.hull * GUARD.hull } : {}),
-        ...(commander.doctrine === "anvil" ? { damageScale: base.damageScale * GUARD.damage } : {}),
+        // `fireInterval` genuinely governs cadence — see the GUARD doc
+        // comment above for the fire-site line this leans on — so dividing
+        // it is a live buff, unlike `damageScale`.
+        ...(commander.doctrine === "anvil" ? { fireInterval: base.fireInterval / GUARD.cadence } : {}),
       };
       // Ring it in the same way the roster is ringed — the guard is a
       // veteran of an existing class, not a set-piece that needs its own
