@@ -333,9 +333,75 @@ seed, for a second lit body to pick up later; it currently lights nothing
 dominate roughly a third of the frame with real parallax on approach. **Took
 four rebuilds to get here** — see `docs/environment.md` §1.5 and §8.1: the
 first three rounds built it out of strokes and never produced a planet; only
-a filled mesh did, immediately. Behind no flag and no key — one giant is
-always seeded per sector, fixed at bearing 0 so it could be looked at
-without hunting for it. See `render/GasGiant.ts` and `render/light.ts`.
+a filled mesh did, immediately. Fixed at bearing 0 so it could be looked at
+without hunting for it. **No longer always seeded** — the scenery variety
+pass below cast it into a roster of six, at weight 0.30, so it is once again
+an event rather than a constant. See `render/GasGiant.ts` and `render/light.ts`.
+
+Also built: **scenery variety** — `docs/superpowers/specs/2026-08-14-scenery-variety-design.md`'s
+answer to the giant having shipped as a constant: every sector now shows the
+same actor in different makeup, so the whole roster changes rather than one
+body's palette. **`planHero(seed, sector)`**, a new `render/scenery.ts`, is
+one pure allocator with its own hash mix (distinct from `planPlanet`'s,
+`planFixture`'s, `planLight`'s and the giant's own, so no two features ever
+correlate) that casts one of six `HeroKind`s per sector: `giant` 0.30,
+`ringed` 0.20, `moon` 0.15, `sun` 0.15, `rocks` 0.10, `bare` 0.10 — weighted,
+cumulative, deterministic. `Planet.ts`'s own independent 38% roll for the
+ringed planet is retired; it is now the `ringed` hero, promoted to the
+giant's own hero-scale band (1.5–2.2×) rather than standing at furniture
+scale forever. `bare` is a place, not an absence — no new geometry, but the
+deck log may name it, because named emptiness reads as chosen rather than
+missing.
+**Two new bodies join the giant and the ringed planet**, both in the giant's
+own settled pattern — a lit filled mesh, shaded by the sector's
+`SectorLight`, leashed and followed the same way, fog-exempt because both
+sit past `Stage`'s fog far plane: **the moon** (`render/Moon.ts`, `MOON`) is
+a cratered rock — Worley/cellular noise standing in for the giant's
+domain-warped flow field, because craters are pits, not weather — with a
+hard terminator and no atmosphere halo, airless read as the character where
+the giant's own limb blooms; **the sun** (`render/SunHero.ts`, `SUN_HERO`)
+is not a surface at all, a bright core plus two additive halo discs and a
+jittered corona of streamer spokes standing along the sector light's own
+bearing, re-anchored to the player every frame rather than leashed to a
+world point, because a star has no position to approach.
+**Asteroids are collidable hazards** (`render/Asteroids.ts`), the one
+scope item the owner ruled explicitly rather than shootable salvage: merged,
+irregular, desaturated low-poly clusters — a hero `rocks` field (weight
+0.10, a few dozen rocks across combat space) plus hero-independent furniture
+every sector (0–2 mid-distance clusters, a drifting hulk at 0.15, out of
+collision reach by construction). Collision runs player-only, hero-field-only,
+through the same lanes a hull hit already uses: push-out along the contact
+normal, damped velocity reflection, and `player.takeHit` — a struck facing
+absorbs, the remainder breaches, a breach halves the multiplier exactly as
+any other hull contact does, priced through `ROCKS` in `game/session.ts`
+(`grace: 7`, `damagePerSpeed: 0.02`, `ceiling: 0.45`, `restitution: 0.25`) —
+a grace floor so parking against a rock is never a death sentence, a ceiling
+so one strike is never instantly lethal from full shields. A thud through
+the existing two voices marks a damaging strike, and `HIT_STOP.impact` is
+the only time scale involved. **Hostiles avoid rather than collide** —
+`AVOID_MARGIN`/`AVOID_GAIN` in `game/hostiles.ts` fold a bounded radial
+shove into their existing steering, steering only, never damage, so a
+hostile clipping through a rock the player must dodge never reads as a
+cheat and herding one into the field never pays a free kill. The scanner
+stays clean throughout: rocks never appear as contacts, same as every other
+body.
+**Gas shoals** (`render/Shoals.ts`, `SHOAL`) return scenery's own
+`TraceBuffer` to `main.ts` (`skyTrace`, 20000 segments, deleted when the
+giant moved to a mesh and revived here) for filament curtains at combat
+range — the comet plume's technique at a larger scale, seeded independently
+of `planHero` at a 0.20 chance so a shoal can share a sector with any hero
+or none. **Visual occlusion only, by decision**: shoals hide and reveal
+hulls to the eye and never touch the scanner or a lock — the comet keeps
+sole ownership of instrument interference, so a second fog with the same
+power never dilutes the one rule that makes the comet a place.
+**One switch covers all of it**: `window.__scenery.hide()`/`.show()`,
+unconditional rather than gated behind `DEBUG_PROBE` because the playtest
+harness is its one consumer and does not run on `localhost` — it folds in
+the giant's own prior hide-on-load (`__giant`'s SwiftShader cost problem)
+and every body this pass added, so a later body only has to join the list
+rather than teach the harness a new global. See `render/scenery.ts`,
+`render/Moon.ts`, `render/SunHero.ts`, `render/Asteroids.ts` and
+`render/Shoals.ts`.
 
 Also built: **the finite invasion**, the answer to `campaign-balance.md`'s
 finding that a war with one input — `gainGround` — can only be passed or

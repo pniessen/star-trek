@@ -363,13 +363,35 @@ underneath rather than leading.
 2. **The light source generalised** — terminator and limb on every existing body,
    including the comet's head and the ringed planet.
 3. **Scale and occlusion confirmed** — bodies eating the starfield, one hero per
-   sector.
-4. **Gas shoals.**
+   sector. **Delivered 2026-08-15**, by
+   [the scenery variety spec](superpowers/specs/2026-08-14-scenery-variety-design.md):
+   the giant stopped being the only hero. `planHero(seed, sector)` now casts
+   one of six — giant, ringed, moon, sun, rocks, bare — each still a lit,
+   occluding, hero-scaled mesh in the giant's own idiom, so "one hero per
+   sector" now means a cast rather than a constant.
+4. **Gas shoals. Delivered 2026-08-15**, by the same spec: filament curtains
+   at combat range, through scenery's own `TraceBuffer` (`skyTrace`, restored
+   at 20000 segments after the giant's own move to a mesh had left it
+   deleted) — the comet plume's technique at a larger scale. Visual
+   occlusion only, by decision: shoals hide and reveal hulls to the eye but
+   never jam a lock or degrade the scanner, so the comet keeps sole
+   ownership of instrument interference.
 5. **Starfield fix and near-field motes.**
 6. **Fog and grid.**
 7. **Mid-field furniture** — asteroid clusters, a drifting hulk, seeded per sector.
+   **Delivered 2026-08-15**, by the same spec: 0–2 rock clusters plus a
+   drifting hulk at a 0.15 chance, every sector regardless of which hero it
+   drew, merged geometry per cluster, out of collision reach by
+   construction — furniture is scenery, not a hazard.
 8. **Retire the painted bodies from `Backdrop`** — last, so there is never a frame
-   with no sky.
+   with no sky. **Not taken.**
+   [The scenery variety spec](superpowers/specs/2026-08-14-scenery-variety-design.md)
+   is explicit that this stage is not its own (its own §9): `Backdrop` still
+   paints the star band, nebula, galactic plane and dust lane exactly as
+   before. Only its `SkyBody`s were ever slated for removal here, and they
+   have not been touched — the rule this stage exists to protect, never a
+   frame with no sky, is why it stays last and unclaimed rather than folded
+   into this pass for convenience.
 
 ---
 

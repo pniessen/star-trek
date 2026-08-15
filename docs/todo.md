@@ -412,10 +412,13 @@ coincidence rather than design, from the abandoned stroke build's own 2 (a
 `VectorObject` shell's face+edge pair). `body`'s geometry is
 `widthSegments: 48` × `heightSegments: 32`, down from an initial 96×64 once
 colour moved into the fragment shader and tessellation only had to keep the
-silhouette round. No stroke-buffer count applies to the shipped version —
-the flow band is a fragment shader, not strokes, and the scratch-pad
-`TraceBuffer` it once would have pushed into (`skyTrace`) has since been
-deleted from `main.ts` rather than kept at zero length for no producer.
+silhouette round. No stroke-buffer count applies to the giant's own body —
+the flow band is a fragment shader, not strokes. The scratch-pad
+`TraceBuffer` it once would have pushed into (`skyTrace`) was deleted from
+`main.ts` for having no producer at the time this was written; **it has
+since been revived** by the scenery variety pass below, for the gas
+shoal, so "no stroke-buffer count" now describes only the giant and not the
+sky as a whole.
 **No frame-time figure was captured** on the machine of the
 day; only draw calls and geometry counts were measured, which is short of
 §4.4's own ask and worth closing before a detail-tier decision is made.
@@ -463,6 +466,80 @@ The levers that decide whether it works, first:
   table — the contract bounds what the palette *can* express, not what
   fraction of the disc a given seed's noise actually visits. Worth flying
   `flowContrast` next against this specifically.
+
+**Scenery variety** — the roster, the two new bodies, the rocks field and
+the shoal, all from
+`docs/superpowers/specs/2026-08-14-scenery-variety-design.md`, unflown in
+the same sense as everything else in this section: reasoned about, none of
+it heard or played.
+
+- **`ROSTER`** (`render/scenery.ts`) — giant 0.30, ringed 0.20, moon 0.15,
+  sun 0.15, rocks 0.10, bare 0.10. The question no constant answers: **does
+  the giant feel like an event yet**, at 30% and no longer an independent
+  38% roll stacked on top of everything else, or does a six-way deck still
+  deal the same face too often to read as a draw rather than a default?
+- **`ROCKS`** (`game/session.ts`) — `grace = 7`, `damagePerSpeed = 0.02`,
+  `ceiling = 0.45`, `restitution = 0.25`. The question no constant answers:
+  **is a field a place you fight, or a place you die** — whether threading
+  rocks under fire while trading shots reads as a hazard worth flying
+  through, or a single bad line through a dense field costs more shield
+  than the wave around it does.
+- **`AVOID_MARGIN = 8` / `AVOID_GAIN = 2.2`** (`game/hostiles.ts`) — the
+  bounded shove that keeps a hostile from clipping through a rock the
+  player has to dodge. Too small and the clip still happens, which reads as
+  a cheat; too large and the shove itself becomes visible, a pilot flinching
+  off scenery rather than avoiding it. Steering only — hostiles never take
+  rock damage, so this is entirely a legibility question, not a balance one.
+- **`MOON.craterScale = 9.0`** (`render/Moon.ts`) — the Worley frequency the
+  crater field reads pole to pole. What decides whether it works: whether
+  nine feels like a cratered world at the moon's own screen radius (55-70%
+  of the giant's, per `radiusMin`/`radiusMax`), or reads as either a smooth
+  ball or a peppered one at the range the leash holds it.
+- **`SUN_HERO`'s radii** (`render/SunHero.ts`) — `coreRadius = 26` against
+  `range = 850`, `haloInnerScale`/`haloOuterScale` 2.2/4, streamer length
+  2-5× `coreRadius`. The core is deliberately small so the halo does the
+  dominating, not the sphere — the opposite emphasis from the giant's
+  genuinely-scaled body — and whether that trade reads as a star or as a dim
+  ball with a glow stuck on it is a keyboard question, not a geometry one.
+- **Shoal density and drift** (`SHOAL` in `render/Shoals.ts`) — `chance =
+  0.2`, `filaments = 120`, `filamentSegments = 9`, `driftMin`/`driftMax` =
+  2/4.5. The question no constant answers: **does the curtain read as gas at
+  fighting range**, the way the comet's own filament rework finally did
+  after two rounds of test play, or does 120 strands at this density read as
+  scatter the way the comet's first 500 loose motes did before continuity —
+  not count — turned out to be the fix.
+
+**Measured, on the machine of the day (2026-08-15)**, through
+`window.__stage.renderer.info` read live against a throwaway Playwright
+script (uncommitted, workspace-only) driving the dev server — the comet's
+own "779 of 5000" style, but measured rather than arithmetic this time, per
+§4.4's own ask:
+
+- A `rocks`-hero sector with no shoal draws through **62 draw calls**,
+  stable to the call across six sampled frames within a run and across two
+  independently-seeded rocks fields, and **~12,000 triangles** (11,978 and
+  12,162 measured on two seeds — the triangle swing is the field's own rock
+  count varying by seed, not measurement noise; the call count does not
+  move with it, which is the merged-geometry decision in §4.3 of
+  `environment.md` doing its job).
+- A shoal costs **exactly one more draw call**, and this one is by
+  construction rather than by a clean A/B: `TraceBuffer` — the class
+  `skyTrace` is an instance of — draws its entire live contents as a single
+  `LineSegments` mesh regardless of segment count, the same guarantee the
+  comet's own tail already relies on, so a shoal's presence can only ever
+  cost one call. The live segment count behind that one call is **1080 of
+  `skyTrace`'s 20000** — 120 filaments × 9 segments, by construction (no
+  live counter is exposed on `Shoals` or `TraceBuffer` to read instead;
+  `filaments` × `filamentSegments` is the entire computation, and it is the
+  number `Shoals.ts`'s own header comment already carries).
+- **Furniture noise dominates any attempt to isolate the shoal's own delta
+  further.** 0-2 rock clusters plus a hulk at a 0.15 chance are rolled per
+  sector independent of both the hero and the shoal, and two bare-hero,
+  no-shoal sectors measured in the same run landed at 56 and 72 draw calls
+  (7,082 and 11,530 triangles) purely from that roll. A single sector's
+  total is not a budget on its own; the rocks-hero number above is stable
+  because it was checked against six repeated frames of the *same* sector,
+  not because rocks sectors are quieter than bare ones.
 
 ---
 
