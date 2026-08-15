@@ -3,6 +3,7 @@ import { commanderOf, warAct, type Doctrine } from "../chart/commander.js";
 import { planFixture } from "./comet.js";
 import { jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode, stationName } from "../chart/naming.js";
+import { planHero } from "../render/scenery.js";
 import { sound } from "../audio/sound.js";
 
 /**
@@ -184,6 +185,19 @@ function compose(campaign: Campaign, teach: boolean): [string, CrawlTone][] {
     out.push(["A COMET RUNS THROUGH THIS SECTOR", "body"]);
     if (teach) out.push(["NOTHING RESOLVES INSIDE ITS TAIL", "note"]);
   }
+
+  // Same split as the comet above: the fact every run, the rule only on
+  // teach. Most heroes go unannounced here — a giant or a ringed world is
+  // scenery, not a fact that changes how the run is flown. Rocks and bare
+  // space both do: rocks are a hazard the ship can hit, and bare space is
+  // the one hero that promises the sector holds nothing to read off the
+  // tube at all, which is worth saying so a player does not go looking.
+  const heroKind = planHero(campaign.seed, here);
+  if (heroKind === "rocks") {
+    out.push(["AN ASTEROID FIELD CROWDS THIS SECTOR", "body"]);
+    if (teach) out.push(["THE ROCKS DO NOT CARE", "note"]);
+  }
+  if (heroKind === "bare") out.push(["NOTHING HERE BUT THE DEEP", "note"]);
   gap();
 
   // A won board has no enemy to describe and no ground to take, so the whole

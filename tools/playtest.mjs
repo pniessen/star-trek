@@ -1942,6 +1942,59 @@ check(
   `returned ${found.seeded}`,
 );
 
+// ── the deck log names rocks and bare sectors ───────────────────────────────
+// Same shortcut as the rock-collision block above: rather than wait out the
+// odds of landing on a "rocks" sector, force it. `Session.restart` copies
+// `campaign.front` onto `campaign.current` the instant `startRun` calls
+// `enter("run")`, so both have to be set — the same reason the comet block
+// above sets both.
+const heroLog = await page.evaluate(async () => {
+  const { planHero } = await import("/src/render/scenery.ts");
+  const c = window.__campaign;
+  const sectorBefore = c.current;
+  const frontBefore = c.front;
+  let rockSector = -1;
+  for (let s = 0; s < 64; s++) if (planHero(c.seed, s) === "rocks") { rockSector = s; break; }
+  return { sectorBefore, frontBefore, rockSector, skip: rockSector < 0 };
+});
+if (!heroLog.skip) {
+  await page.evaluate((sector) => {
+    const c = window.__campaign;
+    c.front = sector;
+    c.current = sector;
+    window.__presentation.enter("title");
+    window.__presentation.startRun();
+  }, heroLog.rockSector);
+  // Unlike the pacing assertion far above, which only needs the log's first
+  // line, this one sits several stanzas down — so it waits against a clock
+  // for the crawl to scroll it into the readable band rather than reading
+  // `briefing.lines` (composed, not yet risen) directly.
+  const rockLineAt = Date.now();
+  let rockLines = [];
+  while (Date.now() - rockLineAt < 8000) {
+    const s = await probe();
+    rockLines = s.briefingLines ?? [];
+    if (rockLines.some((l) => l.includes("AN ASTEROID FIELD CROWDS THIS SECTOR"))) break;
+    await page.waitForTimeout(50);
+  }
+  check(
+    "the deck log names an asteroid field in a sector that has one",
+    rockLines.some((l) => l.includes("AN ASTEROID FIELD CROWDS THIS SECTOR")),
+    `sector ${heroLog.rockSector} lines=${JSON.stringify(rockLines)}`,
+  );
+  // Restore what this block touched before the victory block below reads
+  // `campaign.current` to compute its own chart move.
+  await page.evaluate(
+    ({ sectorBefore, frontBefore }) => {
+      const c = window.__campaign;
+      c.current = sectorBefore;
+      c.front = frontBefore;
+      window.__presentation.briefing.skip();
+    },
+    { sectorBefore: heroLog.sectorBefore, frontBefore: heroLog.frontBefore },
+  );
+}
+
 // ── the war can end: the victory epilogue ───────────────────────────────────
 // Last, and deliberately starting fresh via `enter("title")` + `startRun()`
 // the same way the comet-finding block above does, rather than depending on
