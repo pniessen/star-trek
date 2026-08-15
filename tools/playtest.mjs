@@ -73,6 +73,19 @@ await page.evaluate(() => {
   window.__stage.phosphor.enabled = false;
   window.__stage.crt.enabled = false;
 });
+// The hero giant's body is a hand-written domain-warped-noise ShaderMaterial
+// (`render/GasGiant.ts`) — the single biggest per-fragment cost of anything
+// on screen, and under SwiftShader that cost is what pushes a frame slow
+// enough to put the dt clamp into slow motion late in this file (the forced
+// win at the very end waits on 2.45 game-seconds of death-drift, and a
+// giant-sized frame budget can make that outrun its own wall-clock timeout).
+// This harness is not a screenshot of the sky, so the giant is hidden right
+// alongside the post chain rather than tuned around. The checks below still
+// read `body`/`limb`/their uniforms directly, which needs no rendering at
+// all, so hiding the object leaves every one of them intact.
+await page.evaluate(() => {
+  window.__giant.object.visible = false;
+});
 
 // ── the comet's tail-volume test ────────────────────────────────────────────
 // `interferenceAt` is a pure function with no game state behind it, so it is
@@ -1695,6 +1708,27 @@ const chosen = await page.evaluate(() => {
   return "DEFIANT ESCORT";
 });
 await page.reload({ waitUntil: "networkidle" });
+// The reload above gets a fresh module instance of everything, `__giant`
+// included, so the visibility set near the top of this file does not carry
+// over — re-hide it for the same slow-motion reason before any more
+// game-seconds have to be waited out. The viewport, unlike the module state,
+// is a browser-level setting and survives the reload untouched, so it is
+// still the 1280x800 the beauty shots above set it to; and a freshly
+// constructed `Stage` brings its three passes back up `enabled` by their own
+// default, undoing the `bloom`/`phosphor`/`crt` = false this file set at the
+// very top. Nothing below this point takes another screenshot, so both are
+// put back to the small, unadorned state — otherwise every assertion for
+// the rest of the file, this reload check and the forced-win tally wait
+// among them, runs at the documented ~15-full-screen-pass SwiftShader cost
+// against 4x the pixels, and the dt clamp eats the difference.
+await page.setViewportSize({ width: 640, height: 400 });
+await page.evaluate(() => {
+  window.__giant.object.visible = false;
+  window.__stage.bloom.enabled = false;
+  window.__stage.phosphor.enabled = false;
+  window.__stage.crt.enabled = false;
+  window.__stage.setSize(640, 400);
+});
 await page.waitForTimeout(2200);
 const rebooted = await page.evaluate(() => ({
   alive: !!window.__probe,
