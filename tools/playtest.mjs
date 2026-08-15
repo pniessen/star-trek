@@ -383,9 +383,16 @@ const shoalWiring = await page.evaluate(async () => {
   window.__campaign.current = shoalSector;
   return { skip: false, shoalSector, sectorBefore };
 });
-await page.waitForTimeout(100);
 if (!shoalWiring.skip) {
-  const shoalShown = await page.evaluate(() => window.__shoals.plan !== null);
+  // Polled rather than a fixed sleep — the same reasoning `waitFor`'s own
+  // header gives: how much wall-clock a frame costs varies with the host's
+  // GL, so a fixed wait is a coin flip and a poll is not.
+  const deadline = Date.now() + 5000;
+  let shoalShown = await page.evaluate(() => window.__shoals.plan !== null);
+  while (!shoalShown && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+    shoalShown = await page.evaluate(() => window.__shoals.plan !== null);
+  }
   check("forcing a shoal sector shows its curtain within a frame", shoalShown, "");
   await page.evaluate((sectorBefore) => {
     window.__campaign.current = sectorBefore;
