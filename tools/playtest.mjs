@@ -1496,43 +1496,54 @@ const rockHit = await page.evaluate(async () => {
   window.__campaign.current = rockSector;
   return { skip: false, sector: rockSector, sectorBefore };
 });
-// Let one frame pass so main.ts rebuilds the sector's scenery and hands the
-// session its rock list, then fly the player into the first rock at speed.
-await page.waitForTimeout(200);
-const rockState = await page.evaluate(() => {
-  const rock = window.__session.rocks[0];
-  const p = window.__player;
-  const saved = {
-    position: p.position.clone(),
-    velocity: p.velocity.clone(),
-    shields: { ...p.shields },
-    hull: p.hull,
-    multiplier: window.__session.multiplier,
-  };
-  p.position.set(rock.x - rock.r - 2, rock.y, rock.z);
-  p.velocity.set(30, 0, 0); // well past ROCKS.grace, straight at it
-  return { saved, rocks: window.__session.rocks.length, rock };
-});
-await page.waitForTimeout(300);
-const rockAfter = await page.evaluate(() => ({
-  shields: { ...window.__player.shields },
-  hull: window.__player.hull,
-  mult: window.__session.multiplier,
-  speed: window.__player.velocity.length(),
-}));
-// Restore what this block touched before anything downstream reads it.
-await page.evaluate(
-  ({ saved }) => {
-    const p = window.__player;
-    p.position.copy(saved.position);
-    p.velocity.copy(saved.velocity);
-    Object.assign(p.shields, saved.shields);
-    p.hull = saved.hull;
-    window.__session.multiplier = saved.multiplier;
-  },
-  { saved: rockState.saved },
-);
+// Everything below dereferences `window.__session.rocks[0]`, which only
+// exists once a "rocks" sector was actually found above — guarded on
+// `rockHit.skip` from here on so a seed that never rolls one in 64 sectors
+// degrades to a skipped block instead of a TypeError.
 if (!rockHit.skip) {
+  // Let one frame pass so main.ts rebuilds the sector's scenery and hands the
+  // session its rock list.
+  await page.waitForTimeout(200);
+  // Cleared once for the whole collision window below — every sub-check here
+  // reads the player's shields after a wait, and a stray hostile round
+  // landing in that window would be indistinguishable from the rock's own
+  // hit. `Session.collideRocks` never touches hostiles, so clearing the
+  // fleet costs nothing this block cares about.
+  await page.evaluate(() => { window.__fleet.clear(); });
+
+  const rockState = await page.evaluate(() => {
+    const rock = window.__session.rocks[0];
+    const p = window.__player;
+    const saved = {
+      position: p.position.clone(),
+      velocity: p.velocity.clone(),
+      shields: { ...p.shields },
+      hull: p.hull,
+      multiplier: window.__session.multiplier,
+    };
+    p.position.set(rock.x - rock.r - 2, rock.y, rock.z);
+    p.velocity.set(30, 0, 0); // well past ROCKS.grace, straight at it
+    return { saved, rocks: window.__session.rocks.length, rock };
+  });
+  await page.waitForTimeout(300);
+  const rockAfter = await page.evaluate(() => ({
+    shields: { ...window.__player.shields },
+    hull: window.__player.hull,
+    mult: window.__session.multiplier,
+    speed: window.__player.velocity.length(),
+  }));
+  // Restore what this block touched before anything downstream reads it.
+  await page.evaluate(
+    ({ saved }) => {
+      const p = window.__player;
+      p.position.copy(saved.position);
+      p.velocity.copy(saved.velocity);
+      Object.assign(p.shields, saved.shields);
+      p.hull = saved.hull;
+      window.__session.multiplier = saved.multiplier;
+    },
+    { saved: rockState.saved },
+  );
   check("a rock field hands the session its rocks", rockState.rocks > 0, `rocks=${rockState.rocks}`);
   check(
     "hitting a rock at speed costs a shield facing",
@@ -1567,8 +1578,54 @@ if (!rockHit.skip) {
     Object.values(graceAfter.shields).every((s) => s === 1),
     JSON.stringify(graceAfter.shields),
   );
-}
-if (!rockHit.skip) {
+
+  // Breach path: `ROCKS.ceiling` caps a single strike's throughput well under
+  // what a full shield facing absorbs (~0.45 against a facing worth 1), so
+  // the two checks above never reach the hull and never exercise `breach()`.
+  // Drain every facing to just above zero — whichever one `facingFrom`
+  // actually resolves to no longer matters — then hit the rock again at
+  // speed and confirm the multiplier halves through the same `breach()` a
+  // bolt takes, per `Session.collideRocks`'s own comment on routing rock
+  // damage through `Ship.takeHit` exactly like a projectile.
+  const breachState = await page.evaluate(() => {
+    const rock = window.__session.rocks[0];
+    const p = window.__player;
+    const saved = {
+      position: p.position.clone(),
+      velocity: p.velocity.clone(),
+      shields: { ...p.shields },
+      hull: p.hull,
+      multiplier: window.__session.multiplier,
+    };
+    for (const facing of Object.keys(p.shields)) p.shields[facing] = 0.05;
+    p.hull = 1;
+    window.__session.multiplier = 4;
+    p.position.set(rock.x - rock.r - 2, rock.y, rock.z);
+    p.velocity.set(30, 0, 0);
+    return { saved };
+  });
+  await page.waitForTimeout(300);
+  const breachAfter = await page.evaluate(() => ({
+    mult: window.__session.multiplier,
+    hull: window.__player.hull,
+  }));
+  await page.evaluate(
+    ({ saved }) => {
+      const p = window.__player;
+      p.position.copy(saved.position);
+      p.velocity.copy(saved.velocity);
+      Object.assign(p.shields, saved.shields);
+      p.hull = saved.hull;
+      window.__session.multiplier = saved.multiplier;
+    },
+    { saved: breachState.saved },
+  );
+  check(
+    "a rock strike that reaches the hull halves the multiplier",
+    breachAfter.mult === 2 && breachAfter.hull < 1,
+    `mult=${breachAfter.mult} hull=${breachAfter.hull}`,
+  );
+
   await page.evaluate((sectorBefore) => {
     window.__campaign.current = sectorBefore;
   }, rockHit.sectorBefore);
