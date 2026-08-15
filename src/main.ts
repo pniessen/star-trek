@@ -6,6 +6,7 @@ import { Backdrop, backdrop } from "./render/Backdrop.js";
 import { Planet } from "./render/Planet.js";
 import { planLight, shadeAt, type SectorLight } from "./render/light.js";
 import { GasGiant } from "./render/GasGiant.js";
+import { Moon } from "./render/Moon.js";
 import { planHero, type HeroKind } from "./render/scenery.js";
 import { PALETTE } from "./render/palette.js";
 import {
@@ -178,6 +179,17 @@ stage.scene.add(comet.object);
  */
 const giant = new GasGiant();
 stage.scene.add(giant.object);
+
+/**
+ * The hero moon — scenery task 2, cast by `planHero` at `"moon"`'s own
+ * weight in `render/scenery.ts`'s `ROSTER`. Constructed and scene-added
+ * beside the giant for the same reason: `main.ts`'s hero block is an
+ * exclusive `if`/`else` chain, so both instances stand ready but at most
+ * one is ever visible in a given sector. See `render/Moon.ts`'s own header
+ * for what carries over from `GasGiant` and what does not.
+ */
+const moon = new Moon();
+stage.scene.add(moon.object);
 
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
@@ -1032,6 +1044,12 @@ function frame(now: number): void {
     giant.follow(player.position);
     giant.update(dt);
   } else giant.hide();
+  // Same rule as the giant's own, one `HeroKind` over.
+  if (sectorHero === "moon") {
+    moon.show(campaign.seed, campaign.current, sectorLight);
+    moon.follow(player.position);
+    moon.update(dt);
+  } else moon.hide();
 
   trace.begin();
   session.ordnance.draw(trace);
