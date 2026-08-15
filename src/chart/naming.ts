@@ -47,8 +47,13 @@ const KINDS = [
  * A cheap avalanche mix. Not cryptographic and not trying to be — it only has
  * to spread adjacent salts across the word lists so two neighbouring regions do
  * not draw the same stem, which a plain modulo of the index would do constantly.
+ *
+ * Exported so `commander.ts` can draw the enemy commander's name, doctrine and
+ * pronoun the same arithmetic-not-storage way this module draws every place
+ * name — one function, one register, rather than a second copy drifting from
+ * this one.
  */
-function hash(seed: number, salt: number): number {
+export function hash(seed: number, salt: number): number {
   let h = (seed ^ 0x9e3779b9) >>> 0;
   h = Math.imul(h ^ salt, 0x85ebca6b) >>> 0;
   h ^= h >>> 13;

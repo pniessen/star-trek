@@ -64,13 +64,14 @@ docblocks — they are the record of three measured mistakes.
 
 ### 1.2 Two corrections that ride along
 
-**The floor goes.** `sectorsHeldBeyondStart` is currently
-`max(0, theirs − 24)`, so pushing the enemy below its opening depth is free
-for them. The `max(0, …)` is deleted — the term goes negative as the player
-pushes deep, reducing ambition below base. `campaign-balance.md` recommends
-this unconditionally, whichever candidate won. Under the reserve clamp its
-effect is modest (ambition is rarely the binding term late), which is fine:
-it is a correctness fix, not a balance lever.
+**The floor goes, then comes back.** Deleted 2026-08-13 on
+`campaign-balance.md` §5's recommendation ("indefensible on its own terms").
+Falsified by measurement the same day: unfloored, the term collapses ambition
+to zero within two to four runs of any player lead, independent of any
+`RESERVE` constant, so the reserve mechanic this document is about never gets
+exercised. Restored 2026-08-14 by the owner's ruling — the fairness is
+answered instead by `costPerStep` in `gainGround`, which already charges
+retaken ground to the reserve directly, in stock rather than in ambition.
 
 **Patrols become the salvage sink.** `patrolCapacity` stops being "one plus a
 yard": the capacity check in `deployPatrol` is removed, so patrols are

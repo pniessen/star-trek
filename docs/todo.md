@@ -79,8 +79,58 @@ heard. This is the one block of work that cannot be done by thinking harder.
 
 **Flight and combat**
 `Ship.TURN_ACCEL / TURN_DAMP / MAX_TURN / DRAG`, `PHASER.falloffStart/End`,
-`WAVE_BREAK`, multiplier gain, `HIT_STOP`, the death sequence's `TIMING`, the
-attract loop's dwell times, the scanner sweep rate.
+`WAVE_BREAK`, multiplier gain, `HIT_STOP` (now including `heavyKill = kill ×
+1.5`, the Brawler/Miner beat), the death sequence's `TIMING`, the attract
+loop's dwell times, the scanner sweep rate.
+
+**Kill rings** — `DebrisField.ring` in `src/game/debris.ts`, drawn at 24
+segments per ring, radius `2 + 22t` over 0.7s, dead by the end. Reasoned, not
+flown: whether a 1.4×-scaled Bastion ring actually reads as heavier than a
+1×-scaled Raider's, or whether the difference only shows up in the hit-stop
+beat, is a keyboard question. Worth the same sitting as `HIT_STOP.heavyKill`
+above, since the two are meant to read as one punctuation, not two.
+
+Segment budget, arithmetic rather than measured (no live capture was taken
+for this pass — worth confirming against a real machine the way the comet's
+779 was): the comet's tail alone already spends **779 of `TraceBuffer`'s
+shared 5000** (§2 below). On top of that, a busy wave adds kill rings (24
+segments each; a torpedo blast catching a cluster of swarmers plus a couple
+of trailing phaser kills inside one ring's 0.7s life is a reasonable worst
+case at 5 concurrent rings, 120 segments), near-miss streaks (1 segment each,
+live for 0.35s; call it 8 concurrent in the same dense wave), and shield arcs
+(10 segments per arc, up to 2 at once — the bow's brace aura plus a flash on
+a different struck facing — so ≤20). That totals roughly 779 + 120 + 8 + 20 ≈
+927 segments in a worst-case combat frame, well under a fifth of the 5000
+budget — but it stacks with the debris shards a multi-kill wave is also
+bursting at the same moment, which this arithmetic does not include, so it is
+a floor on the worst case rather than the whole of it.
+
+**The combat feel pass** — four small, independent constants, all new and
+all unflown in the same sense as everything else here.
+
+- **`NEAR_MISS`** (`session.ts`) — `outer = 4.5`, `cooldown = 0.4`. What
+  decides whether it works: whether the cue reads as "that one was close"
+  once per dense pass, or wears the cooldown down into a rattle nobody
+  notices any more.
+- **The shield arc's `RADIUS = 4.6`** (`game/shieldFx.ts`) — not tied to the
+  player hull's own geometry; the review that shipped it measured the
+  hull's own half-width in `hulls.ts` at closer to 2–3 units, so the aura
+  and flash sit visibly outside the hull rather than flush against it, most
+  noticeable on a lateral hit in chase view. What decides whether it works:
+  whether that gap reads as "the shields, not the hull" — plausible, since
+  shields are meant to extend past the hull — or simply as misaligned.
+- **`WITHDRAW`** (`hostiles.ts`) — `threshold = 0.2`, `exitRange = 130`, and
+  a per-class `chance` (Raider 0.75, Sniper/Miner 0.5, Brawler 0.15, Shroud
+  0). What decides whether it works: whether a fleeing hull reads as a
+  class behaving in character — disposable Raiders running, the Bastion
+  standing — or as an arbitrary coin flip nobody can see the pattern in.
+- **`Fleet.brawlerEngaged`** (`hostiles.ts`) — the gate for the swarmer's
+  stern-flanking bias, recomputed once a step with no hysteresis: a Brawler
+  crossing in and out of its own `fireRange` at the boundary could in
+  principle flip the bias frame to frame. Self-dampened in practice by the
+  turn-rate clamp and the roughly 2× gap between the class's own
+  `preferredRange` and `fireRange`, so no chatter has actually been
+  observed — a tuning-pass candidate rather than a known defect.
 
 **The altitude slab — the newest block, and the one to fly first.** Everything
 in `src/game/altitude.ts` was reasoned about and none of it has been flown.
@@ -171,6 +221,26 @@ every dispatch is some version of *go there, clear a wave, break the strike*,
 because that is the only verb the campaign has to point at. A Warden in trouble
 (the state already exists) or a Loom sighting (which would also fix §6.1) would
 each add a second.
+
+**The commander and the war's voice** — new with the finite invasion,
+first-draft guesses in the same sense as everything above.
+
+- **`DOCTRINE_WEIGHTS`** (`chart/enemyTurn.ts`) — the per-action multiplier
+  each doctrine applies to the enemy's own cost-sorted target list. What
+  decides whether it works: whether a raider's war actually reads as
+  raiding — weak-sector pushes, few assaults — rather than reading like any
+  other commander with different flavour text on the deck log.
+- **`GUARD`** (`session.ts`) — `chance = 0.3`, `hull = 1.6`, `speed = 1.25`,
+  `cadence = 1.35`, `value = 2.5`. What decides whether it works: whether
+  the commander's guard reads as a named, doctrine-flavoured veteran the
+  first time a player meets one in the failing act, or as an ordinary hull
+  with a bigger number attached.
+- **`DISPATCH`'s act-aware fallback** — when nothing is inbound, HQ now
+  names the war's own band (failing/losing/winning, per `warAct`) instead
+  of staying silent. What decides whether it works: whether a player who
+  never raises the chart still gets a true sense of how the war is going
+  from the HUD row alone, or the three fallback lines read as interchangeable
+  noise once the novelty wears off.
 
 **The mix** — `BUS_LEVELS`, the phaser's cadence and pitch pair, the alert's
 `FULL_THREAT`. Three to sit with first:
@@ -398,7 +468,7 @@ The levers that decide whether it works, first:
 
 ## 3. Design questions — open, and not answerable by a constant
 
-### 3.1 Campaign balance: the cliff
+### 3.1 ~~Campaign balance: the cliff~~ Resolved, 2026-08-14
 
 `npm run campaignlength` finds no contested band. Five steps of ground per run
 gives 0% wins; six gives 93%. Capping the pressure formula turns losses into
@@ -408,12 +478,43 @@ What is missing is a **feedback term**: something that slows the enemy as it
 loses ground, or speeds the player up as they gain it. That is a design answer.
 See status.md §3 for the measurements before proposing one.
 
-### 3.2 `gainGround` wants a ruling
+**Resolved.** Investigated at length in `docs/campaign-balance.md`: the
+missing feedback term was real but not sufficient on its own — three
+candidates were built and measured, and all three narrowed rather than
+widened the contested band, for a structural reason (§4 of that document): a
+war with one input, `gainGround`, can only be passed or failed, never
+contested. **Candidate C, the finite invasion (`RESERVE` in
+`src/chart/reserve.ts`), was adopted** — it is the only one of the three
+under which the campaign's four decisions do anything at all, because a
+patrol becomes permanent attrition against a finite stock rather than a
+one-turn delay against a self-refilling one — and it shipped together with
+its own required salvage sink, uncapped patrols. Retuned to
+`regenFlat = 24`: reach 4 wins 83.4% of 1000 seeds inside 40 runs at a
+median of 26, the recorded compromise between (a) a clean 30–70% contested
+band, which no `regenFlat` value reaches without pushing the median past 30,
+and (b) a war that mostly resolves inside a reasonable length. See
+`docs/campaign-balance.md`'s "Adopted, 2026-08-14" section, including the
+floor episode: the `sectorsHeldBeyondStart` zero floor that this document's
+own §5 recommended deleting was restored by the owner's ruling after the
+deletion was measured to collapse the enemy's whole spend to zero within two
+to four runs of any player lead.
+
+### 3.2 ~~`gainGround` wants a ruling~~ Resolved, 2026-08-14
 
 One step per wave cleared in the sector you are standing in. It appears in
 neither design document, and without it `isWon` is unreachable — so it was
 invented to close the loop. Per §3.1 it is the single number the whole campaign
 hangs on. It deserves a deliberate decision rather than continued inheritance.
+
+**Resolved.** Ruled on in `docs/campaign-balance.md` §6: it stays, and it is
+now documented in `strategy-layer.md` beside the enemy's own action table,
+described as what it is — the mirror of `resolveIncoming`, the same
+two-step ladder in the other direction, at the same price. It stays
+emergent rather than becoming a constant, because fixing a number here would
+replace the only place flying well pays into the war with a payout flying
+cannot change. The ruling's real teeth, though: `gainGround` had to stop
+being the war's *only* input, which is what candidate C's drain (§3.1 above)
+and the uncapped patrol sink both now are.
 
 ### 3.3 Should a bare sector really have nowhere to bank?
 
@@ -468,6 +569,35 @@ yet resolved by it:
    against a shared 5000 on a real one, so there is headroom — but the harness
    cannot tell you what that costs under post.
 
+### 3.9 A salvage sink that scales with the war, not the front
+
+Patrols are uncapped now, and that closes most of the gap
+`campaign-balance.md` found — but only within a bound the front's own width
+sets, not the reserve's: at reach 5 with patrol capacity raised to eight,
+income above three hundred a run still saturates, because eight patrols
+garrison an eight-sector line and cost 1,600 salvage, affordable inside a
+week regardless of how much comes in (`campaign-balance.md` §5). **The
+front is what bounds the sink, not the war.** Something that scales with the
+war itself — its length, its reserve, the commander's own doctrine — rather
+than with the chart's fixed geometry is still wanted, and it has to fit "one
+currency, four decisions, no submenus" the way the patrol row already does.
+No candidate proposed yet; this is the recorded gap `campaign-balance.md` §5
+leaves open.
+
+### 3.10 `HostileSpec.damageScale` is dead code game-wide
+
+Every entry in `HOSTILE_SPECS` sets it (0.7 to 1.6, the Shroud at 0), and
+nothing in the weapons pipeline reads it — `Ordnance.fire` deals the flat
+module-level `BOLT` damage regardless of the firing hull's class. Found
+while wiring the commander's guard (`GUARD` in §2 below): boosting
+`damageScale` on a guard would have been a no-op dressed up as a buff, which
+is why the guard's anvil axis boosts fire rate (`GUARD.cadence`) instead.
+Wire it live — every hostile's differing `damageScale` starts actually
+applying, which is a game-wide balance change, not a small one — or delete
+the field and stop implying a per-class damage curve that does not exist.
+Either is fine; leaving it half-declared is not a decision, it is an
+oversight with a name.
+
 ---
 
 ## 4. Audio revision against the research
@@ -518,6 +648,36 @@ Two candidate answers, and this wants a decision rather than a workaround:
 expose a deliberately narrow probe on the deployed build, or make the Loom a
 scheduled event at a known escalation index so a run that gets far enough is
 guaranteed to meet one.
+
+### 6.2 Known flakes in `tools/playtest.mjs`
+
+Three pre-existing checks have each been observed to fail independently,
+against unmodified code, on otherwise-clean runs — recorded rather than
+fixed, since none reproduces from a cold isolated run and none touches
+anything any task here actually changed:
+
+- **The brace-energy threshold** — `brace.energy >= 0.6`, missed by as
+  little as 0.0003 on one observed run. Reads as timing/scheduling
+  sensitivity under the harness's software-GL setup, not a logic bug.
+  Documented in `task-9-report.md`.
+- **The Shroud-in-comet-tail chain** — three assertions that all depend on
+  the harness locating a Shroud on the board within a fixed search budget;
+  when the search comes back empty, all three fail together, which is one
+  flake wearing three names rather than three separate bugs. Documented in
+  `task-9-report.md`.
+- **"The forced win still reaches the tally," phase = `drift`** — a
+  five-check cascade at the very end of the death-handoff test. Diagnosed
+  in `task-9-report.md` as a timing race against a fixed ms budget under
+  SwiftShader's software-GL cost, which grows as a long-lived test tab
+  accumulates state over ~150 prior assertions; the wait for this one check
+  was already widened there, from 20000ms to 45000ms. `task-13-report.md`
+  observed it recur twice regardless, under extra load from a concurrent
+  browser tab, and confirmed the same diagnosis on a clean, uncontended
+  retry.
+
+Worth a maintainer's attention if any starts failing CI intermittently, but
+these are known rather than new defects, and out of scope for a docs pass to
+chase down.
 
 - `npm run typecheck` before every commit. There is no lint step.
 - `npm run playtest` needs a Playwright browser and a **fresh** dev server — a

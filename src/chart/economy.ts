@@ -8,7 +8,7 @@ import {
   type StructureKind,
 } from "./campaign.js";
 import { reserveOf, runEnemyTurn, type EnemyAction } from "./enemyTurn.js";
-import { feedbackOn, RESERVE } from "./feedback.js";
+import { RESERVE } from "./reserve.js";
 import { neighbours } from "./sectors.js";
 import type { Rng } from "./rng.js";
 
@@ -45,7 +45,7 @@ export const STRUCTURES: readonly StructureSpec[] = [
   },
   { kind: "outpost", label: "OUTPOST", cost: 600, runs: 2, effect: "DOCK  REFUEL AND REARM" },
   { kind: "starbase", label: "STARBASE", cost: 1600, runs: 4, effect: "DOCK  REPAIR AND REFIT" },
-  { kind: "yard", label: "YARD", cost: 2400, runs: 5, effect: "A SECOND PATROL  REBUILDS LOSSES" },
+  { kind: "yard", label: "YARD", cost: 2400, runs: 5, effect: "REBUILDS WORN PATROLS" },
 ];
 
 export function structureSpec(kind: StructureKind): StructureSpec {
@@ -309,23 +309,27 @@ export function toggleRefit(campaign: Campaign, id: RefitId): boolean {
 
 /**
  * `strategy-layer.md` prices every structure and every refit and leaves the
- * patrol's own cost open, so these four numbers are first-draft guesses in the
- * same category as the flight-model constants — the cheapest thing on the list,
- * priced under a listening post, at a strength that makes the document's
- * "an unsupported patrol on the front dies in ~3 runs" literally true.
+ * patrol's own cost open, so these two numbers are first-draft guesses in the
+ * same category as the flight-model constants — the cheapest thing on the
+ * list, priced under a listening post, at a strength that makes the
+ * document's "an unsupported patrol on the front dies in ~3 runs" literally
+ * true.
+ *
+ * Deliberately repeatable rather than capped: `campaign-balance.md` §5 found
+ * that a finite invasion is the only candidate under which salvage does
+ * anything, and only if it has a sink — patrol capacity at "one plus a yard"
+ * saturates a player's spending inside a week, so the DEPLOY row stopped
+ * mattering once it did. Uncapping it is the cheapest sink that respects "one
+ * currency, four decisions, no submenus": no new row, no new screen, the
+ * player just keeps taking the decision they already had. One-per-sector and
+ * the strength ceiling still bound it, so it converts salvage into attrition
+ * rather than into an unbounded wall.
  */
 export const PATROL = {
   cost: 200,
   /** Fielded at full strength; reinforcing tops it back up to here. */
   maxStrength: 3,
-  /** How many can be in the field at once. A completed Yard adds one. */
-  baseCapacity: 1,
 } as const;
-
-export function patrolCapacity(campaign: Campaign): number {
-  const yards = campaign.sectors.filter((sector) => hasStructure(sector, "yard")).length;
-  return PATROL.baseCapacity + yards;
-}
 
 export function patrolCount(campaign: Campaign): number {
   return campaign.sectors.filter((sector) => sector.patrol).length;
@@ -333,15 +337,15 @@ export function patrolCount(campaign: Campaign): number {
 
 /**
  * Fields a new patrol, or reinforces one already there. Refuses in enemy-held
- * space — a patrol holds ground, it does not take it — and refuses a new one
- * over capacity, which is what a Yard is for.
+ * space — a patrol holds ground, it does not take it — and refuses to
+ * reinforce one already at full strength. No cap on how many can be fielded:
+ * one to a sector is the only ceiling, so salvage is the limit.
  */
 export function deployPatrol(campaign: Campaign, index: number): boolean {
   const sector = campaign.sectors[index];
   if (sector.control === "theirs") return false;
   const existing = sector.patrol;
   if (existing && existing.strength >= PATROL.maxStrength) return false;
-  if (!existing && patrolCount(campaign) >= patrolCapacity(campaign)) return false;
   if (!spendSalvage(campaign, PATROL.cost)) return false;
   if (existing) existing.strength = Math.min(PATROL.maxStrength, existing.strength + 1);
   else sector.patrol = { strength: PATROL.maxStrength };
@@ -368,22 +372,10 @@ export function gainGround(campaign: Campaign, index: number): boolean {
   const sector = campaign.sectors[index];
   if (sector.control === "ours") return false;
 
-  // Candidate: the invasion is finite. Ground taken costs them strength they
-  // have to make back, so a run is the weapon and not only the bookkeeping —
-  // and holding a line you cannot advance still wins the war eventually.
-  if (feedbackOn("reserve")) {
-    campaign.reserve = Math.max(0, reserveOf(campaign) - RESERVE.costPerStep);
-  }
-
-  // Candidate: entrenchment. Dug-in ground has to be broken before it will
-  // move, so a clear here is progress that does not yet change the colour of
-  // the square. Off unless `tools/campaignlength.mjs` turns it on; see
-  // `feedback.ts`, including the note that `Session`'s "SECTOR TAKEN" would
-  // need a third line before this could ship.
-  if (feedbackOn("entrench") && (sector.entrenched ?? 0) > 0) {
-    sector.entrenched!--;
-    return true;
-  }
+  // The invasion is finite: ground taken costs it strength it has to make
+  // back, so a run is the weapon and not only the bookkeeping — and holding a
+  // line you cannot advance still wins the war eventually.
+  campaign.reserve = Math.max(0, reserveOf(campaign) - RESERVE.costPerStep);
 
   if (sector.control === "theirs") {
     sector.control = "contested";

@@ -47,30 +47,28 @@
  *    being told a different thing about the model than one who never advances.
  *  - **`--sweep`**, which runs the whole reach ladder in one command and says
  *    outright whether there is a **contested band** — a range of reach values
- *    where the same rules produce both wins and losses. A candidate feedback
- *    term that only moves the threshold has failed, and the sweep is the one
- *    reading that shows the difference.
+ *    where the same rules produce both wins and losses. A rule change that
+ *    only moves the threshold has failed, and the sweep is the one reading
+ *    that shows the difference.
  *
  *   npm run campaignlength -- [trials] [--take=N] [--reach=N] [--refits] [--vary]
- *                             [--feedback=SPEC] [--tune=K=V,…] [--sweep] [--trace=SEED]
+ *                             [--tune=K=V,…] [--sweep] [--trace=SEED]
  *
- * `--feedback` selects the candidate terms in `chart/feedback.ts`, plus-joined
- * — `--feedback=supply+entrench`. The default is `none`, which is the shipped
- * game exactly. `--tune=reserve.regenPerSector=0.5` moves a candidate's own
- * constants, because a candidate is only worth a verdict once it has been tried
- * at more than the first numbers somebody wrote down.
+ * `--tune=reserve.regenPerSector=0.5` moves the shipped invasion's own
+ * constants — `RESERVE` in `chart/reserve.ts` — directly, because a balance
+ * pass is only worth a verdict once it has been tried at more than the first
+ * numbers somebody wrote down.
  */
 const { newCampaign, creditSalvage, hasStructure, isWon, isLost, ENEMY_START_DEPTH } =
   await import("../.campaign-build/chart/campaign.js");
 const {
   advanceCampaign, build, deployPatrol, gainGround,
-  patrolCapacity, patrolCount, toggleRefit, PATROL, REFITS,
+  toggleRefit, PATROL, REFITS,
 } = await import("../.campaign-build/chart/economy.js");
-const { pressureBudget } = await import("../.campaign-build/chart/enemyTurn.js");
-const { setFeedback, describeFeedback, describeTuning, tune } =
-  await import("../.campaign-build/chart/feedback.js");
+const { pressureBudget, RESERVE } = await import("../.campaign-build/chart/enemyTurn.js");
 const { makeRng } = await import("../.campaign-build/chart/rng.js");
 const { GRID, SECTOR_COUNT, neighbours } = await import("../.campaign-build/chart/sectors.js");
+const { commanderOf } = await import("../.campaign-build/chart/commander.js");
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -102,7 +100,6 @@ const REACH = flag("reach", 3);
 const BUY_REFITS = args.includes("--refits");
 /** Draw each run's reach from a Poisson about `--reach` rather than using it flat. */
 const VARY = args.includes("--vary");
-const FEEDBACK = text("feedback", "none");
 const SWEEP = args.some((a) => a === "--sweep" || a.startsWith("--sweep="));
 const SWEEP_REACHES = (text("sweep", "") || "1,2,3,4,5,6,7,8,10")
   .split(",").map(Number).filter((n) => Number.isFinite(n));
@@ -118,24 +115,20 @@ const ECONOMY_TAKES = [0, 300, 600, 1200, 2400, 6000];
  * either.
  */
 const CEILING = flag("ceiling", 200);
-/**
- * Patrol capacity, overridden.
- *
- * `--economy` shows salvage above about three hundred a run buying nothing,
- * because the spend list saturates and patrol capacity — one, plus one per
- * yard — is the binding constraint. This is here to test the obvious reply:
- * if salvage had a sink, would the chart start deciding wars? Reaching into
- * `PATROL` is deliberate and is why it lives in the instrument rather than in
- * `economy.ts`; it is a question being asked, not a rule being changed.
- */
-if (args.some((a) => a.startsWith("--patrols="))) PATROL.baseCapacity = flag("patrols", 1);
 
 /** The board the enemy opens holding. Every "how far has the front moved" reads against this. */
 const START_THEIRS = ENEMY_START_DEPTH * GRID;
 
-setFeedback(FEEDBACK);
-tune(text("tune", ""));
-if (FEEDBACK !== "none") console.log(`terms       ${describeTuning()}`);
+const tuneSpec = text("tune", "");
+if (tuneSpec) {
+  for (const clause of tuneSpec.split(",")) {
+    const [path, raw] = clause.split("=");
+    const key = path.replace(/^reserve\./, "");
+    if (!(key in RESERVE)) throw new Error(`unknown tunable "${path}"`);
+    RESERVE[key] = Number(raw);
+  }
+  console.log(`tuned       ${tuneSpec}`);
+}
 
 // ── the model player ────────────────────────────────────────────────────────
 
@@ -176,12 +169,14 @@ function spend(campaign) {
   const line = frontLine(campaign);
   const held = campaign.sectors.filter((s) => s.control === "ours");
 
-  // Enough passes to exhaust the list even with `--patrols` raised well past
-  // its shipped value; the loop breaks as soon as nothing more can be bought.
+  // Enough passes to exhaust the list even with the whole front line bare;
+  // the loop breaks as soon as nothing more can be bought.
   for (let step = 0; step < 32; step++) {
-    // A patrol on undefended front-line ground, if there is room for one.
+    // A patrol on undefended front-line ground, while salvage allows —
+    // patrols are uncapped, so this is a salvage-and-frontage condition now,
+    // not a capacity one.
     const bare = line.find((i) => !campaign.sectors[i].patrol);
-    if (bare !== undefined && patrolCount(campaign) < patrolCapacity(campaign)) {
+    if (bare !== undefined && campaign.salvage >= PATROL.cost) {
       if (deployPatrol(campaign, bare)) continue;
     }
     // Top up one that the front has been grinding down.
@@ -319,7 +314,24 @@ function runCampaign(seed, reach) {
     deepestAt,
     structures: campaign.sectors.reduce((n, s) => n + s.structures.length, 0),
     ours: count(campaign, "ours"),
+    // Tagged by the same seed the war's commander is drawn from (Task 4/5),
+    // so a sweep row can be split out by doctrine without re-simulating.
+    doctrine: commanderOf(seed).doctrine,
   };
+}
+
+/**
+ * Per-doctrine won/lost/unresolved, for the balance guard: doctrine reweights
+ * which options the enemy turn prefers (Task 5), so a row's pooled won% can
+ * hide one doctrine winning far more or less often than the others.
+ */
+function byDoctrine(results) {
+  const doctrines = ["raider", "hammer", "anvil"];
+  return doctrines.map((doctrine) => {
+    const rows = results.filter((r) => r.doctrine === doctrine);
+    const of = (outcome) => rows.filter((r) => r.outcome === outcome).length;
+    return { doctrine, trials: rows.length, won: of("won"), lost: of("lost"), unresolved: of("unresolved") };
+  });
 }
 
 // ── reporting ───────────────────────────────────────────────────────────────
@@ -395,7 +407,7 @@ function report(stats, label) {
 
 const label = (reach) =>
   `take=${TAKE}/run  reach=${reach}${VARY ? " mean (poisson)" : ""} steps/run  ` +
-  `refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`;
+  `refits=${BUY_REFITS ? "bought" : "not modelled"}`;
 
 if (TRACE !== null) {
   // One campaign, run by run. The aggregate says which way a war went; this
@@ -422,9 +434,8 @@ if (TRACE !== null) {
   // Does the chart participate in the war at all? Salvage buys patrols,
   // outposts, starbases and yards; if a run banking nothing and a run banking
   // five times the going rate resolve the same way, then the whole command
-  // view is decoration and no feedback term acting on the enemy will fix that.
+  // view is decoration and no rule change acting on the enemy will fix that.
   console.log(`trials      ${TRIALS} per row, reach=${REACH}${VARY ? " mean (poisson)" : " flat"}`);
-  console.log(`model       feedback=${describeFeedback()}`);
   console.log();
   console.log(" take    won     lost   unres   median   structures");
   for (const value of ECONOMY_TAKES) {
@@ -448,7 +459,7 @@ if (TRACE !== null) {
   console.log(`trials      ${TRIALS} per row`);
   console.log(
     `model       take=${TAKE}/run  reach=${VARY ? "poisson about the mean" : "flat"}  ` +
-    `refits=${BUY_REFITS ? "bought" : "not modelled"}  feedback=${describeFeedback()}`,
+    `refits=${BUY_REFITS ? "bought" : "not modelled"}`,
   );
   console.log();
   console.log("reach    won     lost   unres   median   deepest   turns at");
@@ -464,6 +475,21 @@ if (TRACE !== null) {
       `${p(pct(s.unresolved, s.trials), 6)}  ${p(s.median, 6)}   ${p(mean(bad.map((r) => r.deepest)).toFixed(1), 7)}   ` +
       `${p(mean(bad.map((r) => r.deepestAt)).toFixed(1), 8)}`,
     );
+    // Doctrine breakdown, right under the pooled row: the guard is per-doctrine
+    // (spec §2.2), and a pooled won/lost/unresolved split can hide one
+    // doctrine winning (or stalling, or losing) far more or less often than
+    // the others. Same three figures as the pooled row above, just per
+    // doctrine — won/lost/unres, one line per doctrine so a wide terminal
+    // doesn't wrap it.
+    console.log("            doctrine   won    lost   unres   n");
+    for (const d of byDoctrine(results)) {
+      const of = Math.max(1, d.trials);
+      console.log(
+        `            ${d.doctrine.padEnd(9)}` +
+        `${p(pct(d.won, of), 6)}  ${p(pct(d.lost, of), 6)}  ${p(pct(d.unresolved, of), 6)}` +
+        `  n=${d.trials}`,
+      );
+    }
     // Contested: both outcomes genuinely occur, and the war still ends. A row
     // that is 50% won and 50% deadlocked is not a contest, it is a coin flip
     // between winning and nothing happening.
@@ -478,7 +504,7 @@ if (TRACE !== null) {
   if (band.length === 0) {
     console.log("NO CONTESTED BAND. Every row resolves the same way for nearly every seed, so");
     console.log("the war is decided by the ratio of two rates and not by anything that happens");
-    console.log("in it. A feedback term that only moves the threshold lands here too.");
+    console.log("in it. A rule change that only moves the threshold lands here too.");
   } else {
     console.log(`CONTESTED BAND at reach ${band.join(", ")} — ${band.length} of ${SWEEP_REACHES.length} rows`);
     console.log("produce both wins and losses with the war still resolving. This is the reading");

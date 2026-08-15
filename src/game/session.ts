@@ -2,7 +2,15 @@ import { Vector3 } from "three";
 import { DebrisField } from "./debris.js";
 import { DeathSequence } from "./death.js";
 import { HIT_STOP, HitStop } from "./hitStop.js";
-import { Fleet, HOSTILE_COLORS, HOSTILE_SPECS, type Hostile, type HostileKind } from "./hostiles.js";
+import {
+  Fleet,
+  HOSTILE_COLORS,
+  HOSTILE_SPECS,
+  WITHDRAW,
+  type Hostile,
+  type HostileKind,
+  type HostileSpec,
+} from "./hostiles.js";
 import {
   Ordnance,
   PHASER,
@@ -12,6 +20,7 @@ import {
   phaserCostOf,
   phaserDamageAt,
   phaserRangeOf,
+  sweepClosestPoint,
   sweepDistance,
   sweepHits,
 } from "./weapons.js";
@@ -32,6 +41,7 @@ import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
 import { intercept } from "../chart/enemyTurn.js";
+import { commanderOf, guardClass, warAct, type WarAct } from "../chart/commander.js";
 import { creditSalvage, type Campaign } from "../chart/campaign.js";
 import { gainGround, loadoutOf } from "../chart/economy.js";
 import { jumpCharge } from "../chart/jump.js";
@@ -77,6 +87,19 @@ const WAVE_BREAK = 2.6;
  * of what the Defiant buys with its paper shields.
  */
 const PLAYER_RADIUS = 2.6;
+
+/**
+ * A hostile shot that swept past the hull rather than into it. `outer` is
+ * measured from the same point `sweepDistance` already reports; `inner` is
+ * the player's own hit radius, computed per-hull in `resolveProjectiles`
+ * rather than fixed here, so a bigger hull does not get a wider near-miss
+ * band for free. `cooldown` keeps a dense wave from turning the cue into a
+ * bed — one voice at a time is what makes it read as a specific event.
+ */
+const NEAR_MISS = {
+  outer: 4.5,
+  cooldown: 0.4,
+} as const;
 
 /**
  * Seconds the arrival card holds. Short on purpose: it has to say "you are now
@@ -131,6 +154,34 @@ const ESCORT = {
 } as const;
 
 /**
+ * The commander's guard. Once the war reaches its failing act (`warAct`,
+ * `chart/commander.ts`), every wave rolls a small chance of fielding one
+ * veteran of the commander's own doctrine — a stat-and-name variant of an
+ * existing class, never a new hull or new behaviour. One axis is boosted per
+ * doctrine, echoing what that doctrine already means for the enemy turn
+ * (Task 5): a raider commander's guard is faster, a hammer's tougher, and an
+ * anvil's guard keeps its perch and fires faster — not harder. `damageScale`
+ * is dead in the weapons pipeline (`Ordnance.fire` uses the flat module-level
+ * `BOLT` damage; nothing reads `HostileSpec.damageScale`), so boosting it
+ * would have been a no-op dressed up as a buff, and wiring it live is a
+ * game-wide balance change — every hostile's differing `damageScale` would
+ * suddenly start applying — well outside what this task is for. `cadence`
+ * divides `fireInterval` instead: `Hostile.update` sets
+ * `this.cooldown = this.spec.fireInterval` the instant it fires, and that
+ * cooldown is the only gate on the next shot, so a smaller `fireInterval`
+ * is a real, live rate-of-fire increase. Every guard is worth more salvage
+ * regardless of doctrine — it is still the commander's own hull, wherever it
+ * stands.
+ */
+const GUARD = {
+  chance: 0.3,
+  hull: 1.6,
+  speed: 1.25,
+  cadence: 1.35,
+  value: 2.5,
+} as const;
+
+/**
  * The rules of a run.
  *
  * The centre of gravity here is the multiplier. It climbs with every kill and
@@ -164,6 +215,34 @@ export class Session {
    * committed attack, which is a free win the player never earned.
    */
   private arrivedByJump = false;
+
+  /**
+   * True once a wave has fielded the commander's guard, for the rest of this
+   * run — one veteran per war-band excursion, not one per wave that happens
+   * to roll while the act is failing. Reset in `restart`.
+   */
+  private guardSpawnedThisRun = false;
+  /**
+   * Localhost-probe seam, `arrivedByJump`'s pattern: TypeScript keeps it
+   * private, but a headless test can still poke it directly on the live
+   * object to force the guard roll rather than waiting out `GUARD.chance`.
+   * `spawnWave` clears it the instant it is consumed, so it never survives
+   * past the wave it was set for.
+   */
+  private forceGuard = false;
+  /**
+   * `warAct` latched for the length of a run. See that function's own
+   * docblock for why: it reads `campaign.reserve` live, and this run's own
+   * `gainGround` calls are about to start draining it, so calling `warAct`
+   * fresh mid-run would call a war "failing" a couple of waves into any
+   * ordinary run — not because the war is failing, but because the run is
+   * doing its job. `restart` sets this once, before anything in the run has
+   * spent anything; `spawnWave`'s guard gate and the dispatch fallback in
+   * `update` both read this instead of calling `warAct` again. The initial
+   * value here is never observed — `restart` always runs before either
+   * reader does.
+   */
+  private actAtRunStart: WarAct = "contested";
 
   /**
    * 1 at the instant of arrival, decaying to 0. Read by `main.ts` to kick the
@@ -222,6 +301,8 @@ export class Session {
 
   /** Seconds until the next Warden. See `ESCORT`. */
   private escortTimer = Infinity;
+  /** Seconds until another near-miss cue may play. See `NEAR_MISS.cooldown`. */
+  private nearMissTimer = 0;
   /** What the next one will be here for, decided by the sector, not by the clock. */
   private escortDuty: Duty = "passing";
 
@@ -332,7 +413,7 @@ export class Session {
      * one.
      */
     const engaged = this.state === "fighting" && this.fleet.hostiles.length > 0;
-    if (this.dispatches.update(dt, this.campaign, this.escalation, engaged, Math.random())) {
+    if (this.dispatches.update(dt, this.campaign, this.escalation, engaged, Math.random(), this.actAtRunStart)) {
       sound.dispatch();
     }
 
@@ -344,7 +425,9 @@ export class Session {
       // The fleet keeps flying and keeps shooting at the wreck. A frozen fleet
       // reads as a stopped program; a circling one reads as being finished off.
       // Nothing they fire can land — hit resolution is below this line.
-      for (const hostile of this.fleet.hostiles) hostile.update(dt, player, this.ordnance, this.mines);
+      for (const hostile of this.fleet.hostiles) {
+        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged);
+      }
       // The Warden keeps flying too — `kill()` has already told it to break
       // off, so the last thing a run shows you is your escort turning away.
       this.stepEscort(dt, player);
@@ -406,8 +489,12 @@ export class Session {
     // before anything moves this frame.
     this.stepComet(dt, player);
 
+    // Ahead of the hostile loop for the same reason `interference` is: every
+    // swarmer that reads the gate this frame should read this frame's answer.
+    this.fleet.updateEngagement(player);
+
     for (const hostile of this.fleet.hostiles) {
-      hostile.update(dt, player, this.ordnance, this.mines);
+      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged);
       // The one warning the forward view gives you. Everything before this
       // moment happened on the scanner — and the sound is the half of the
       // warning that works when you are pointed the wrong way.
@@ -416,11 +503,12 @@ export class Session {
         sound.decloak(hostile.position.x, hostile.position.z);
       }
     }
+    this.stepWithdrawals(player);
 
     this.stepEscort(dt, player);
     this.stepLoom(dt, player);
     this.ordnance.update(dt);
-    this.resolveProjectiles(player);
+    this.resolveProjectiles(dt, player);
     this.mines.update(dt, player, () => this.breach());
     this.debris.update(dt);
     this.docking.update(
@@ -743,7 +831,8 @@ export class Session {
     return this.tube;
   }
 
-  private resolveProjectiles(player: Ship): void {
+  private resolveProjectiles(dt: number, player: Ship): void {
+    this.nearMissTimer -= dt;
     for (const projectile of this.ordnance.projectiles) {
       if (projectile.dead) continue;
 
@@ -808,29 +897,50 @@ export class Session {
           projectile.dead = true;
           if (this.mines.strike(mine, projectile.damage)) this.pending += MINE.value * this.salvageScale;
         }
-      } else if (sweepHits(projectile, player.position, PLAYER_RADIUS * player.loadout.hullRadius)) {
-        projectile.dead = true;
-        // A facing eating a bolt and a bolt reaching the hull are different
-        // events and have to sound like it — that distinction is the whole
-        // reason four shields exist.
-        if (player.takeHit(projectile.damage, projectile.position)) this.breach();
-        else sound.shieldHit(projectile.position.x, projectile.position.z);
-      } else if (
-        this.wing.escort &&
-        sweepHits(projectile, this.wing.escort.position, WARDEN.radius)
-      ) {
-        // Stray fire, and only stray fire. Nothing in the game aims at the
-        // Warden — hostiles lead the player and always have — so what kills an
-        // escort is the volume of ordnance in the air around a fight it chose
-        // to fly into. Checked after the player because the bolt was never
-        // meant for it, and a projectile only ever hits one thing.
-        //
-        // The player cannot hurt it at all: friendly projectiles resolve
-        // against hostiles above, and the phaser's target search never sees it.
-        // Friendly fire would turn a gift into a trap, and every arcade minute
-        // spent learning not to shoot the cyan ship is a minute lost.
-        projectile.dead = true;
-        this.wing.escort.damage(projectile.damage);
+      } else {
+        const hitRadius = PLAYER_RADIUS * player.loadout.hullRadius;
+        const distanceToPlayer = sweepDistance(projectile, player.position);
+        if (distanceToPlayer <= hitRadius) {
+          projectile.dead = true;
+          // A facing eating a bolt and a bolt reaching the hull are different
+          // events and have to sound like it — that distinction is the whole
+          // reason four shields exist.
+          if (player.takeHit(projectile.damage, projectile.position)) this.breach();
+          else sound.shieldHit(projectile.position.x, projectile.position.z);
+        } else {
+          // A shot that passed close but not close enough to hit — the dodge
+          // made audible and visible instead of just expiring quietly. Once
+          // per projectile (`noted`), and the cue itself is rate-limited
+          // separately (`nearMissTimer`) so a dense wave streaks silently
+          // rather than turning into a bed of whooshes.
+          if (!projectile.noted && distanceToPlayer < NEAR_MISS.outer) {
+            projectile.noted = true;
+            // Where it actually crossed, not the sampled endpoint — see
+            // `sweepClosestPoint`. A fast torpedo can be a frame's travel
+            // past the point that swept closest to the hull.
+            const crossing = sweepClosestPoint(projectile, player.position);
+            if (this.nearMissTimer <= 0) {
+              this.nearMissTimer = NEAR_MISS.cooldown;
+              sound.nearMiss(crossing.x, crossing.z);
+            }
+            this.ordnance.nearMiss(crossing, projectile.velocity.clone().normalize());
+          }
+
+          // Stray fire, and only stray fire. Nothing in the game aims at the
+          // Warden — hostiles lead the player and always have — so what kills
+          // an escort is the volume of ordnance in the air around a fight it
+          // chose to fly into. Checked after the player because the bolt was
+          // never meant for it, and a projectile only ever hits one thing.
+          //
+          // The player cannot hurt it at all: friendly projectiles resolve
+          // against hostiles above, and the phaser's target search never sees
+          // it. Friendly fire would turn a gift into a trap, and every arcade
+          // minute spent learning not to shoot the cyan ship is a minute lost.
+          if (this.wing.escort && sweepHits(projectile, this.wing.escort.position, WARDEN.radius)) {
+            projectile.dead = true;
+            this.wing.escort.damage(projectile.damage);
+          }
+        }
       }
     }
   }
@@ -857,8 +967,10 @@ export class Session {
       impulse,
       size,
     );
+    this.debris.ring(hostile.position, HOSTILE_COLORS[hostile.kind], size);
 
-    this.hitStop.strike(HIT_STOP.kill);
+    // A bigger hull earns a longer beat, still bounded by `HIT_STOP.max`.
+    this.hitStop.strike(size > 1 ? HIT_STOP.heavyKill : HIT_STOP.kill);
     // One scalar for the burst and the blast, so what you see come apart and
     // what you hear come apart are the same size.
     sound.kill(hostile.position.x, hostile.position.z, size);
@@ -867,6 +979,41 @@ export class Session {
     this.multiplier = Math.min(9.9, this.multiplier + 0.2);
     this.fleet.retire(hostile);
     void player;
+  }
+
+  /**
+   * A hostile that broke off and cleared the field, let go for free.
+   *
+   * The ledger is the Warden's own precedent (`destroyByAlly`, just below):
+   * no salvage, no multiplier, no kill count, no tally entry. `damage()` in
+   * `hostiles.ts` already decided whether this hostile runs at all — this is
+   * only the moment its escape actually completes, `WITHDRAW.exitRange` past
+   * the player, and it has to cost exactly as little as being spared did.
+   * Paying for a withdrawal would make crippling something and finishing it
+   * off the same event with two different prices, and the game already spent
+   * the Warden establishing which of those prices is real.
+   *
+   * The exit itself borrows Task 10's near-miss streak rather than inventing
+   * a second one — a bright line at the point something *leaves* is the same
+   * grammar run in reverse, not new machinery.
+   *
+   * Iterates a copy: `Fleet.retire` mutates `fleet.hostiles`, which a live
+   * `for...of` over the original array cannot survive.
+   */
+  private stepWithdrawals(player: Ship): void {
+    for (const hostile of [...this.fleet.hostiles]) {
+      if (!hostile.withdrawing) continue;
+      if (hostile.position.distanceTo(player.position) < WITHDRAW.exitRange) continue;
+      // The hostile's own hue, not the amber a genuine near miss draws — this
+      // streak marks a class leaving the fight, not a shot that swept close.
+      this.ordnance.nearMiss(
+        hostile.position,
+        hostile.velocity.clone().normalize(),
+        HOSTILE_COLORS[hostile.kind],
+      );
+      sound.withdraw(hostile.position.x, hostile.position.z);
+      this.fleet.retire(hostile);
+    }
   }
 
   // ── the Warden ───────────────────────────────────────────────────────────
@@ -902,6 +1049,10 @@ export class Session {
       impulse,
       size,
     );
+    // The ring is world-facing, same as the burst — only the ledger below is
+    // where this diverges from `destroy`. No hit-stop: that stays a feel
+    // reward for the player's own kill, per this method's own docblock.
+    this.debris.ring(hostile.position, HOSTILE_COLORS[hostile.kind], size);
     sound.kill(hostile.position.x, hostile.position.z, size);
     this.fleet.retire(hostile);
     escort.scored();
@@ -1368,6 +1519,47 @@ export class Session {
       this.fleet.spawn(kind, position, angle + Math.PI);
     });
 
+    // The commander's guard. `actAtRunStart` — `warAct` latched at `restart`,
+    // see its own docblock — is the attract firewall: the demo runs on a
+    // throwaway campaign (`campaignFor`, `chart/economy.ts`) that is never in
+    // the failing act at the moment a run begins, so a guard only ever turns
+    // up in a real war under real pressure — never in the demo, and never in
+    // a run that started in the early or contested bands, even if this run's
+    // own fighting would have pushed a live read to "failing" by now.
+    const act = this.actAtRunStart;
+    if (
+      act === "failing" &&
+      (this.forceGuard || Math.random() < GUARD.chance) &&
+      !this.guardSpawnedThisRun
+    ) {
+      this.guardSpawnedThisRun = true;
+      this.forceGuard = false;
+      const commander = commanderOf(this.campaign.seed);
+      const kind = guardClass(commander.doctrine) as HostileKind;
+      const base = HOSTILE_SPECS[kind];
+      const spec: HostileSpec = {
+        ...base,
+        value: Math.round(base.value * GUARD.value),
+        ...(commander.doctrine === "raider" ? { maxSpeed: base.maxSpeed * GUARD.speed } : {}),
+        ...(commander.doctrine === "hammer" ? { hull: base.hull * GUARD.hull } : {}),
+        // `fireInterval` genuinely governs cadence — see the GUARD doc
+        // comment above for the fire-site line this leans on — so dividing
+        // it is a live buff, unlike `damageScale`.
+        ...(commander.doctrine === "anvil" ? { fireInterval: base.fireInterval / GUARD.cadence } : {}),
+      };
+      // Ring it in the same way the roster is ringed — the guard is a
+      // veteran of an existing class, not a set-piece that needs its own
+      // staging.
+      const angle = offset + Math.random() * Math.PI * 2;
+      const range = 95 + Math.random() * 45;
+      const position = new Vector3(
+        player.position.x + Math.sin(angle) * range,
+        0,
+        player.position.z + Math.cos(angle) * range,
+      );
+      this.fleet.spawn(kind, position, angle + Math.PI, { spec, guardName: commander.surname });
+    }
+
     // The Loom, at the break and never mid-wave.
     //
     // This is the last thing `spawnWave` does, and the placement is the whole
@@ -1435,6 +1627,10 @@ export class Session {
     this.hyperwarp.cancel();
     this.hyperwarpDestination = -1;
     this.arrivedByJump = false;
+    this.guardSpawnedThisRun = false;
+    // Latched here and nowhere else, before any of this run's own ground
+    // taken can drain the reserve — see `actAtRunStart`'s own docblock.
+    this.actAtRunStart = warAct(this.campaign);
     this.arrivalCard = 0;
     // A jump moves `campaign.current`, and without this a "fresh" run drops
     // you wherever the last one's hyperwarp last left you — including a

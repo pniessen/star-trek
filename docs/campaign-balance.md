@@ -445,3 +445,185 @@ node tools/campaignlength.mjs 1000 --sweep --vary --feedback=reserve --ceiling=4
 means moving its rule into `enemyTurn.ts` or `economy.ts` unconditionally and
 deleting `feedback.ts` — the switch is scaffolding for this measurement and is
 not something to ship.
+
+---
+
+## Adopted, 2026-08-14
+
+`--feedback` is retired. Candidate C graduated to the shipped rule the day
+after this document's §5 recommended it (`6f37cdf`), patrols were uncapped
+into its salvage sink the same week (`8b0f11e`), and this section is the
+retune that followed — the reserve is not a candidate being measured against
+`--feedback=none` any more, it is the game, and every command below runs on
+shipped code.
+
+### The floor episode
+
+§5's recommendation carried a second, smaller instruction along with
+adopting candidate C: **delete the `max(0, …)` floor in
+`sectorsHeldBeyondStart`**, on the grounds that retaking ground below the
+enemy's opening depth was free for them and that was "indefensible on its
+own terms." That deletion shipped 2026-08-13 in the same commit that
+graduated the reserve to a rule.
+
+Measurement falsified the combination before this retune got underway.
+Unfloored, `sectorsHeldBeyondStart` goes sharply negative the instant the
+player leads at all — and at reach ≥ 3 that is almost immediately — which
+drives `ambition` (`PRESSURE.base + clock + sectorsHeldBeyondStart`) to zero
+within two to four runs and keeps it there, independent of every `RESERVE`
+constant:
+
+| regenFlat | 0 | 10 | 22 (then-shipped) | 30 | 200 | 500, commit=1, max/initial=1000 |
+|---:|---:|---:|---:|---:|---:|---:|
+| reach 4 won | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| reach 4 median | 3 | — | 12 | — | — | 13 |
+
+(300–1000 seeds per cell, `--vary --ceiling=40`; full sweep in the prior
+BLOCKED section of this task's report.) A traced reach-4 campaign showed the
+mechanism directly: budget went `4 → 2 → 1 → 0` by run four and never
+recovered, and the rest of every such campaign was pure territorial
+arithmetic — the reserve this whole document is about was never once
+exercised at any reach a competent player produces. That is not a tuning
+problem `regenFlat` can reach; `min(ambition, reserve × commit)` is bounded
+by `ambition`, and no reserve constant raises a term that is stuck at zero.
+
+The owner ruled 2026-08-14: **restore the floor.** The fairness argument
+behind the deletion is answered a different way, one this document's own
+mechanism section (§ "The invasion is finite") already names — `costPerStep`
+in `gainGround` charges every retaken sector to the reserve directly, in
+*stock*, whether or not the sector is below the enemy's opening depth.
+Deep pushes already cost the invasion something; the floor and the drain
+were never in tension, only the floor and the *ambition* term were, and
+ambition has no memory between turns for the drain to compound against. The
+floor is back in `enemyTurn.ts`; the outer `Math.max(0, …)` around the whole
+ambition sum is now redundant (the term is floored on its own) and was
+removed.
+
+### Baseline, floor restored, before this retune (regenFlat=22, costPerStep=3)
+
+`node tools/campaignlength.mjs 1000 --sweep --vary --ceiling=40`:
+
+```
+reach    won     lost   unres   median   deepest   turns at
+    1    0.0%   58.8%   41.2%      39      22.4        2.4
+    2    1.0%    0.0%   99.0%      40      19.6        6.3
+    3   30.1%    0.0%   69.9%      40      13.2       17.7
+    4   90.8%    0.0%    9.2%      23       3.3       31.5
+    5   99.4%    0.0%    0.6%      14       1.0       19.2
+    6   99.6%    0.0%    0.4%      10       1.3       15.0
+    7  100.0%    0.0%    0.0%       7       0.0        0.0
+    8   99.9%    0.0%    0.1%       5       1.0       11.0
+   10  100.0%    0.0%    0.0%       4       0.0        0.0
+```
+
+With the floor back, the picture is unrecognisable from the pre-restoration
+table above: `ambition` no longer collapses, so the clock's escalation is
+felt for the whole war instead of the first three runs, and reach 4 lands at
+90.8% — close to a contested band, not saturated at 100%.
+
+### Iterating `regenFlat`
+
+Reach 4 is the only row in the 4–6 window that moves at all across a
+reasonable `regenFlat` range; 5 and 6 stay at 98–100% throughout (the board
+is small enough, and reach 5–6 fast enough, that the clock never gets a
+chance). Reach 4, 1000 seeds a row, `--vary --ceiling=40`, `costPerStep`
+unchanged at 3:
+
+| regenFlat | 22 | 23 | 23.5 | 24 | 24.5 | 25 | 26 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| won | 90.8% | 87.3% | 85.9% | 83.4% | 78.5% | 64.1% | 57.0%* |
+| unresolved (≤40) | 9.2% | 12.7% | 14.1% | 16.6% | 21.5% | 35.9% | 43.0%* |
+| median | 23 | 24 | 25 | 26 | 27 | 33 | 37* |
+| won, uncapped (≤200) | — | — | — | 100.0% | — | 100.0% | — |
+
+\* 300-seed triage figure; the row was not needed for the final adoption.
+
+This is criterion (a) and (b) in direct conflict, not a case either side of
+it: the moment `regenFlat` pushes reach 4's win rate into the 30–70% band
+(around 25–26), the median jumps to 33+ — genuinely undecided wars are slow
+ones, the same finding §3's candidate-C writeup made about its own balance
+row ("undecided for thirty-one runs"). Below that, keeping the median at
+~25 pins the win rate at 83–91%, comfortably outside the band. Raising
+`commit` alongside `regenFlat` was tried as an escape (a bigger fraction
+spent per turn should resolve wars faster) — it does, but only by making the
+war easier at the same time (commit=0.65, regenFlat=25: 94.7% won, median
+25) rather than by widening the band. `costPerStep` was tried too, in the
+other direction: raising it does not widen the band, it erases it —
+`costPerStep=4`+ pushes reach 4 to 94%+ won at every `regenFlat` tested,
+because the exhaustion win starts firing before the territorial one is ever
+in doubt.
+
+**Criterion (b) wins per the owner's ruling.** `regenFlat=24` is adopted: it
+is the value closest to the 30–70% band whose median does not clear it by
+more than the criterion's own tolerance (26 against "≤~25"), and it is the
+last point before the median starts climbing sharply. `costPerStep` is
+unchanged at 3 — every value tried either did nothing (below 3, the
+territorial win already dominates) or erased the band (above 3).
+
+### Final sweep, adopted constants (regenFlat=24, costPerStep=3), 1000 seeds a row
+
+`node tools/campaignlength.mjs 1000 --sweep --vary --ceiling=40`:
+
+```
+reach    won     lost   unres   median   deepest   turns at
+    1    0.0%   77.8%   22.2%      38      22.4        2.4
+    2    0.5%    0.0%   99.5%      40      19.6        6.3
+    3   20.7%    0.0%   79.3%      40      13.8       14.2
+    4   83.4%    0.0%   16.6%      26       4.2       28.8
+    5   98.9%    0.0%    1.1%      15       1.0       21.5
+    6   99.6%    0.0%    0.4%      11       1.5       13.8
+    7  100.0%    0.0%    0.0%       8       0.0        0.0
+    8   99.9%    0.0%    0.1%       7       1.0       11.0
+   10  100.0%    0.0%    0.0%       4       0.0        0.0
+
+CONTESTED BAND at reach 4 — 1 of 9 rows.
+```
+
+`node tools/campaignlength.mjs 1000 --sweep --vary` (uncapped, ceiling=200):
+
+```
+reach    won     lost   unres   median   deepest   turns at
+    1    0.0%  100.0%    0.0%      38      22.4        2.4
+    2    1.4%   98.6%    0.0%      73      19.6        6.2
+    3   69.5%    3.7%   26.8%      92      13.5       19.7
+    4  100.0%    0.0%    0.0%      26       0.0        0.0
+    5  100.0%    0.0%    0.0%      15       0.0        0.0
+    6   99.9%    0.0%    0.1%      11       1.0       17.0
+    7  100.0%    0.0%    0.0%       8       0.0        0.0
+    8  100.0%    0.0%    0.0%       7       0.0        0.0
+   10  100.0%    0.0%    0.0%       4       0.0        0.0
+```
+
+Both tables reproduce exactly against the constants shipped in
+`src/chart/reserve.ts` — run without `--tune`, they are the same numbers.
+
+### Which criteria bound
+
+- **(a) some reach row in 4–6 wins 30–70%: does not hold cleanly.** Reach 4
+  is the closest row, at 83.4% — outside the band. No `regenFlat` value puts
+  it inside the band without failing (b); see the iteration table. This is
+  the recorded compromise the owner's ruling anticipated.
+- **(b) ≥60% resolve inside 40 runs, median ≤~25: holds, at the edge of its
+  own tolerance.** Reach 4 resolves 83.4% inside 40 runs (comfortably over
+  60%) at a median of 26 — one run over the stated "~25", and the closest
+  approach to the band that does not clear it further. This criterion is
+  what regenFlat=24 was chosen to satisfy, per the owner's ruling that it
+  wins conflicts with (a).
+- **(c) unresolved-at-200 near zero: holds at every reach in the working
+  range (4 and up — 0.0%, 0.0%, 0.1%, 0.0%, 0.0%, 0.0%), and does not hold at
+  reach 2–3** (0.0%, 26.8%). Reach 3 sits just below the contested row and is
+  itself a slow, marginal fight — a player flying worse than reach 4 can
+  produce a campaign that neither side finishes for a long time. It is not
+  the row this task tunes for, and is recorded here rather than chased,
+  since narrowing it (§4 of this document already found) trades directly
+  against (a) and (b) the same way reach 4 does.
+
+### Reproducing this section
+
+```
+node tools/campaignlength.mjs 1000 --sweep --vary --ceiling=40
+node tools/campaignlength.mjs 1000 --sweep --vary
+node tools/campaignlength.mjs 1000 --sweep=4 --vary --ceiling=40 --tune=reserve.regenFlat=23.5
+node tools/campaignlength.mjs 1000 --sweep=4 --vary --ceiling=40 --tune=reserve.regenFlat=25
+node tools/campaignlength.mjs --trace=1 --reach=4 --ceiling=40
+```

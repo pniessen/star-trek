@@ -1,6 +1,6 @@
 import { type EraId } from "./eras.js";
 import { GRID, SECTOR_COUNT, indexOf, rowOf } from "./sectors.js";
-import { feedbackOn, RESERVE } from "./feedback.js";
+import { RESERVE } from "./reserve.js";
 
 export type Control = "ours" | "contested" | "theirs";
 export type StructureKind = "listening-post" | "outpost" | "starbase" | "yard";
@@ -29,13 +29,6 @@ export interface Sector {
   yield: number;
   structures: Structure[];
   patrol?: Patrol;
-  /**
-   * Candidate feedback term only — see `feedback.ts`'s `entrench`. Clears the
-   * enemy has dug in here that must be broken before the sector will move.
-   * Optional, and absent everywhere unless the term is on, so a save written
-   * without it loads unchanged.
-   */
-  entrenched?: number;
 }
 
 /**
@@ -77,13 +70,13 @@ export interface Campaign {
   current: number;
   incoming: IncomingMove[];
   /**
-   * Candidate feedback term only — see `feedback.ts`'s `reserve`. What the
-   * invasion has left to spend. Optional and absent unless the term is on, so
-   * a save written without it loads unchanged; `runEnemyTurn` seeds it on
-   * first use rather than `newCampaign` writing it into every save.
+   * What the invasion has left to spend. Optional so a save written before
+   * this shipped still loads unchanged — `reserveOf` in `enemyTurn.ts` reads
+   * a full reserve when this is absent, rather than `newCampaign` writing it
+   * into every save.
    */
   reserve?: number;
-  /** Candidate feedback term only. Consecutive turns the reserve has been empty. */
+  /** Consecutive turns the reserve has arrived at empty. See `RESERVE.brokenFor`. */
   exhausted?: number;
 }
 
@@ -159,14 +152,13 @@ export function canDock(sector: Sector): boolean {
 /**
  * The war is winnable even though the run is not: push the front off.
  *
- * Under the `reserve` candidate there is a second way to win, which is the
- * whole reason that candidate exists — an invasion with nothing left to spend
- * is broken whether or not the last square has changed colour. Off in the
- * shipped game; see `feedback.ts`.
+ * There is a second way to win: an invasion with nothing left to spend is
+ * broken whether or not the last square has changed colour — see
+ * `enemyTurn.ts`'s `runEnemyTurn` for how the reserve is measured and spent.
  */
 export function isWon(campaign: Campaign): boolean {
   if (countControl(campaign, "theirs") === 0) return true;
-  return feedbackOn("reserve") && (campaign.exhausted ?? 0) >= RESERVE.brokenFor;
+  return (campaign.exhausted ?? 0) >= RESERVE.brokenFor;
 }
 
 /** Lose the last starbase and everything built is gone. */

@@ -1,4 +1,5 @@
 import { canDock, countControl, type Campaign } from "../chart/campaign.js";
+import { commanderOf, warAct, type Doctrine } from "../chart/commander.js";
 import { planFixture } from "./comet.js";
 import { jumpSteps } from "../chart/jump.js";
 import { regionName, sectorCode, stationName } from "../chart/naming.js";
@@ -194,8 +195,35 @@ function compose(campaign: Campaign, teach: boolean): [string, CrawlTone][] {
       reach === 0 ? "WE ARE STANDING IN ONE" : `THEIR EDGE ${plural(reach, "SECTOR")} OUT`,
       "note",
     ]);
+    const act = warAct(campaign);
+    out.push([
+      act === "surge"
+        ? "THEIR SUPPLY RUNS DEEP"
+        : act === "failing"
+          ? "THEY ARE SPENDING THEIR LAST"
+          : "THEIR RESERVE STRAINS",
+      "note",
+    ]);
     gap();
     if (teach) {
+      const commander = commanderOf(campaign.seed);
+      out.push([`THEIR COMMANDER IS ${commander.given} ${commander.surname}`, "body"]);
+      // Two forms per doctrine, not one: the drawn pronoun must agree with its
+      // verb, and THEY takes the plural. SHE and HE share the singular.
+      const DOCTRINE_LINE: Record<Doctrine, { singular: string; plural: string }> = {
+        raider: { singular: "SPENDS SHIPS LIKE SHOT", plural: "SPEND SHIPS LIKE SHOT" },
+        hammer: { singular: "MASSES BEFORE MOVING", plural: "MASS BEFORE MOVING" },
+        anvil: {
+          singular: "PAYS FOR GROUND ONCE AND KEEPS IT",
+          plural: "PAY FOR GROUND ONCE AND KEEP IT",
+        },
+      };
+      const form = DOCTRINE_LINE[commander.doctrine];
+      out.push([
+        `${commander.pronoun} ${commander.pronoun === "THEY" ? form.plural : form.singular}`,
+        "note",
+      ]);
+      gap();
       out.push(["CLEAR A SECTOR TO TAKE IT", "body"]);
       out.push(["THE WAR ENDS WHEN THEY HOLD NOTHING", "note"]);
       gap();
@@ -284,7 +312,56 @@ export class Briefing {
    */
   begin(campaign: Campaign, teach: boolean): void {
     if (!this.enabled) return;
-    this.lines = layout(compose(campaign, teach));
+    this.start(layout(compose(campaign, teach)));
+  }
+
+  /**
+   * The other end of the same crawl: not a run's opening but a war's closing.
+   * Fired once, from `Presentation.toCommand`, exactly when the run that just
+   * ended also ended the war — `isWon`/`isLost` decide that, not this class.
+   * Same mechanism as `begin` top to bottom: composed once, scrolled by
+   * `update`, skippable by any key, silenced by the same `enabled` switch —
+   * a player who has turned the deck log off does not want it back for the
+   * one crawl they cannot fly past.
+   */
+  beginEpilogue(campaign: Campaign, won: boolean): void {
+    if (!this.enabled) return;
+    const commander = commanderOf(campaign.seed);
+    const theirs = countControl(campaign, "theirs");
+    const copy: [string, CrawlTone][] = won
+      ? [
+          ["DECK LOG   FINAL", "head"],
+          ["", "note"],
+          ["THE INVASION IS BROKEN", "body"],
+          [`${commander.surname} WITHDRAWS`, "body"],
+          [
+            theirs > 0
+              ? `${campaign.runsElapsed} RUNS. THEY STILL HELD ${plural(theirs, "SECTOR")}. IT DID NOT MATTER.`
+              : `${campaign.runsElapsed} RUNS. THEY HELD NOTHING.`,
+            "note",
+          ],
+          ["", "note"],
+          ["THE WAVES STOPPED", "body"],
+          ["WE GO HOME", "flag"],
+        ]
+      : [
+          ["DECK LOG   FINAL", "head"],
+          ["", "note"],
+          ["THE LAST STARBASE IS GONE", "body"],
+          [`${commander.surname} TAKES THE CHART`, "body"],
+          [`${campaign.runsElapsed} RUNS. IT WAS NOT ENOUGH.`, "note"],
+          ["COMMAND LOST", "flag"],
+        ];
+    this.start(layout(copy));
+  }
+
+  /**
+   * The reset tail shared by `begin` and `beginEpilogue`: composed lines in,
+   * a scroll ready to run out. Extracted rather than duplicated because the
+   * two crawls differ only in what they say, never in how they move.
+   */
+  private start(lines: readonly CrawlLine[]): void {
+    this.lines = lines;
     this.travel = 0;
     this.spoken = 0;
     this.elapsed = 0;

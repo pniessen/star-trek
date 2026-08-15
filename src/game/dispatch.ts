@@ -1,4 +1,5 @@
 import { countControl, type Campaign } from "../chart/campaign.js";
+import { commanderOf, type WarAct } from "../chart/commander.js";
 import { regionName, sectorCode } from "../chart/naming.js";
 
 /**
@@ -78,7 +79,7 @@ export const DISPATCH = {
 } as const;
 
 /** What HQ is prepared to talk about, in the order it prefers. */
-type Topic = "hold" | "intercept" | "losing" | "winning";
+type Topic = "hold" | "intercept" | "failing" | "losing" | "winning";
 
 export class Dispatches {
   /**
@@ -105,9 +106,23 @@ export class Dispatches {
    * while docked, and once the run is over. The countdown does not run then
    * either, so the interval measures fighting rather than elapsed time.
    *
+   * `actAtRunStart` is `warAct` latched by `Session` at the moment the run
+   * began (see `Session.actAtRunStart` and `warAct`'s own docblock for why):
+   * this method runs mid-fight, and `campaign.reserve` is draining under the
+   * run's own `gainGround` calls the whole time it does, so a fresh
+   * `warAct(campaign)` read here would call the fallback line "failing"
+   * partway into any ordinary run rather than only near the war's actual end.
+   *
    * @returns true on the frame a new dispatch arrives, so the caller can chirp.
    */
-  update(dt: number, campaign: Campaign, escalation: number, engaged: boolean, roll: number): boolean {
+  update(
+    dt: number,
+    campaign: Campaign,
+    escalation: number,
+    engaged: boolean,
+    roll: number,
+    actAtRunStart: WarAct,
+  ): boolean {
     this.timer = Math.max(0, this.timer - dt);
     if (this.timer === 0) this.line = null;
 
@@ -122,7 +137,7 @@ export class Dispatches {
     this.next = DISPATCH.cooldown;
     if (roll > DISPATCH.chance) return false;
 
-    const composed = this.compose(campaign);
+    const composed = this.compose(campaign, actAtRunStart);
     if (!composed || composed.key === this.last) return false;
 
     this.last = composed.key;
@@ -147,16 +162,17 @@ export class Dispatches {
    * shape of the war. Random selection would sometimes tell you the enemy holds
    * twenty sectors while a bomb was falling on your head.
    */
-  private compose(campaign: Campaign): { key: Topic | string; text: string } | null {
+  private compose(campaign: Campaign, actAtRunStart: WarAct): { key: Topic | string; text: string } | null {
     const here = campaign.current;
     const inbound = campaign.incoming;
+    const commander = commanderOf(campaign.seed);
 
     // Something is already committed against where you are. The most useful
     // sentence HQ has, and the only one that is about right now.
     if (inbound.some((move) => move.sector === here)) {
       return {
         key: `hold:${here}`,
-        text: `HQ: STRIKE COMMITTED ON ${this.name(campaign, here)}. YOU ARE STANDING IN IT.`,
+        text: `HQ: ${commander.surname} COMMITTED A STRIKE ON ${this.name(campaign, here)}. YOU ARE STANDING IN IT.`,
       };
     }
 
@@ -166,22 +182,32 @@ export class Dispatches {
     if (elsewhere) {
       return {
         key: `intercept:${elsewhere.sector}`,
-        text: `HQ: ${this.name(campaign, elsewhere.sector)} IS NEXT. CLEAR IT AND THE STRIKE NEVER LANDS.`,
+        text: `HQ: ${commander.surname} MOVES ON ${this.name(campaign, elsewhere.sector)}. CLEAR IT AND THE STRIKE NEVER LANDS.`,
       };
     }
 
     // Nothing in the air. Fall back on the shape of the war, which at least tells
-    // a player who never raises the chart that there is one.
+    // a player who never raises the chart that there is one. Act-aware, and the
+    // act rides in the key: a band change is news even when the sector count
+    // that follows it in the sentence has not moved. `actAtRunStart` rather than
+    // a fresh `warAct(campaign)` read — see this method's own docblock.
+    const act = actAtRunStart;
     const theirs = countControl(campaign, "theirs");
     const ours = countControl(campaign, "ours");
+    if (act === "failing") {
+      return {
+        key: `failing:${theirs}`,
+        text: `HQ: THEIR RESERVE IS FAILING. EVERY WAVE YOU BREAK NOW STAYS BROKEN.`,
+      };
+    }
     if (theirs > ours) {
       return {
-        key: `losing:${theirs}`,
+        key: `losing:${act}:${theirs}`,
         text: `HQ: THEY HOLD ${theirs} SECTORS TO OUR ${ours}. TAKE GROUND WHERE YOU CAN.`,
       };
     }
     return {
-      key: `winning:${theirs}`,
+      key: `winning:${act}:${theirs}`,
       text: `HQ: THEY ARE DOWN TO ${theirs} SECTORS. KEEP PUSHING.`,
     };
   }

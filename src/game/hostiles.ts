@@ -210,6 +210,24 @@ export const HOSTILE_SPECS: Record<HostileKind, HostileSpec> = {
 /** Above this the hull is not there to be shot at. */
 const HIDDEN_AT = 0.4;
 
+/**
+ * The one-shot roll a hostile makes as its hull crosses `threshold` on the
+ * way down. A crippled hull that keeps fighting reads as suicidal rather than
+ * as an opponent, so below a fifth of hull the fight can end without a kill:
+ * the hostile turns tail, stops shooting, and is gone for good once it clears
+ * `exitRange` — paying nothing, the same precedent the Warden's kills already
+ * set. `chance` is per class because withdrawal is part of what a class *is*:
+ * a Raider (`swarmer`) is disposable and mostly runs, a Bastion (`brawler`)
+ * is the anvil and mostly does not, and a Shroud (`stalker`) gets `0` — it
+ * already has an escape built into its own cycle, and a cloaked hull fleeing
+ * in the open would be a second, redundant way to vanish.
+ */
+export const WITHDRAW = {
+  threshold: 0.2,
+  exitRange: 130,
+  chance: { swarmer: 0.75, sniper: 0.5, brawler: 0.15, miner: 0.5, stalker: 0 },
+} as const satisfies { threshold: number; exitRange: number; chance: Record<HostileKind, number> };
+
 export class Hostile {
   readonly position = new Vector3();
   readonly velocity = new Vector3();
@@ -224,6 +242,22 @@ export class Hostile {
   cloak = 0;
   /** True for the single frame the Shroud commits to a strike. */
   revealed = false;
+
+  /**
+   * True once the withdrawal roll has hit, for the rest of this hostile's
+   * life. Public — the HUD reads it for the lead-pip label and `Session`
+   * reads it to retire an escaped hull without paying for it. See `WITHDRAW`.
+   */
+  withdrawing = false;
+
+  /**
+   * Set when this hull is the commander's guard — a stat-and-name variant of
+   * its class fielded once the war reaches its failing act (Task 15). Null
+   * for every ordinary hostile. Public: the HUD reads it to outrank the
+   * class name in the lead-pip label, and `Fleet.spawn`'s `override` is the
+   * only place that ever sets it.
+   */
+  guardName: string | null = null;
 
   /**
    * How badly this contact's instruments are being jammed, 0-1. Set each frame
@@ -275,7 +309,7 @@ export class Hostile {
     return this.cloak > HIDDEN_AT;
   }
 
-  update(dt: number, player: Ship, ordnance: Ordnance, mines: Minefield): void {
+  update(dt: number, player: Ship, ordnance: Ordnance, mines: Minefield, flank = false): void {
     this.revealed = false;
 
     const toPlayer = player.position.clone().sub(this.position);
@@ -283,20 +317,43 @@ export class Hostile {
     if (distance < 1e-3) return;
     toPlayer.divideScalar(distance);
 
-    // Hold the preferred range: close if outside it, back off if inside. A
-    // Shroud breaking off after a strike wants distance, not its usual station.
-    const preferred =
-      this.phase === "veiling" ? this.spec.preferredRange * 3.4 : this.spec.preferredRange;
-    const error = distance - preferred;
-    const closing = MathUtils.clamp(error / 20, -1, 1);
+    // A withdrawing hostile has one job left: put distance between itself and
+    // the player. No station to hold and no arc to fly — the range-holding and
+    // strafing below are exactly what a fight looks like, and this is the one
+    // moment a hostile is no longer in one.
+    let desired: Vector3;
+    if (this.withdrawing) {
+      desired = toPlayer.clone().negate();
+    } else {
+      // Hold the preferred range: close if outside it, back off if inside. A
+      // Shroud breaking off after a strike wants distance, not its usual station.
+      const preferred =
+        this.phase === "veiling" ? this.spec.preferredRange * 3.4 : this.spec.preferredRange;
+      const error = distance - preferred;
+      const closing = MathUtils.clamp(error / 20, -1, 1);
 
-    // Strafe perpendicular so they arc around rather than driving straight in,
-    // which is what makes them feel like pilots instead of homing missiles.
-    const tangent = new Vector3(-toPlayer.z, 0, toPlayer.x).multiplyScalar(
-      this.spec.orbit * Math.sign(Math.sin(this.position.x * 0.7 + this.position.z * 0.3) || 1),
-    );
+      // Strafe perpendicular so they arc around rather than driving straight in,
+      // which is what makes them feel like pilots instead of homing missiles.
+      //
+      // While a Bastion is holding the player at range, swarmers bias that same
+      // strafe toward the player's stern instead of drawing it from a positional
+      // hash — attacking the facing decision rather than the shield itself: a
+      // player who turns to guard the stern leaves the bow, where the Bastion
+      // already is. Bias only — `orbit` still bounds the magnitude, range-holding
+      // and turn rate are untouched above and below this line, and it is inert
+      // the moment no brawler is engaged (wave one, every other class, and a
+      // Shroud's veiling retreat all keep the hash sign).
+      const sign =
+        flank && this.kind === "swarmer"
+          ? sternSign(
+              Math.atan2(this.position.x - player.position.x, this.position.z - player.position.z),
+              player.heading,
+            )
+          : Math.sign(Math.sin(this.position.x * 0.7 + this.position.z * 0.3)) || 1;
+      const tangent = new Vector3(-toPlayer.z, 0, toPlayer.x).multiplyScalar(this.spec.orbit * sign);
 
-    const desired = toPlayer.clone().multiplyScalar(closing).add(tangent);
+      desired = toPlayer.clone().multiplyScalar(closing).add(tangent);
+    }
     if (desired.lengthSq() > 1e-6) desired.normalize();
 
     // Turn toward the desired direction at a bounded rate.
@@ -323,8 +380,15 @@ export class Hostile {
     this.reveal = Math.max(0, this.reveal - dt * 1.6);
 
     const aimError = Math.abs(angleDelta(this.heading, Math.atan2(toPlayer.x, toPlayer.z)));
-    if (this.spec.cloak) this.updateCloak(dt, this.spec.cloak, distance, aimError);
-    if (this.spec.lays) this.updateLaying(dt, this.spec.lays, distance, player, mines);
+    // Belt-and-braces on the cloak: `WITHDRAW.chance.stalker` is 0, so a
+    // Shroud never actually reaches this guard withdrawing, but the check is
+    // one field read and costs nothing to keep honest against that table
+    // ever changing.
+    if (this.spec.cloak && !this.withdrawing) this.updateCloak(dt, this.spec.cloak, distance, aimError);
+    // A fleeing Harrow does not seed the ground it is running across — laying
+    // one more field on the way out would arm its own escape route, which is
+    // not what "withdrawing" is supposed to mean.
+    if (this.spec.lays && !this.withdrawing) this.updateLaying(dt, this.spec.lays, distance, player, mines);
 
     // Fire only when actually pointing at the player, so a hostile that has
     // been out-turned genuinely cannot shoot — and a cloaked one never can,
@@ -352,7 +416,10 @@ export class Hostile {
       this.spec.fireRange,
       MathUtils.lerp(this.spec.fireRange, COMET.visualRange, this.interference),
     );
-    if (this.cooldown <= 0 && !this.hidden && distance < reach && aimError < 0.4) {
+    // A withdrawing hostile has stopped fighting, not merely stopped
+    // pursuing — the whole point is that it costs the player nothing more to
+    // let it go, and a parting shot on the way out would undercut that.
+    if (!this.withdrawing && this.cooldown <= 0 && !this.hidden && distance < reach && aimError < 0.4) {
       this.cooldown = this.spec.fireInterval;
       // Lead the target — a bolt aimed where you are is a bolt you outrun. The
       // solve is a plain vector subtraction and has been three-dimensional all
@@ -404,9 +471,19 @@ export class Hostile {
 
   damage(amount: number): boolean {
     if (this.hidden) return false; // not there to be hit
+    const before = this.hull;
     this.hull -= amount;
     this.flash = 1;
     if (this.hull <= 0) this.dead = true;
+    // The roll happens once, at the crossing — not every frame the hull sits
+    // below the line, and not on a hit that was already below it. A hostile
+    // this hit kills outright never gets here in any way that matters: `dead`
+    // routes it through `Session.destroy` instead, and `withdrawing` is never
+    // read again.
+    const cutoff = WITHDRAW.threshold * this.spec.hull;
+    if (!this.dead && !this.withdrawing && before > cutoff && this.hull <= cutoff) {
+      if (Math.random() < WITHDRAW.chance[this.kind]) this.withdrawing = true;
+    }
     return this.dead;
   }
 
@@ -504,6 +581,19 @@ function angleDelta(from: number, to: number): number {
   return delta;
 }
 
+/**
+ * Which tangent direction — the same sign the strafe above multiplies
+ * `orbit` by — carries a hostile at this bearing around toward the player's
+ * stern rather than away from it. The stern sits at `playerHeading + π`;
+ * `angleDelta` already picks the shorter way round, so its sign is the
+ * answer. The `>= 0` comparison always resolves to +1 or -1 — a dead-ahead
+ * or dead-astern source still has to pick a side, and it always does.
+ */
+export function sternSign(bearingFromPlayer: number, playerHeading: number): number {
+  const toStern = angleDelta(bearingFromPlayer, playerHeading + Math.PI);
+  return toStern >= 0 ? 1 : -1;
+}
+
 function turnToward(from: number, to: number, maxStep: number): number {
   return from + MathUtils.clamp(angleDelta(from, to), -maxStep, maxStep);
 }
@@ -523,10 +613,37 @@ export class Fleet {
     stalker: [],
   };
 
+  /**
+   * True while any live brawler holds the player inside its own fire range —
+   * the gate for the swarmer's stern-flanking bias. Computed once per step,
+   * fleet-wide, so every swarmer that update()s this frame reads the same
+   * answer rather than five slightly different ones from five call sites.
+   */
+  brawlerEngaged = false;
+
   constructor(private readonly makeShape: (kind: HostileKind) => VectorObject) {}
 
-  spawn(kind: HostileKind, position: Vector3, heading: number): Hostile {
-    const spec = HOSTILE_SPECS[kind];
+  /** Recomputes `brawlerEngaged` against this frame's player position. */
+  updateEngagement(player: Ship): void {
+    this.brawlerEngaged = this.hostiles.some(
+      (h) => h.kind === "brawler" && h.position.distanceTo(player.position) < h.spec.fireRange,
+    );
+  }
+
+  /**
+   * `override` is Task 15's seam for the commander's guard: a spec that
+   * differs from the class's book values, plus the name that goes with it.
+   * Everything else about spawning a guard is identical to spawning any
+   * other hostile of its `kind` — same shape, same pool, same behaviour —
+   * because the guard is a stat-and-name variant, never a new hull.
+   */
+  spawn(
+    kind: HostileKind,
+    position: Vector3,
+    heading: number,
+    override?: { spec: HostileSpec; guardName: string },
+  ): Hostile {
+    const spec = override?.spec ?? HOSTILE_SPECS[kind];
     const shape = this.pool[kind].pop() ?? this.makeShape(kind);
     shape.group.visible = true;
     shape.group.scale.setScalar(spec.scale);
@@ -535,13 +652,18 @@ export class Fleet {
     const hostile = new Hostile(kind, spec, shape);
     hostile.position.copy(position);
     hostile.heading = heading;
+    if (override) hostile.guardName = override.guardName;
     this.hostiles.push(hostile);
     return hostile;
   }
 
   retire(hostile: Hostile): void {
     const index = this.hostiles.indexOf(hostile);
-    if (index >= 0) this.hostiles.splice(index, 1);
+    // Idempotent: a hostile not found here has already been retired, and
+    // pushing its shape into the pool a second time would let two different
+    // live hostiles pop the same shape back out from under each other.
+    if (index < 0) return;
+    this.hostiles.splice(index, 1);
     hostile.shape.group.visible = false;
     this.pool[hostile.kind].push(hostile.shape);
   }

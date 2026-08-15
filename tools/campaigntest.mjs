@@ -222,7 +222,21 @@ check(
 // makes the assertion a shuffle-position lottery for that sector rather than
 // a test of the stated behaviour, since every push-ours candidate costs the
 // same and only shuffle order decides which get funded first.
-const neglected = newCampaign(13);
+//
+// Seed 13 (Task 5) draws a Hammer commander, whose weights make push-ours
+// (0.7×) strictly cheaper than push-contested (1.2×) at every defence level.
+// The check right below this comment — the fall itself, ours to anything
+// else — still lands on schedule under Hammer, since that first step is
+// push-ours's job and push-ours is exactly what Hammer prefers. What Hammer
+// delays past run four is the *next* check, "losing ground is recorded":
+// `sectorsLost` only increments on contested → theirs, which is
+// push-contested's job, and Hammer prices push-contested high, so it always
+// finds a fresh sector to open rather than closing one it has already
+// contested. That is doctrine texture, not a broken promise: seed 1 draws
+// Raider, whose weights point the other way (0.6× on push-contested), and
+// closes a contested sector out — fall and full loss both — inside the
+// window both checks below assert.
+const neglected = newCampaign(1);
 const startedOurs = neglected.sectors.map((s) => s.control === "ours");
 for (let run = 1; run <= 4; run++) {
   neglected.runsElapsed = run;
@@ -298,12 +312,78 @@ check(
 
 const {
   STRUCTURES, REFITS, PATROL, NO_REFITS,
-  build, toggleRefit, deployPatrol, patrolCapacity, patrolCount,
+  build, toggleRefit, deployPatrol, patrolCount,
   loadoutOf, gainGround, advanceCampaign, campaignFor, restartCampaign,
   hasAnyStructure, structureSpec,
 } = await import("../.campaign-build/chart/economy.js");
 
 const { DECISIONS, decide, refusal } = await import("../.campaign-build/chart/command.js");
+
+// ── the finite invasion, shipped ────────────────────────────────────────────
+// pressureBudget, runEnemyTurn and gainGround are already imported above;
+// RESERVE and reserveOf are the only names this section needs that aren't.
+const { RESERVE, reserveOf } = await import("../.campaign-build/chart/enemyTurn.js");
+
+{
+  const c = newCampaign(7);
+  check("a fresh campaign reads a full reserve", reserveOf(c) === RESERVE.initial,
+    `reserve=${reserveOf(c)}`);
+
+  // Ground taken drains the reserve, unconditionally.
+  const before = reserveOf(c);
+  // front row of enemy ground: any sector with control "theirs"
+  const target = c.sectors.findIndex((s) => s.control === "theirs");
+  gainGround(c, target);
+  check("gainGround drains the reserve", reserveOf(c) === before - RESERVE.costPerStep,
+    `reserve=${reserveOf(c)} expected=${before - RESERVE.costPerStep}`);
+
+  // The budget is clamped by the committed share of the reserve.
+  c.reserve = 4;
+  check("budget is clamped by the reserve",
+    pressureBudget(c) <= Math.floor(4 * RESERVE.commit),
+    `budget=${pressureBudget(c)}`);
+}
+
+{
+  // Exhaustion, measured on arrival, wins the war.
+  const c = newCampaign(11);
+  c.reserve = 0;
+  const rng = makeRng(11, 0);
+  for (let i = 0; i < RESERVE.brokenFor; i++) {
+    c.reserve = 0;                 // the player kept draining it between turns
+    runEnemyTurn(c, rng);
+  }
+  check("an empty reserve for brokenFor turns wins the war", isWon(c),
+    `exhausted=${c.exhausted}`);
+}
+
+{
+  // Save compatibility: a campaign written before adoption has no reserve and
+  // no exhausted field. It must read a full reserve and take a turn unharmed.
+  const c = newCampaign(19);
+  delete c.reserve;
+  delete c.exhausted;
+  check("an old-shape save reads a full reserve", reserveOf(c) === RESERVE.initial,
+    `reserve=${reserveOf(c)}`);
+  runEnemyTurn(c, makeRng(19, 0));
+  check("an old-shape save survives a turn", typeof c.reserve === "number" && !isWon(c),
+    `reserve=${c.reserve}`);
+}
+
+{
+  // The territory term floors at zero: pushing the enemy below the depth it
+  // opened with does not lower ambition below base, because that deep push
+  // is already being charged to the reserve instead, via costPerStep in
+  // gainGround. With the reserve full this is visible as a full clamp input;
+  // assert on the formula's own output with a huge reserve so ambition binds.
+  const c = newCampaign(13);
+  c.reserve = 10_000;
+  for (const s of c.sectors) s.control = "ours";
+  c.sectors[0].control = "theirs";           // one sector left of 24
+  check("the territory term floors at zero — deep pushes are charged to the reserve instead",
+    pressureBudget(c) === 6,
+    `budget=${pressureBudget(c)}`);
+}
 
 /** The home starbase's sector, found the way the game finds it. */
 const homeOf = (campaign) => campaign.sectors.findIndex((s) => hasStructure(s, "starbase"));
@@ -372,10 +452,13 @@ const paid = gamble.salvage;
 const buildingWhenLost = gamble.sectors[exposedSite].structures[0].runsRemaining;
 // The gamble the design describes: the sector falls while the yard is still
 // scaffolding. `runEnemyTurn` prices a held sector with structures as an
-// assault, so give it the ground and the budget to afford one.
+// assault, so give it the ground and enough turns to afford one — the
+// reserve now caps what the enemy can spend in any single turn, so the
+// assault has to wait its turn behind cheaper expansion rather than landing
+// on the first one.
 gamble.sectors[exposedSite].control = "theirs";
 gamble.runsElapsed = 30;
-for (let i = 0; i < 6 && gamble.sectors[exposedSite].structures.length > 0; i++) {
+for (let i = 0; i < 20 && gamble.sectors[exposedSite].structures.length > 0; i++) {
   const r = makeRng(gamble.seed, gamble.rngCursor);
   runEnemyTurn(gamble, r);
   gamble.rngCursor = r.cursor;
@@ -457,9 +540,6 @@ const post = frontLineOf(held);
 check("a patrol can be fielded", deployPatrol(held, post), `sector ${post}`);
 check("...at full strength", held.sectors[post].patrol.strength === PATROL.maxStrength, `s=${held.sectors[post].patrol.strength}`);
 check("...and costs salvage", held.salvage === 5000 - PATROL.cost, `salvage=${held.salvage}`);
-check("a second patrol is refused without a yard",
-  patrolCapacity(held) === 1 && !deployPatrol(held, homeOf(held)),
-  `capacity=${patrolCapacity(held)}`);
 check("a patrol cannot be pushed into enemy space",
   !deployPatrol(held, held.sectors.findIndex((s) => s.control === "theirs")),
   "holds ground, does not take it");
@@ -481,6 +561,25 @@ check(
 );
 check("...and is gone for good without a yard", patrolCount(held) === 0, `patrols=${patrolCount(held)}`);
 
+// Uncapped: a second patrol costs salvage, not a yard, and the two things
+// that still refuse it — enemy ground, a facing already at full strength —
+// are the same refusals a first patrol always had.
+{
+  const c = newCampaign(17);
+  c.salvage = 1000;
+  const home = c.sectors.findIndex((s) => s.structures.length > 0);
+  const second = c.sectors.findIndex((s, i) => s.control === "ours" && i !== home);
+  check("a second patrol deploys with no yard",
+    deployPatrol(c, home) && deployPatrol(c, second),
+    `salvage=${c.salvage}`);
+  check("patrols still refuse enemy ground",
+    !deployPatrol(c, c.sectors.findIndex((s) => s.control === "theirs")),
+    "deployed into theirs");
+  check("a full-strength patrol still refuses reinforcement",
+    !deployPatrol(c, home),
+    "reinforced past maxStrength");
+}
+
 // A patrol behind the line takes no attrition at all: exposure, not time.
 const rear = newCampaign(105);
 creditSalvage(rear, 5000);
@@ -493,15 +592,13 @@ check(
   `strength=${rear.sectors[homeOf(rear)].patrol && rear.sectors[homeOf(rear)].patrol.strength}`,
 );
 
-// A yard rebuilds losses and fields a second patrol — both halves of what the
-// design says 2,400 salvage buys.
+// A yard rebuilds losses — the ceiling it used to raise is gone now that
+// patrols are uncapped, but the rebuild it always did stands on its own.
 const yarded = newCampaign(106);
 creditSalvage(yarded, 5000);
 yarded.sectors[homeOf(yarded)].structures.push({ kind: "yard", runsRemaining: 0 });
-check("a yard raises the patrol ceiling", patrolCapacity(yarded) === 2, `capacity=${patrolCapacity(yarded)}`);
 const yardPost = frontLineOf(yarded);
 deployPatrol(yarded, yardPost);
-check("...so a second patrol can be fielded", deployPatrol(yarded, homeOf(yarded)), "two in the field");
 for (let i = 0; i < 6; i++) advance(yarded);
 check(
   "a yard rebuilds a patrol the front grinds down",
@@ -906,6 +1003,55 @@ check("a cheaper beam and a tougher skin read as gains",
 check("an unrecorded era flies the baseline",
   loadoutOf([]).energyReserve === 1 && eraSpec(undefined).id === "constitution",
   "undefined -> constitution");
+
+// ── the enemy commander ─────────────────────────────────────────────────────
+const { commanderOf, warAct, guardClass } = await import("../.campaign-build/chart/commander.js");
+
+{
+  const a = commanderOf(42);
+  const b = commanderOf(42);
+  check("commander is deterministic per seed",
+    a.given === b.given && a.surname === b.surname &&
+    a.doctrine === b.doctrine && a.pronoun === b.pronoun,
+    JSON.stringify(a));
+  check("different seeds can differ",
+    [1, 2, 3, 4, 5, 6, 7, 8].some((s) => commanderOf(s).surname !== a.surname),
+    "eight seeds, one surname");
+  check("guard class follows doctrine",
+    guardClass("raider") === "swarmer" && guardClass("hammer") === "brawler" &&
+    guardClass("anvil") === "sniper", "");
+}
+
+{
+  const c = newCampaign(23);
+  check("a fresh war is a surge", warAct(c) === "surge", warAct(c));
+  c.exhausted = 1;
+  check("a ticking exhaustion counter is failing", warAct(c) === "failing", warAct(c));
+}
+
+// ── doctrine reweights the enemy turn ───────────────────────────────────────
+{
+  // Doctrine changes texture: over many seeds, hammer wars produce a higher
+  // share of assault+push-ours actions than raider wars do.
+  const share = (doctrine) => {
+    let heavy = 0, total = 0;
+    for (let seed = 1; seed <= 400; seed++) {
+      if (commanderOf(seed).doctrine !== doctrine) continue;
+      const c = newCampaign(seed);
+      const rng = makeRng(seed, 0);
+      for (let run = 0; run < 6; run++) {
+        for (const a of runEnemyTurn(c, rng)) {
+          total++;
+          if (a.kind === "assault" || a.kind === "push-ours") heavy++;
+        }
+        c.runsElapsed++;
+      }
+    }
+    return heavy / Math.max(1, total);
+  };
+  check("hammer fights heavier than raider", share("hammer") > share("raider") + 0.03,
+    `hammer=${share("hammer").toFixed(3)} raider=${share("raider").toFixed(3)}`);
+}
 
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");
 process.exit(problems.length ? 1 : 0);

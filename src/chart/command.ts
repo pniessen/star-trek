@@ -6,8 +6,6 @@ import {
   isFitted,
   isRefitYard,
   loadoutOf,
-  patrolCapacity,
-  patrolCount,
   PATROL,
   REFITS,
   STRUCTURES,
@@ -121,9 +119,6 @@ export function refusal(campaign: Campaign, decision: Decision, sector: number):
       const patrol = target.patrol;
       if (patrol && patrol.strength >= PATROL.maxStrength) {
         return `${sectorCode(sector)} PATROL IS AT FULL STRENGTH`;
-      }
-      if (!patrol && patrolCount(campaign) >= patrolCapacity(campaign)) {
-        return `NO SPARE PATROLS  ${patrolCount(campaign)} OF ${patrolCapacity(campaign)} IN THE FIELD`;
       }
       return afford(campaign, decision.cost);
     }

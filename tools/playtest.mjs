@@ -275,6 +275,43 @@ check(
 );
 check("...and pads below 100", bearings[0] === "000" && bearings[1] === "005", bearings.slice(0, 2).join(" "));
 
+// ── swarmer flanking: sternSign ─────────────────────────────────────────────
+// The pure geometric core of facing-aware flanking — which tangent direction
+// carries a hostile toward the player's stern — asserted directly rather than
+// through a scripted fight, since spawning a controlled brawler+swarmer
+// encounter isn't reliably scriptable through the probe.
+const stern = await page.evaluate(async () => {
+  const { sternSign } = await import("/src/game/hostiles.ts");
+  return {
+    deadAhead: sternSign(0, 0),
+    plus: sternSign(Math.PI * 0.4, 0),
+    minus: sternSign(-Math.PI * 0.4, 0),
+    starboard: sternSign(Math.PI / 2, 0),
+  };
+});
+check(
+  "sternSign never returns 0 for a dead-ahead source",
+  stern.deadAhead === -1 || stern.deadAhead === 1,
+  `sternSign(0, 0)=${stern.deadAhead}`,
+);
+check(
+  "...and symmetric bearings pick opposite ways round",
+  stern.plus === -stern.minus,
+  `+0.4π=${stern.plus} -0.4π=${stern.minus}`,
+);
+// A hostile on the starboard beam (bearing +π/2, player heading 0) sits at
+// position (+X) relative to the player, so `toPlayer` (hostile→player) points
+// -X. The tangent `(-toPlayer.z, 0, toPlayer.x)` is then (0, 0, -1): a push
+// toward -Z. Applied at +X, that walks the hostile's bearing from +π/2 toward
+// +π (the stern, since heading is 0) rather than back toward 0 — so sign +1
+// is the one that closes on the stern here, matching the shorter-way delta
+// from +π/2 to the stern at heading+π=π, which is +π/2 (i.e. positive).
+check(
+  "...and a starboard-beam hostile gets the sign that closes toward the stern",
+  stern.starboard === 1,
+  `sternSign(π/2, 0)=${stern.starboard}`,
+);
+
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
 // — the same contract `Y` has. Checked before the first run, which is also the
@@ -368,6 +405,11 @@ check(
 check(
   "the first log of a war states the rules",
   truth.lines.includes("CLEAR A SECTOR TO TAKE IT"),
+  JSON.stringify(truth.lines),
+);
+check(
+  "...and names the enemy commander",
+  truth.lines.some((line) => line.startsWith("THEIR COMMANDER IS")),
   JSON.stringify(truth.lines),
 );
 
@@ -716,6 +758,39 @@ await page.evaluate(() => {
   window.__session.wave = 1;
   window.__fleet.clear();
 });
+
+// ── shield fx: struck quarter flash ─────────────────────────────────────────
+// `Ship.takeHit` now records which facing absorbed a hit and starts a decaying
+// flash, so `shieldFx.ts` has something world-space to draw at the ship rather
+// than only on the HUD dial. `position.clone()` is used for the source rather
+// than a plain `{x,y,z}` literal because `takeHit` calls `.clone().sub(...)`
+// on it — it needs a real `Vector3`, and the ship's own position is one.
+// Offsetting it by `+Z` from a `heading` of 0 is dead ahead, which
+// `facingFrom`'s convention (relative bearing 0 → "fore") should route to the
+// bow.
+await page.evaluate(() => {
+  const p = window.__player;
+  p.heading = 0;
+  const source = p.position.clone();
+  source.z += 50;
+  p.takeHit(0.3, source);
+});
+const struck = await page.evaluate(() => ({
+  facing: window.__player.struckFacing,
+  flash: window.__player.struckFlash,
+}));
+check(
+  "a hit sets the struck facing and starts the flash",
+  struck.facing === "fore" && struck.flash > 0,
+  JSON.stringify(struck),
+);
+await page.waitForTimeout(400);
+const struckDecayed = await page.evaluate(() => window.__player.struckFlash);
+check(
+  "the struck flash decays over time",
+  struckDecayed < struck.flash && struckDecayed >= 0,
+  `flash=${struck.flash} -> ${struckDecayed}`,
+);
 
 // ── docking ─────────────────────────────────────────────────────────────────
 await page.evaluate(() => {
@@ -1202,6 +1277,66 @@ await page.evaluate(() => {
 
 await page.evaluate(() => { clearInterval(window.__pin); delete window.__pin; });
 
+// ── withdrawal ───────────────────────────────────────────────────────────────
+// The roll itself is chance-based (`WITHDRAW.chance`), so the honest seam for
+// a deterministic test is forcing the flag directly rather than farming hits
+// until the dice cooperate — the same shortcut `__loom.seed()` and
+// `__comet.seed()` already take for their own rare rolls. What is asserted
+// is everything downstream of the flag: an escaped hostile is retired for
+// free, and the wave clears behind it exactly as if it had been killed.
+await page.evaluate(() => {
+  window.__fleet.clear();
+  window.__session.breakTimer = Infinity; // no fresh wave contaminating this fleet
+});
+const withdrawTest = await page.evaluate(async () => {
+  const player = window.__player;
+  const session = window.__session;
+  const fleet = window.__fleet;
+  const { WITHDRAW } = await import("/src/game/hostiles.ts");
+
+  const before = { kills: session.kills, pending: session.pending, multiplier: session.multiplier };
+
+  const hostile = fleet.spawn("swarmer", player.position.clone(), 0);
+  // Past exitRange from the moment it exists — this is a test of the retire
+  // path, not of how long it takes to fly there.
+  hostile.position.set(player.position.x + WITHDRAW.exitRange + 40, player.position.y, player.position.z);
+  hostile.withdrawing = true;
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let present = true;
+  for (let i = 0; i < 60 && present; i++) {
+    await wait(50);
+    present = fleet.hostiles.includes(hostile);
+  }
+
+  return {
+    before,
+    after: { kills: session.kills, pending: session.pending, multiplier: session.multiplier },
+    gone: !present,
+    state: session.state,
+  };
+});
+await page.evaluate(() => {
+  window.__session.breakTimer = 0; // hand the clock back to the wave scheduler
+});
+check(
+  "a withdrawing hostile past exitRange is retired",
+  withdrawTest.gone,
+  JSON.stringify(withdrawTest),
+);
+check(
+  "...and pays nothing: kills, pending and the multiplier are unchanged",
+  withdrawTest.after.kills === withdrawTest.before.kills &&
+    withdrawTest.after.pending === withdrawTest.before.pending &&
+    withdrawTest.after.multiplier === withdrawTest.before.multiplier,
+  JSON.stringify(withdrawTest),
+);
+check(
+  "...and the wave still clears once nothing else is alive",
+  withdrawTest.state !== "fighting",
+  `state=${withdrawTest.state}`,
+);
+
 // ── hyperwarp ───────────────────────────────────────────────────────────────
 // Pinned for the whole charge-and-arrive sequence below purely so the ship
 // survives the two-second charge next to a live wave: this does NOT guard the
@@ -1458,6 +1593,63 @@ check(
 
 await page.evaluate(() => { clearInterval(window.__hullPin); delete window.__hullPin; });
 
+// ── the commander's guard ───────────────────────────────────────────────────
+// Task 15: once the war reaches its failing act (`warAct`), a wave has a
+// small chance of fielding one veteran of the commander's own doctrine — a
+// stat-and-name variant of an existing class. Force the act and force the
+// roll through the probe seam (`forceGuard`, `arrivedByJump`'s pattern —
+// private in TypeScript, plainly settable on the live object from here),
+// then hand the clock back to the wave scheduler and look for the veteran in
+// the roster it actually spawns.
+await page.evaluate(() => {
+  window.__fleet.clear();
+  window.__session.breakTimer = Infinity; // no wave spawn to contaminate the setup
+});
+await page.evaluate(() => {
+  window.__campaign.exhausted = 1; // the failing act — see chart/commander.ts warAct
+  // `spawnWave`'s guard gate reads `Session.actAtRunStart` — `warAct` latched
+  // at the run's own `restart()` — rather than a live `warAct(campaign)` read
+  // (see that field's docblock: reading live mid-run would call a healthy war
+  // "failing" a couple of waves into any ordinary run). This block forces the
+  // act via the probe seam without a real restart, so the latch has to be
+  // forced along with it, or the guard gate still sees whatever the actual
+  // run-start act was.
+  window.__session.actAtRunStart = "failing";
+  window.__session.forceGuard = true;
+  window.__session.guardSpawnedThisRun = false;
+});
+await page.evaluate(() => {
+  window.__session.breakTimer = 0; // hand the clock back to the wave scheduler
+});
+state = await waitFor((s) => s.hostiles > 0, 10000);
+const guard = await page.evaluate(async () => {
+  const { HOSTILE_SPECS } = await import("/src/game/hostiles.ts");
+  const g = window.__fleet.hostiles.find((h) => h.guardName);
+  if (!g) return null;
+  return { guardName: g.guardName, kind: g.kind, value: g.spec.value, book: HOSTILE_SPECS[g.kind].value };
+});
+// Restore what this block touched — the victory epilogue below forces a win
+// straight on the board and does not want a leftover "failing" act, or a
+// leftover forced roll, poisoning it. Also clear the fleet and top the hull
+// back off: unlike before the latch fix, the guard actually spawns now, and
+// `hullPin` just went away above — leaving a live, deliberately over-tuned
+// guard (2.5x value, plus its doctrine's own boost) free to land a real hit
+// on the way to the beauty shots below has nothing to do with what this
+// block is testing.
+await page.evaluate(() => {
+  window.__campaign.exhausted = 0;
+  window.__session.forceGuard = false;
+  window.__fleet.clear();
+  window.__player.hull = 1;
+});
+check(
+  "the commander's guard appears in the failing act, named and stronger than its class's book value",
+  guard !== null && guard.value > guard.book,
+  guard
+    ? `${guard.guardName}'S GUARD (${guard.kind}) value=${guard.value} book=${guard.book}`
+    : "no guard found in the forced wave",
+);
+
 // ── beauty shots: full size, every effect on ────────────────────────────────
 await page.setViewportSize({ width: 1280, height: 800 });
 await page.evaluate(() => {
@@ -1564,6 +1756,115 @@ check(
   "seeding a comet hands back the plan rather than undefined",
   found.seeded === "wanderer",
   `returned ${found.seeded}`,
+);
+
+// ── the war can end: the victory epilogue ───────────────────────────────────
+// Last, and deliberately starting fresh via `enter("title")` + `startRun()`
+// the same way the comet-finding block above does, rather than depending on
+// whatever run state every earlier assertion left the session in — the "late
+// classes" block above this one needs mode "run" the whole way through, and
+// this test's own handoff ends that run and lands on "command".
+await page.evaluate(() => {
+  window.__presentation.enter("title");
+  window.__presentation.startRun();
+});
+state = await waitFor((s) => s.mode === "run", 5000);
+check("the victory run actually starts", state.mode === "run", `mode=${state.mode}`);
+
+// Every run opens on its own log; it has to be out of the way before
+// anything below can act on the session underneath it.
+await page.keyboard.press(" ");
+state = await waitFor((s) => !s.briefing, 3000);
+check(
+  "the victory run's own opening log can be skipped",
+  state.briefing === false,
+  `briefing=${state.briefing}`,
+);
+
+// Force the win directly on the board — `isWon` reads zero enemy sectors,
+// not anything this particular run did — and clear `incoming` too: a push
+// still in flight would land on the very next enemy turn (the one
+// `advanceCampaign` runs while resolving this death) and flip a sector
+// straight back to "theirs" before `isWon` ever gets to read what this test
+// just set.
+await page.evaluate(() => {
+  const c = window.__campaign;
+  for (const sector of c.sectors) sector.control = "ours";
+  c.incoming = [];
+});
+const theirsAfterForce = await page.evaluate(
+  () => window.__campaign.sectors.filter((s) => s.control === "theirs").length,
+);
+check("the board is forced to a win", theirsAfterForce === 0, `theirs remaining=${theirsAfterForce}`);
+
+await page.evaluate(() => { window.__player.hull = 0; });
+// A longer budget than the identical wait near the top of this file: this is
+// the same 2.45 game-second drift by the same dt-clamped clock, but by now
+// the page has been running one long-lived tab through everything above —
+// hundreds of debris shards, a reload, several restarts — and SwiftShader's
+// per-frame cost has grown with it, so real time buys less game time here
+// than it did at the top of the run.
+state = await waitFor((s) => s.death === "tally", 45000);
+check("the forced win still reaches the tally", state.death === "tally", `phase=${state.death}`);
+check(
+  "...with no epilogue yet — it opens at the command handoff, not at death",
+  state.briefing === false,
+  `briefing=${state.briefing}`,
+);
+
+// Same shape as the earlier death-and-restart block: press a direction once,
+// and require both that it opened the next screen AND that the press still
+// meant something. What is new here is that the next screen is a command
+// view standing under a final deck log, and this press must NOT also double
+// as the epilogue's first command — see the `!presentation.briefing.active`
+// guard next to `NAVIGATION_KEYS.has(key)` in main.ts, which exists so a
+// war-ending press is spent opening the epilogue rather than driving the
+// view out from under a crawl nobody has read yet.
+const winStep = await page.evaluate(() => {
+  const { indexOf, colOf, rowOf } = window.__chart;
+  const current = window.__campaign.current;
+  const col = colOf(current);
+  const row = rowOf(current);
+  const key = col < 7 ? "d" : "a";
+  const want = indexOf(col < 7 ? col + 1 : col - 1, row);
+  window.__chartCursor.set(indexOf(col < 7 ? col : 0, row === 7 ? 0 : 7));
+  return { key, want, current };
+});
+
+await page.keyboard.press(winStep.key);
+state = await waitFor((s) => s.mode === "command" && s.briefing === true, 5000);
+check(
+  "the win handoff opens the command view under the final deck log",
+  state.mode === "command" && state.briefing === true,
+  `mode=${state.mode} briefing=${state.briefing}`,
+);
+check(
+  "the epilogue actually says the invasion is broken",
+  state.briefingLines.join(" ").includes("THE INVASION IS BROKEN"),
+  `lines=${JSON.stringify(state.briefingLines)}`,
+);
+check(
+  "and the same key that ended the tally did not also move the chart cursor",
+  state.chartCursor === winStep.current,
+  `cursor=${state.chartCursor}, wanted it to stay at ${winStep.current}`,
+);
+
+// Any key skips it, exactly like the opening log — then the command view
+// takes input normally again.
+await page.keyboard.press(winStep.key);
+state = await waitFor((s) => s.briefing === false, 5000);
+check(
+  "the epilogue can be skipped like any other crawl",
+  state.briefing === false,
+  `briefing=${state.briefing}`,
+);
+
+await page.keyboard.press(winStep.key);
+state = await waitFor((s) => s.chartCursor === winStep.want, 5000);
+check(
+  "...after which the command view steps the cursor normally",
+  state.chartCursor === winStep.want,
+  `cursor=${state.chartCursor}, wanted ${winStep.want}`,
 );
 
 console.log(problems.length ? `\nPROBLEMS:\n${problems.join("\n")}` : "\nno problems");

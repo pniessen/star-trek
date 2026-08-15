@@ -131,6 +131,12 @@ export interface Projectile {
   readonly friendly: boolean;
   readonly kind: "torpedo" | "bolt";
   dead: boolean;
+  /**
+   * Has this shot already been logged as a near miss? Session sets this the
+   * first time `sweepDistance` lands it in the near-miss band, so a bolt that
+   * lingers near the hull for several frames streaks once, not every frame.
+   */
+  noted: boolean;
 }
 
 /** A phaser discharge, kept only long enough to be drawn. */
@@ -142,6 +148,18 @@ interface Beam {
 }
 
 const BEAM_LIFE = 0.11;
+
+/** A near miss, kept only long enough to be drawn. See `Ordnance.nearMiss`. */
+interface Streak {
+  readonly at: Vector3;
+  readonly along: Vector3;
+  readonly color: Color;
+  life: number;
+}
+
+const STREAK_LIFE = 0.35;
+/** Half-length of the drawn streak, so the full line spans 6 units. */
+const STREAK_HALF = 3;
 
 const sweepStep = new Vector3();
 const sweepToTarget = new Vector3();
@@ -185,6 +203,33 @@ export function sweepHits(projectile: Projectile, target: Vector3, radius: numbe
 }
 
 /**
+ * Where, on a projectile's travel this frame, it actually swept closest to
+ * `target` — the point `sweepDistance` measures the distance *to*, not the
+ * sampled endpoint `projectile.position`. Same clamped-t segment math, kept
+ * beside `sweepDistance` rather than folded into it: everything else here
+ * only ever needed the distance, and only the near-miss streak needs the
+ * point. Returns a fresh `Vector3` rather than a shared scratch one, because
+ * the streak holds onto it past the frame that produced it.
+ *
+ * The gap between this and `position` is real, not academic: a torpedo can
+ * cover ~3.7 units in one clamped frame (see `Projectile.previous`), so a
+ * streak drawn at `position` instead would sit visibly off wherever the shot
+ * actually crossed.
+ */
+export function sweepClosestPoint(projectile: Projectile, target: Vector3): Vector3 {
+  sweepStep.subVectors(projectile.position, projectile.previous);
+  sweepToTarget.subVectors(target, projectile.previous);
+
+  const lengthSq = sweepStep.lengthSq();
+  // Same first-frame case as `sweepDistance`: nothing to sweep yet, so the
+  // closest point is just where it is.
+  if (lengthSq < 1e-9) return projectile.position.clone();
+
+  const t = Math.max(0, Math.min(1, sweepToTarget.dot(sweepStep) / lengthSq));
+  return projectile.previous.clone().addScaledVector(sweepStep, t);
+}
+
+/**
  * How far off the nose a target is, measured as a **bearing** — the angle on
  * the floor, with height thrown away.
  *
@@ -223,6 +268,7 @@ export function blastDamageAt(distance: number, radius: number): number {
 export class Ordnance {
   readonly projectiles: Projectile[] = [];
   private readonly beams: Beam[] = [];
+  private readonly streaks: Streak[] = [];
   private readonly boltColor = PALETTE.amber.clone();
   private readonly torpedoColor = new Color(0xff8fd0);
 
@@ -247,11 +293,32 @@ export class Ordnance {
       friendly,
       kind,
       dead: false,
+      noted: false,
     });
   }
 
   discharge(from: Vector3, to: Vector3, hit: boolean): void {
     this.beams.push({ from: from.clone(), to: to.clone(), life: 0, hit });
+  }
+
+  /**
+   * A hostile shot that swept close enough to the player to count, but not
+   * close enough to hit. Draws once per projectile — Session sets
+   * `Projectile.noted` so a shot that lingers in the band does not restart
+   * the streak every frame.
+   *
+   * `along` is expected normalized — it is scaled by `STREAK_HALF` on both
+   * sides in `draw`, so an unnormalized caller would draw a streak the wrong
+   * length rather than a wrong direction.
+   *
+   * `color` defaults to the bolt colour — a genuine near miss is a shot that
+   * swept close, and every shot in this game is amber. `stepWithdrawals`
+   * passes the hostile's own hue instead: the streak there marks an exit, not
+   * a shot, and the spec calls for it to read as that hostile leaving rather
+   * than as one more near-miss amber line.
+   */
+  nearMiss(at: Vector3, along: Vector3, color: Color = this.boltColor): void {
+    this.streaks.push({ at: at.clone(), along: along.clone(), color: color.clone(), life: 0 });
   }
 
   update(dt: number): void {
@@ -271,6 +338,10 @@ export class Ordnance {
     for (let i = this.beams.length - 1; i >= 0; i--) {
       this.beams[i].life += dt;
       if (this.beams[i].life >= BEAM_LIFE) this.beams.splice(i, 1);
+    }
+    for (let i = this.streaks.length - 1; i >= 0; i--) {
+      this.streaks[i].life += dt;
+      if (this.streaks[i].life >= STREAK_LIFE) this.streaks.splice(i, 1);
     }
   }
 
@@ -310,10 +381,25 @@ export class Ordnance {
         intensity,
       );
     }
+
+    for (const streak of this.streaks) {
+      const t = streak.life / STREAK_LIFE;
+      trace.push(
+        streak.at.x - streak.along.x * STREAK_HALF,
+        streak.at.y - streak.along.y * STREAK_HALF,
+        streak.at.z - streak.along.z * STREAK_HALF,
+        streak.at.x + streak.along.x * STREAK_HALF,
+        streak.at.y + streak.along.y * STREAK_HALF,
+        streak.at.z + streak.along.z * STREAK_HALF,
+        streak.color,
+        2.2 * (1 - t),
+      );
+    }
   }
 
   clear(): void {
     this.projectiles.length = 0;
     this.beams.length = 0;
+    this.streaks.length = 0;
   }
 }
