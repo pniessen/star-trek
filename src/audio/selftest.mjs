@@ -277,6 +277,7 @@ function everyCue(s) {
   s.hostileFire(3, 3);
   s.nearMiss(3, 3);
   s.impact(2, 2);
+  s.thud(2, 2);
   s.kill(4, 4, 1.4);
   s.shieldHit(1, 1);
   s.breach();

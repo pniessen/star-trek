@@ -1392,6 +1392,100 @@ check(
   `state=${withdrawTest.state}`,
 );
 
+// ── rock collision ────────────────────────────────────────────────────────────
+// Task 4 built the hero rocks field; this is what happens when the player
+// actually reaches one. Rather than wait out the odds of a "rocks" sector
+// coming up naturally, force `campaign.current` to the first one `planHero`
+// casts for this seed — the same shortcut the withdrawal test above takes for
+// its own rare roll.
+const rockHit = await page.evaluate(async () => {
+  const { planHero } = await import("/src/render/scenery.ts");
+  const seed = window.__campaign.seed;
+  const sectorBefore = window.__campaign.current;
+  let rockSector = -1;
+  for (let s = 0; s < 64; s++) if (planHero(seed, s) === "rocks") { rockSector = s; break; }
+  if (rockSector < 0) return { skip: true, sectorBefore };
+  window.__campaign.current = rockSector;
+  return { skip: false, sector: rockSector, sectorBefore };
+});
+// Let one frame pass so main.ts rebuilds the sector's scenery and hands the
+// session its rock list, then fly the player into the first rock at speed.
+await page.waitForTimeout(200);
+const rockState = await page.evaluate(() => {
+  const rock = window.__session.rocks[0];
+  const p = window.__player;
+  const saved = {
+    position: p.position.clone(),
+    velocity: p.velocity.clone(),
+    shields: { ...p.shields },
+    hull: p.hull,
+    multiplier: window.__session.multiplier,
+  };
+  p.position.set(rock.x - rock.r - 2, rock.y, rock.z);
+  p.velocity.set(30, 0, 0); // well past ROCKS.grace, straight at it
+  return { saved, rocks: window.__session.rocks.length, rock };
+});
+await page.waitForTimeout(300);
+const rockAfter = await page.evaluate(() => ({
+  shields: { ...window.__player.shields },
+  hull: window.__player.hull,
+  mult: window.__session.multiplier,
+  speed: window.__player.velocity.length(),
+}));
+// Restore what this block touched before anything downstream reads it.
+await page.evaluate(
+  ({ saved }) => {
+    const p = window.__player;
+    p.position.copy(saved.position);
+    p.velocity.copy(saved.velocity);
+    Object.assign(p.shields, saved.shields);
+    p.hull = saved.hull;
+    window.__session.multiplier = saved.multiplier;
+  },
+  { saved: rockState.saved },
+);
+if (!rockHit.skip) {
+  check("a rock field hands the session its rocks", rockState.rocks > 0, `rocks=${rockState.rocks}`);
+  check(
+    "hitting a rock at speed costs a shield facing",
+    Object.values(rockAfter.shields).some((s) => s < 1),
+    JSON.stringify(rockAfter.shields),
+  );
+  check("the rock is a wall, not a trampoline", rockAfter.speed < 30 * 0.5, `speed=${rockAfter.speed}`);
+
+  // Grace floor: a gentle bump below ROCKS.grace shoulders off for free —
+  // no shield cost.
+  const graceState = await page.evaluate(() => {
+    const rock = window.__session.rocks[0];
+    const p = window.__player;
+    const saved = { position: p.position.clone(), velocity: p.velocity.clone(), shields: { ...p.shields } };
+    p.position.set(rock.x - rock.r - 2, rock.y, rock.z);
+    p.velocity.set(3, 0, 0); // well under ROCKS.grace
+    return { saved };
+  });
+  await page.waitForTimeout(300);
+  const graceAfter = await page.evaluate(() => ({ shields: { ...window.__player.shields } }));
+  await page.evaluate(
+    ({ saved }) => {
+      const p = window.__player;
+      p.position.copy(saved.position);
+      p.velocity.copy(saved.velocity);
+      Object.assign(p.shields, saved.shields);
+    },
+    { saved: graceState.saved },
+  );
+  check(
+    "below the grace floor, a rock shoulders you off for free",
+    Object.values(graceAfter.shields).every((s) => s === 1),
+    JSON.stringify(graceAfter.shields),
+  );
+}
+if (!rockHit.skip) {
+  await page.evaluate((sectorBefore) => {
+    window.__campaign.current = sectorBefore;
+  }, rockHit.sectorBefore);
+}
+
 // ── hyperwarp ───────────────────────────────────────────────────────────────
 // Pinned for the whole charge-and-arrive sequence below purely so the ship
 // survives the two-second charge next to a live wave: this does NOT guard the

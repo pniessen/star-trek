@@ -228,6 +228,21 @@ export const WITHDRAW = {
   chance: { swarmer: 0.75, sniper: 0.5, brawler: 0.15, miner: 0.5, stalker: 0 },
 } as const satisfies { threshold: number; exitRange: number; chance: Record<HostileKind, number> };
 
+/**
+ * A collidable sphere, world space — the same structural shape `session.ts`
+ * declares for its own `Rock`, both standing in for `Asteroids.rocks` so
+ * neither game module has to import the render layer for four fields.
+ */
+type Rock = { x: number; y: number; z: number; r: number };
+
+/**
+ * Steering only, never damage — see `Hostile.update`'s own comment on why a
+ * hostile never takes rock damage. First-draft guesses, the same species as
+ * `WITHDRAW` above.
+ */
+const AVOID_MARGIN = 8;
+const AVOID_GAIN = 2.2;
+
 export class Hostile {
   readonly position = new Vector3();
   readonly velocity = new Vector3();
@@ -309,7 +324,14 @@ export class Hostile {
     return this.cloak > HIDDEN_AT;
   }
 
-  update(dt: number, player: Ship, ordnance: Ordnance, mines: Minefield, flank = false): void {
+  update(
+    dt: number,
+    player: Ship,
+    ordnance: Ordnance,
+    mines: Minefield,
+    flank = false,
+    rocks: readonly Rock[] = [],
+  ): void {
     this.revealed = false;
 
     const toPlayer = player.position.clone().sub(this.position);
@@ -354,6 +376,28 @@ export class Hostile {
 
       desired = toPlayer.clone().multiplyScalar(closing).add(tangent);
     }
+
+    // Pilots read as pilots: a bounded shove away from any rock the hull is
+    // about to graze. Steering only — hostiles never take rock damage, so
+    // herding them into the field pays nothing (an economy ruling this
+    // feature does not make; see `Session.collideRocks`). Applied even while
+    // withdrawing, so a fleeing hostile still dodges rather than driving
+    // straight through.
+    for (const rock of rocks) {
+      const dx = this.position.x - rock.x;
+      const dy = this.position.y - rock.y;
+      const dz = this.position.z - rock.z;
+      const d = Math.hypot(dx, dy, dz);
+      const reach = rock.r + AVOID_MARGIN;
+      if (d >= reach || d < 1e-3) continue;
+      const push = (1 - d / reach) * AVOID_GAIN;
+      desired.x += (dx / d) * push;
+      desired.z += (dz / d) * push;
+      // Vertical dodge is direct, like the slab wander below — this is the
+      // one place a hostile's own `y` moves outside `updateAltitude`.
+      this.position.y += (dy / d) * push * dt * 3;
+    }
+
     if (desired.lengthSq() > 1e-6) desired.normalize();
 
     // Turn toward the desired direction at a bounded rate.

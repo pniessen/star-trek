@@ -1101,6 +1101,12 @@ function frame(now: number): void {
   // asteroids.hide()` branch here for a `hero: false` sector to fall into.
   asteroids.show(campaign.seed, campaign.current, sectorHero === "rocks", sectorLight);
   asteroids.update(dt);
+  // Every frame, not cached per sector: `Asteroids.rocks` is rebuilt each
+  // `update()` tick as the field tumbles, so a value captured once at sector
+  // entry would drift from what is actually on screen within a few frames.
+  // The getter itself is a plain reference read — no extra allocation on top
+  // of what `update()` already paid for the render.
+  session.rocks = asteroids.rocks;
 
   trace.begin();
   session.ordnance.draw(trace);

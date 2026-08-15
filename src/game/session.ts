@@ -89,6 +89,30 @@ const WAVE_BREAK = 2.6;
 const PLAYER_RADIUS = 2.6;
 
 /**
+ * A collidable sphere, world space — the shape `Asteroids.rocks` produces.
+ * Declared structurally rather than imported from `render/Asteroids.ts`,
+ * which drags in `three`'s `BufferGeometryUtils` and the render layer along
+ * with it; the four fields are the entire contract this module needs.
+ */
+type Rock = { x: number; y: number; z: number; r: number };
+
+/**
+ * Hitting the hero rocks field. Every number here is a first-draft guess of
+ * exactly the same species as `ALTITUDE.ceiling` or `Ship.TURN_ACCEL` —
+ * reasoned about, never flown, and on the tuning list in `docs/todo.md` §1.
+ */
+export const ROCKS = {
+  /** Speed below which a rock only shoulders you off — no damage, no sound. */
+  grace: 7,
+  /** Damage per unit of speed above `grace`. */
+  damagePerSpeed: 0.02,
+  /** A single strike can never cost more than this much of a facing. */
+  ceiling: 0.45,
+  /** Bounce fraction on the reflected velocity — a wall, not a trampoline, but not a dead stop either. */
+  restitution: 0.25,
+} as const;
+
+/**
  * A hostile shot that swept past the hull rather than into it. `outer` is
  * measured from the same point `sweepDistance` already reports; `inner` is
  * the player's own hit radius, computed per-hull in `resolveProjectiles`
@@ -198,6 +222,14 @@ export class Session {
   readonly docking: Docking;
   readonly death = new DeathSequence();
   readonly hitStop = new HitStop();
+  /**
+   * This sector's hero rocks field, world space — empty outside a "rocks"
+   * sector. Set by `main.ts` every frame, straight off `Asteroids.rocks`,
+   * because the field tumbles: a value cached once per sector would drift
+   * from what is actually on screen within a few frames. Cleared on
+   * `restart` so a dead run's field cannot ghost-collide with the next one.
+   */
+  rocks: readonly Rock[] = [];
   // Public because the HUD and a headless harness both need to read `.phase`
   // and `.progress`. Do not call `.begin()` on it directly — it has no idea
   // what sector it's headed for. `Session.beginHyperwarp` is the one place
@@ -310,6 +342,8 @@ export class Session {
   private readonly nose = new Vector3();
   /** The launcher's bearing-plus-elevation, rebuilt per shot. See `tubeAim`. */
   private readonly tube = new Vector3();
+  /** `takeHit`'s `source` argument for a rock strike — a world position, rebuilt per rock in `collideRocks`. */
+  private readonly rockScratch = new Vector3();
 
   /**
    * @param playerShape  the player's hull, held only so that dying can fling
@@ -426,7 +460,7 @@ export class Session {
       // reads as a stopped program; a circling one reads as being finished off.
       // Nothing they fire can land — hit resolution is below this line.
       for (const hostile of this.fleet.hostiles) {
-        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged);
+        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks);
       }
       // The Warden keeps flying too — `kill()` has already told it to break
       // off, so the last thing a run shows you is your escort turning away.
@@ -494,7 +528,7 @@ export class Session {
     this.fleet.updateEngagement(player);
 
     for (const hostile of this.fleet.hostiles) {
-      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged);
+      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks);
       // The one warning the forward view gives you. Everything before this
       // moment happened on the scanner — and the sound is the half of the
       // warning that works when you are pointed the wrong way.
@@ -509,6 +543,7 @@ export class Session {
     this.stepLoom(dt, player);
     this.ordnance.update(dt);
     this.resolveProjectiles(dt, player);
+    this.collideRocks(player);
     this.mines.update(dt, player, () => this.breach());
     this.debris.update(dt);
     this.docking.update(
@@ -942,6 +977,57 @@ export class Session {
           }
         }
       }
+    }
+  }
+
+  /**
+   * The hero rocks field, player only — hostiles get a bounded steering
+   * repulsion instead, in `Hostile.update`, never damage. Rock damage on a
+   * hostile would make herding one into the field a free kill, which is an
+   * economy this feature does not exist to open.
+   *
+   * Push-out first, so the hull is never left inside a rock even for a
+   * frame; then a heavily damped reflection, so the rock reads as a wall
+   * rather than a wing that bounces you off cleanly. Below `ROCKS.grace` it
+   * is a free shoulder-off — no damage, no sound, no hit-stop — because a
+   * graze at station-keeping speed is not what this feature is about.
+   * Above it, the strike routes through `Ship.takeHit` exactly like a
+   * projectile does, so a rock breach halves the multiplier through the
+   * same `breach()` a bolt does rather than a copy of it.
+   */
+  private collideRocks(player: Ship): void {
+    for (const rock of this.rocks) {
+      const dx = player.position.x - rock.x;
+      const dy = player.position.y - rock.y;
+      const dz = player.position.z - rock.z;
+      const dist = Math.hypot(dx, dy, dz);
+      const hitRadius = PLAYER_RADIUS * player.loadout.hullRadius;
+      const overlap = rock.r + hitRadius - dist;
+      if (overlap <= 0 || dist < 1e-3) continue;
+
+      // Push out along the contact normal first — never inside the rock.
+      const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+      player.position.x += nx * overlap;
+      player.position.y += ny * overlap;
+      player.position.z += nz * overlap;
+
+      // Reflect the inward velocity component, heavily damped: a wall.
+      const vn = player.velocity.x * nx + player.velocity.y * ny + player.velocity.z * nz;
+      if (vn >= 0) continue;
+      player.velocity.x -= (1 + ROCKS.restitution) * vn * nx;
+      player.velocity.y -= (1 + ROCKS.restitution) * vn * ny;
+      player.velocity.z -= (1 + ROCKS.restitution) * vn * nz;
+
+      // Below the grace floor the rock shoulders you off for free.
+      const speedIn = -vn;
+      if (speedIn <= ROCKS.grace) continue;
+      const amount = Math.min(ROCKS.ceiling, (speedIn - ROCKS.grace) * ROCKS.damagePerSpeed);
+      sound.thud(rock.x, rock.z);
+      this.hitStop.strike(HIT_STOP.impact);
+      // Route through the same lanes as any hit: a facing absorbs what it
+      // can, and whatever reaches the hull halves the multiplier via the
+      // real breach path.
+      if (player.takeHit(amount, this.rockScratch.set(rock.x, rock.y, rock.z))) this.breach();
     }
   }
 
@@ -1621,6 +1707,10 @@ export class Session {
     this.ordnance.clear();
     this.debris.clear();
     this.mines.clear();
+    // Stale rocks from the last sector would ghost-collide with a fresh run
+    // that has not yet had a frame to hand the session the new sector's field
+    // — `main.ts` reassigns this every frame once flying resumes.
+    this.rocks = [];
     this.docking.reset();
     this.death.reset();
     this.hitStop.clear();

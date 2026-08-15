@@ -397,6 +397,31 @@ export class Sound {
     });
   }
 
+  /** Hull on rock. A knock, not a weapon: low, dry, placed at the contact. */
+  thud(x: number, z: number): void {
+    const { level, pan } = this.place(x, z);
+    if (level < 0.06) return;
+    this.synth.play({
+      kind: "noise",
+      filter: "lowpass",
+      freq: 420,
+      to: 160,
+      level: 0.18 * level,
+      attack: 0.002,
+      decay: 0.16,
+      pan,
+    });
+    this.synth.play({
+      wave: "triangle",
+      freq: 90,
+      to: 55,
+      level: 0.14 * level,
+      attack: 0.003,
+      decay: 0.2,
+      pan,
+    });
+  }
+
   /** @param size relative to a Raider; a Bastion is worth more air than a Raider. */
   kill(x: number, z: number, size: number): void {
     const { level, pan } = this.place(x, z);
