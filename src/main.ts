@@ -9,6 +9,7 @@ import { GasGiant } from "./render/GasGiant.js";
 import { Moon } from "./render/Moon.js";
 import { SunHero } from "./render/SunHero.js";
 import { Asteroids } from "./render/Asteroids.js";
+import { Shoals } from "./render/Shoals.js";
 import { planHero, type HeroKind } from "./render/scenery.js";
 import { PALETTE } from "./render/palette.js";
 import {
@@ -67,16 +68,21 @@ try {
 
 const grid = createGrid();
 const trace = new TraceBuffer();
-// A scenery scratch pad — `skyTrace`, `TraceBuffer(20000, false)`, `fog:
-// false` for the reason `TraceBuffer`'s own header gives, kept separate
-// from combat's `trace` so a busy firefight could never silently delete the
-// sky — lived here until the giant, its only producer, moved to a lit mesh
-// per `docs/environment.md` §1.5. Deleted along with it: an unused buffer
-// needing a no-op `begin`/`end` pair just to stop it drawing 20000
-// degenerate lines was a cost paid for nothing rather than for gas shoals
-// or dust, which do not exist yet. `TraceBuffer`'s `(capacity, fog)`
-// constructor parameters stay — they are what a later stage's own scratch
-// pad will pass — this is only the premature instance.
+/**
+ * A scenery scratch pad — `TraceBuffer(20000, false)`, `fog: false` for the
+ * reason `TraceBuffer`'s own header gives, kept separate from combat's
+ * `trace` so a busy firefight could never silently delete the sky. This
+ * exact instance lived here once before, for the giant, until that body
+ * moved to a lit mesh (`docs/environment.md` §1.5) and left it with no
+ * producer; commit `2a96921` deleted it rather than keep it idle, saying its
+ * two constructor parameters were "kept — they are what a later stage's own
+ * scratch pad will pass — this is only the premature instance." **This is
+ * that later stage.** Gas shoals (scenery task 6, `render/Shoals.ts`) are
+ * the first thing since the giant to push strokes into a scenery buffer
+ * rather than a real mesh, so `skyTrace` is raised again for the same
+ * reason it was built the first time.
+ */
+const skyTrace = new TraceBuffer(20000, false);
 const starfield = createStarfield();
 // The sky of whichever sector the run is in. Added once and then only ever
 // rebuilt in place; it draws between the starfield and the grid and is pinned
@@ -93,6 +99,7 @@ stage.scene.add(
   grid.object,
   starfield.object,
   trace.object,
+  skyTrace.object,
   sky.object,
   planet.object,
 );
@@ -214,6 +221,18 @@ stage.scene.add(sunHero.object);
 const asteroids = new Asteroids();
 stage.scene.add(asteroids.object);
 
+/**
+ * Gas shoals — scenery task 6. Unlike every hero body above, this one has
+ * no `object` and is never scene-added: it is strokes pushed straight into
+ * `skyTrace` every frame, the same contract the comet's own tail keeps with
+ * combat's `trace`. Placed independently of `sectorHero` — `planShoal`'s own
+ * roll, not `planHero`'s — so a shoal can stand in a `"bare"` sector or
+ * alongside any hero at all. See `render/Shoals.ts` for why this body owns
+ * no scanner/lock/interference coupling of any kind: that vocabulary is the
+ * comet's alone.
+ */
+const shoals = new Shoals();
+
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
   color: PALETTE.traceDim,
@@ -248,9 +267,12 @@ sectorLightKey = `${campaign.seed}:${campaign.current}`;
  */
 let sectorHero: HeroKind = planHero(campaign.seed, campaign.current);
 
-/** Whether scenery task 6's gas shoals are drawn — declared here, ahead of
- * that task, purely so this task's `__scenery` switch (below) has something
- * to flip; task 6 is the actual reader/writer beyond that one assignment. */
+/** Whether scenery task 6's gas shoals are drawn — declared back in scenery
+ * task 4, ahead of task 6 itself, purely so `__scenery`'s switch (below) had
+ * something to flip before the shoals existed. Now genuinely read every
+ * frame, in the trace block below: `shoals.draw` only runs while this is
+ * true, so `__scenery.hide()`/`show()` actually gate the curtain rather than
+ * only flipping a field nothing consumed. */
 let shoalsVisible = true;
 
 /**
@@ -1071,6 +1093,9 @@ function frame(now: number): void {
     sun.position.copy(sectorLight.position);
     sun.color.copy(sectorLight.colour);
     sectorHero = planHero(campaign.seed, campaign.current);
+    // Independent of `sectorHero` — `planShoal`'s own roll, not `planHero`'s
+    // — so this is not part of the hero `if`/`else` chain below it.
+    shoals.show(campaign.seed, campaign.current);
   }
   // `show`/`follow` read `player.position` alone, not the camera, so unlike
   // `sky.follow(stage.camera)` below they do not have to wait for
@@ -1136,6 +1161,14 @@ function frame(now: number): void {
     MathUtils.clamp(1 - player.position.distanceTo(STARBASE_POSITION) / 90, 0, 1),
   );
   trace.end();
+
+  // Scenery's own buffer, separate from combat's so a firefight can never
+  // starve the sky of its strokes (see `skyTrace`'s own declaration). The
+  // gas shoal is its one producer so far; `shoalsVisible` is the `__scenery`
+  // switch's own field (Task 4), read here for the first time.
+  skyTrace.begin();
+  if (shoalsVisible) shoals.draw(skyTrace, dt);
+  skyTrace.end();
 
   grid.follow(player.position.x, player.position.z);
 

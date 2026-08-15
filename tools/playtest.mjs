@@ -311,6 +311,20 @@ check(
   JSON.stringify(fixtureSeeded),
 );
 
+// ── gas shoals are seeded ────────────────────────────────────────────────────
+// `planShoal` is pure — same shape as `planFixture`'s own check above. Chance
+// is 0.2, independent of `planHero`'s own roll, so a 64-sector sweep at a fixed
+// seed should land somewhere between "basically never" and "basically always".
+const shoal = await page.evaluate(async () => {
+  const { planShoal } = await import("/src/render/Shoals.ts");
+  const seed = 4242;
+  let have = 0;
+  for (let s = 0; s < 64; s++) if (planShoal(seed, s)) have++;
+  return { have, deterministic: !!planShoal(seed, 3) === !!planShoal(seed, 3) };
+});
+check("shoals are seeded in some sectors and not others", shoal.have > 3 && shoal.have < 30, `have=${shoal.have}`);
+check("a shoal repeats for its seed and sector", shoal.deterministic, "");
+
 // ── the compass ─────────────────────────────────────────────────────────────
 // A bearing readout must never show 360, and the naive spelling does: taking
 // the modulo before rounding displays `360` for every bearing from 359.5 up.
