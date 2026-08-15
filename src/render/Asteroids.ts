@@ -245,8 +245,15 @@ export class Asteroids {
 
   /** The hero near field's collidable spheres, world space — Task 5's shape
    * to consume. Empty outside a `"rocks"` sector, and outside the near
-   * field's own `Rock`s: furniture and the far band never appear here. */
-  rocks: Rock[] = [];
+   * field's own `Rock`s: furniture and the far band never appear here.
+   * A private backing field plus a readonly getter, rather than a plain
+   * public field, so the interface really is `readonly rocks: readonly
+   * Rock[]` — reassigned wholesale every `update()` tick internally (see
+   * `syncRocks`), never mutable from outside. */
+  private _rocks: Rock[] = [];
+  get rocks(): readonly Rock[] {
+    return this._rocks;
+  }
 
   private key = "";
 
@@ -393,7 +400,7 @@ export class Asteroids {
   private syncRocks(): void {
     const s = Math.sin(this.nearAngle);
     const c = Math.cos(this.nearAngle);
-    this.rocks = this.nearLocal.map(({ x, y, z, r }) => ({
+    this._rocks = this.nearLocal.map(({ x, y, z, r }) => ({
       x: this.nearCentre.x + x * c + z * s,
       y: this.nearCentre.y + y,
       z: this.nearCentre.z - x * s + z * c,
@@ -438,7 +445,7 @@ export class Asteroids {
     this.nearGroup = null;
     this.nearLocal = [];
     this.nearAngle = 0;
-    this.rocks = [];
+    this._rocks = [];
 
     if (this.farGroup) {
       for (const child of this.farGroup.children) if (child instanceof Mesh) child.geometry.dispose();
