@@ -84,7 +84,7 @@ await page.evaluate(() => {
 // read `body`/`limb`/their uniforms directly, which needs no rendering at
 // all, so hiding the object leaves every one of them intact.
 await page.evaluate(() => {
-  window.__giant.object.visible = false;
+  window.__scenery.hide();
 });
 
 // ── the comet's tail-volume test ────────────────────────────────────────────
@@ -254,6 +254,16 @@ check(
   ["bare", "giant", "moon", "ringed", "rocks", "sun"].every((k) => hero.kinds.includes(k)),
   `kinds=${hero.kinds.join(",")}`,
 );
+
+// ── the scenery switch hides everything at once ─────────────────────────────
+// `__scenery` is the one thing every hero body plus `shoalsVisible` answers
+// to — the SwiftShader budget concern that made the giant's own hide-on-load
+// necessary above now covers whichever body actually cast for this sector.
+const sceneryOff = await page.evaluate(() => {
+  window.__scenery.hide();
+  return window.__giant.object.visible === false;
+});
+check("the scenery switch hides the giant with everything else", sceneryOff, "");
 
 // ── the fixture is seeded ───────────────────────────────────────────────────
 // Also pure, and checked here for the same reason: `planFixture(seed, sector,
@@ -1755,7 +1765,7 @@ await page.reload({ waitUntil: "networkidle" });
 // against 4x the pixels, and the dt clamp eats the difference.
 await page.setViewportSize({ width: 640, height: 400 });
 await page.evaluate(() => {
-  window.__giant.object.visible = false;
+  window.__scenery.hide();
   window.__stage.bloom.enabled = false;
   window.__stage.phosphor.enabled = false;
   window.__stage.crt.enabled = false;

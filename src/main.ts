@@ -8,6 +8,7 @@ import { planLight, shadeAt, type SectorLight } from "./render/light.js";
 import { GasGiant } from "./render/GasGiant.js";
 import { Moon } from "./render/Moon.js";
 import { SunHero } from "./render/SunHero.js";
+import { Asteroids } from "./render/Asteroids.js";
 import { planHero, type HeroKind } from "./render/scenery.js";
 import { PALETTE } from "./render/palette.js";
 import {
@@ -203,6 +204,16 @@ stage.scene.add(moon.object);
 const sunHero = new SunHero();
 stage.scene.add(sunHero.object);
 
+/**
+ * The rocks hero field plus every sector's mid-field furniture — scenery
+ * task 4, `"rocks"`'s own weight in `render/scenery.ts`'s `ROSTER`. Unlike
+ * `giant`/`moon`/`sunHero`, this one is called every sector regardless of
+ * which hero it cast — see the hero block below for why there is no
+ * `else asteroids.hide()`.
+ */
+const asteroids = new Asteroids();
+stage.scene.add(asteroids.object);
+
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
   color: PALETTE.traceDim,
@@ -237,6 +248,11 @@ sectorLightKey = `${campaign.seed}:${campaign.current}`;
  */
 let sectorHero: HeroKind = planHero(campaign.seed, campaign.current);
 
+/** Whether scenery task 6's gas shoals are drawn — declared here, ahead of
+ * that task, purely so this task's `__scenery` switch (below) has something
+ * to flip; task 6 is the actual reader/writer beyond that one assignment. */
+let shoalsVisible = true;
+
 /**
  * The sector's star, as a real light — `docs/environment.md` §1.5: the whole
  * reason the stroke build carried a `shadeAt` per-stroke multiply was that
@@ -253,17 +269,21 @@ let sectorHero: HeroKind = planHero(campaign.seed, campaign.current);
  * `ShaderMaterial`, and a hand-written shader is never fed scene lights
  * automatically. `giant.show` below is handed `sectorLight` directly instead,
  * the same object this pair is built from, so the two never disagree — but
- * that means `sun`/`sunFill` currently light nothing at all. They stay,
- * unremoved: the comment two paragraphs up is still the design, not just the
- * history — the *sector's* light is meant to be one physical thing a second
- * lit body can pick up for free, and deleting the standing light because its
- * one current consumer stopped using it would delete the part of the
- * architecture that consumer never should have needed to know about.
+ * that meant `sun`/`sunFill` lit nothing at all, for a while. They stayed,
+ * unremoved: the comment two paragraphs up was still the design, not just
+ * the history — the *sector's* light is meant to be one physical thing a
+ * second lit body can pick up for free, and deleting the standing light
+ * because its one current consumer had stopped using it would have deleted
+ * the part of the architecture that consumer never should have needed to
+ * know about. **`render/Asteroids.ts` (scenery task 4) is that second body**
+ * — its rock fields are plain `MeshLambertMaterial` geometry, which three.js
+ * *does* sample scene lights for automatically, so this pair now lights
+ * something without either file having to know about the other.
  *
  * `MeshBasicMaterial`-family and additive materials — every hull, the HUD,
- * `Backdrop`'s painted bodies, `Planet`'s ring — ignore both lights below by
+ * `Backdrop`'s painted bodies, `Planet`'s ring — still ignore both lights by
  * construction (`three.js` never samples scene lights for an unlit
- * material), so this pair currently touches nothing in the scene at all.
+ * material).
  */
 const sun = new DirectionalLight(0xffffff, 1.4);
 sun.position.copy(sectorLight.position);
@@ -486,6 +506,9 @@ function applyShapeMode(): void {
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
   comet.setMode(settings.shape);
+  // The rock fields are plain lit meshes, same as the giant — nothing for
+  // `G` to toggle there. The hulk is the one `VectorObject` this file owns.
+  asteroids.setMode(settings.shape);
 }
 
 window.addEventListener("keydown", (event) => {
@@ -1013,6 +1036,9 @@ function frame(now: number): void {
   for (const spinner of loom.spinners) spinner.shape.setMode(settings.shape);
   wing.escort?.shape.setMode(settings.shape);
   comet.setMode(settings.shape);
+  // A hulk freshly rolled by this frame's `asteroids.show()` needs the same
+  // catch-up.
+  asteroids.setMode(settings.shape);
 
   playerHull.group.position.copy(player.position);
   // Pitch first about the ship's own right, then roll about its own nose —
@@ -1068,6 +1094,13 @@ function frame(now: number): void {
     sunHero.follow(player.position);
     sunHero.update(dt);
   } else sunHero.hide();
+  // Unlike the three bodies above, this one runs every sector — furniture is
+  // unconditional, and the `hero` flag alone decides whether this call also
+  // builds the big collidable near field. `show`'s own key cache already
+  // rebuilds whenever the sector changes, so there is no `else
+  // asteroids.hide()` branch here for a `hero: false` sector to fall into.
+  asteroids.show(campaign.seed, campaign.current, sectorHero === "rocks", sectorLight);
+  asteroids.update(dt);
 
   trace.begin();
   session.ordnance.draw(trace);
@@ -1173,6 +1206,10 @@ function frame(now: number): void {
       // The `L` switch, so the harness can prove it suppresses the log rather
       // than merely toggling a field nothing reads.
       deckLog: presentation.briefing.enabled,
+      // Task 6's own switch, read here so `__scenery.hide()`/`show()` are
+      // assertable now rather than only once the shoals themselves exist —
+      // and so this field is a genuine read, not a write nobody uses.
+      shoals: shoalsVisible,
       death: session.death.phase,
       dock: session.docking.phase,
       // Hit-stop, so the harness can prove it dilates and then lets go. A
@@ -1397,6 +1434,10 @@ if (DEBUG_PROBE) {
      * would just be a second name for the same calls.
      */
     __giant: giant,
+    // The rocks hero field plus every sector's furniture, exposed the same
+    // bare-instance way `__giant` is — `rocks` (Task 5's own collision list)
+    // and `object` are what a harness would want off it directly.
+    __asteroids: asteroids,
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.
     __command: {
@@ -1413,5 +1454,31 @@ if (DEBUG_PROBE) {
     },
   });
 }
+
+/**
+ * A blunt "hide every scenery body at once" switch, unlike everything above
+ * it in this file: exposed unconditionally rather than behind `DEBUG_PROBE`.
+ * The giant's own hide-on-load in `tools/playtest.mjs` exists because its
+ * hand-written `ShaderMaterial` is the single biggest per-fragment cost on
+ * screen under SwiftShader's software GL (that file's own comment, ~line
+ * 76) — and every later scenery task adds another body that can cost the
+ * same way. `__scenery` generalises the one hiding call the harness needs
+ * so each new body only has to join this list, not teach the harness a new
+ * global. It has to exist on every host because the harness is its one
+ * consumer and does not run on `localhost` — it is inert everywhere else,
+ * so gating it behind `DEBUG_PROBE` the way `__giant` etc. are would just
+ * break the thing it exists for.
+ */
+const sceneryHandles = [giant, planet, moon, sunHero, asteroids] as const;
+(window as unknown as Record<string, unknown>).__scenery = {
+  hide(): void {
+    for (const handle of sceneryHandles) handle.object.visible = false;
+    shoalsVisible = false;
+  },
+  show(): void {
+    for (const handle of sceneryHandles) handle.object.visible = true;
+    shoalsVisible = true;
+  },
+};
 
 requestAnimationFrame(frame);
