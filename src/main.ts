@@ -7,6 +7,7 @@ import { Planet } from "./render/Planet.js";
 import { planLight, shadeAt, type SectorLight } from "./render/light.js";
 import { GasGiant } from "./render/GasGiant.js";
 import { Moon } from "./render/Moon.js";
+import { SunHero } from "./render/SunHero.js";
 import { planHero, type HeroKind } from "./render/scenery.js";
 import { PALETTE } from "./render/palette.js";
 import {
@@ -190,6 +191,17 @@ stage.scene.add(giant.object);
  */
 const moon = new Moon();
 stage.scene.add(moon.object);
+
+/**
+ * The hero sun — scenery task 3, cast by `planHero` at `"sun"`'s own weight
+ * in `render/scenery.ts`'s `ROSTER`. Constructed and scene-added beside the
+ * giant and the moon for the same reason: `main.ts`'s hero block is an
+ * exclusive `if`/`else` chain, so all three instances stand ready but at
+ * most one is ever visible in a given sector. See `render/SunHero.ts`'s own
+ * header for why it does not share the giant's/moon's anchor-and-leash.
+ */
+const sunHero = new SunHero();
+stage.scene.add(sunHero.object);
 
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
@@ -1050,6 +1062,12 @@ function frame(now: number): void {
     moon.follow(player.position);
     moon.update(dt);
   } else moon.hide();
+  // Same rule again, one more `HeroKind` over.
+  if (sectorHero === "sun") {
+    sunHero.show(campaign.seed, campaign.current, sectorLight);
+    sunHero.follow(player.position);
+    sunHero.update(dt);
+  } else sunHero.hide();
 
   trace.begin();
   session.ordnance.draw(trace);
