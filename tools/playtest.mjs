@@ -325,6 +325,73 @@ const shoal = await page.evaluate(async () => {
 check("shoals are seeded in some sectors and not others", shoal.have > 3 && shoal.have < 30, `have=${shoal.have}`);
 check("a shoal repeats for its seed and sector", shoal.deterministic, "");
 
+// ── the boot sector's own shoal is already showing ──────────────────────────
+// Finding 1: `shoals.show` used to run only from main.ts's sector-CHANGE
+// block, gated on `currentLightKey !== sectorLightKey` — but `sectorLightKey`
+// is pre-seeded to the boot sector's own key before the first frame ever
+// runs, so that block never fires on a fresh load. A shoal standing in the
+// boot sector would silently never show until the player left and returned.
+// `campaign.current` has not been touched by any earlier check in this file,
+// so it is still whatever the game actually booted into — this compares what
+// `__shoals.plan` (the live render loop's own state) holds against what
+// `planShoal` says that exact sector should produce. On the unfixed code this
+// only fails when the boot sector happens to roll a shoal (chance 0.2); it is
+// a vacuous pass the other 80% of the time, which is why the forced-sector
+// check right after it is also needed to exercise the wiring on every run.
+const bootShoal = await page.evaluate(async () => {
+  const { planShoal } = await import("/src/render/Shoals.ts");
+  const seed = window.__campaign.seed;
+  const bootSector = window.__campaign.current;
+  const expected = planShoal(seed, bootSector);
+  const actual = window.__shoals.plan;
+  const matches =
+    (expected === null) === (actual === null) &&
+    (expected === null ||
+      (actual.bearing === expected.bearing &&
+        actual.range === expected.range &&
+        actual.span === expected.span &&
+        actual.drift === expected.drift));
+  return { bootSector, hasShoal: expected !== null, matches };
+});
+check(
+  "the boot sector's shoal, if it has one, is already showing before any sector change",
+  bootShoal.matches,
+  JSON.stringify(bootShoal),
+);
+
+// ── forcing a shoal sector shows its curtain within a frame ─────────────────
+// General cover for the same call, independent of what the boot sector
+// happened to roll: force `campaign.current` to a sector this seed actually
+// grows a shoal in, give the render loop one frame, and check `__shoals.plan`
+// picked it up. This alone would pass on the unfixed code too whenever the
+// forced sector differs from the boot sector (the sector-change block still
+// fires on a genuine change) — it is the `bootShoal` check above, not this
+// one, that isolates the actual bug; this one only proves the call keeps
+// working for sector changes in general, which the fix must not break.
+const shoalWiring = await page.evaluate(async () => {
+  const { planShoal } = await import("/src/render/Shoals.ts");
+  const seed = window.__campaign.seed;
+  const sectorBefore = window.__campaign.current;
+  let shoalSector = -1;
+  for (let s = 0; s < 64; s++) {
+    if (planShoal(seed, s)) {
+      shoalSector = s;
+      break;
+    }
+  }
+  if (shoalSector < 0) return { skip: true, sectorBefore };
+  window.__campaign.current = shoalSector;
+  return { skip: false, shoalSector, sectorBefore };
+});
+await page.waitForTimeout(100);
+if (!shoalWiring.skip) {
+  const shoalShown = await page.evaluate(() => window.__shoals.plan !== null);
+  check("forcing a shoal sector shows its curtain within a frame", shoalShown, "");
+  await page.evaluate((sectorBefore) => {
+    window.__campaign.current = sectorBefore;
+  }, shoalWiring.sectorBefore);
+}
+
 // ── the compass ─────────────────────────────────────────────────────────────
 // A bearing readout must never show 360, and the naive spelling does: taking
 // the modulo before rounding displays `360` for every bearing from 359.5 up.

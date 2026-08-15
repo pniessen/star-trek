@@ -1093,9 +1093,6 @@ function frame(now: number): void {
     sun.position.copy(sectorLight.position);
     sun.color.copy(sectorLight.colour);
     sectorHero = planHero(campaign.seed, campaign.current);
-    // Independent of `sectorHero` — `planShoal`'s own roll, not `planHero`'s
-    // — so this is not part of the hero `if`/`else` chain below it.
-    shoals.show(campaign.seed, campaign.current);
   }
   // `show`/`follow` read `player.position` alone, not the camera, so unlike
   // `sky.follow(stage.camera)` below they do not have to wait for
@@ -1190,6 +1187,17 @@ function frame(now: number): void {
   // campaign" rule is untouched, and the cabinet showing the sky of the sector
   // you would actually launch into is the better of the two readings anyway.
   sky.show(campaign.seed, campaign.current);
+  // Called unconditionally every frame, the same idiom as `sky.show` right
+  // above — its own internal key cache (`Shoals.key`) makes every frame but
+  // the two a sector can change on a cheap string comparison. This used to
+  // live only in the sector-change block above, gated on `currentLightKey !==
+  // sectorLightKey`, which is pre-seeded to the boot sector's own key before
+  // the first frame ever runs — so on a fresh load the block never fires and
+  // the boot sector's shoal, if it has one, never shows. Title, attract, and
+  // the whole first run would read as if the sector had no curtain; jumping
+  // away and back would then reveal it, which is a visible inconsistency in a
+  // seeded world. One source of truth, called the way its sibling already is.
+  shoals.show(campaign.seed, campaign.current);
   // World-space, so it is told the sector and then left alone apart from the
   // leash that stops the player flying into it. Only shows when it is the
   // sector's hero — see the giant's own version of this comment above.
@@ -1477,6 +1485,15 @@ if (DEBUG_PROBE) {
     // bare-instance way `__giant` is — `rocks` (Task 5's own collision list)
     // and `object` are what a harness would want off it directly.
     __asteroids: asteroids,
+    // The gas shoal curtain, bare-instance again — `plan` is what a harness
+    // wants off it: null when this sector has none, the seeded `ShoalPlan`
+    // when it does. Exists so `tools/playtest.mjs` can prove `shoals.show`
+    // actually ran for the sector the game is standing in, including the
+    // boot sector itself (see Finding 1's history: the sector-change block
+    // in the render loop above used to be `shoals.show`'s only caller, and
+    // it never fires on a fresh load because `sectorLightKey` starts out
+    // already equal to the boot sector's key).
+    __shoals: shoals,
     // The command view's own state, so a harness can point at a decision
     // without walking W twelve times.
     __command: {
