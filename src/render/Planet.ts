@@ -101,11 +101,16 @@ interface PlanetPlan {
   colour: Color;
 }
 
-function planPlanet(seed: number, sector: number): PlanetPlan | null {
+function planPlanet(seed: number, sector: number): PlanetPlan {
   // A different mix from the backdrop's, so a sector's sky and its planet are not
   // correlated — the same square should not always pair the same two things.
   const rng = makeRng((seed * 2654435761 + sector * 40503 + 977) >>> 0);
-  if (rng.next() > 0.38) return null;
+  // The allocator (`render/scenery.ts`'s `planHero`) decides whether this sector
+  // gets a ringed planet at all now, not this roll — but the draw stays, discarded,
+  // so every value below it is unchanged for every sector that used to pass the
+  // old `> 0.38` cutoff. Deleting the roll without keeping its draw would shift
+  // bearing/tilt/scale/hue for every one of them.
+  rng.next();
 
   const hue = 24 + rng.next() * 26;
   return {
@@ -113,7 +118,10 @@ function planPlanet(seed: number, sector: number): PlanetPlan | null {
     // Kept clear of edge-on: a ring seen exactly side-on is a line, and a player
     // who happens to arrive at that bearing would see a planet with no rings.
     tilt: (0.28 + rng.next() * 0.5) * (rng.next() < 0.5 ? -1 : 1),
-    scale: 0.8 + rng.next() * 0.5,
+    // Promoted from furniture to hero: the frame's owner, so it reads as the
+    // thing the sector is about rather than something passed on the way to it.
+    // First-draft constant, tuning list like all the rest.
+    scale: 1.5 + rng.next() * 0.7,
     colour: new Color().setHSL(hue / 360, 0.34, 0.52, SRGBColorSpace),
   };
 }
@@ -241,6 +249,13 @@ export class Planet {
 
   setMode(mode: Parameters<VectorObject["setMode"]>[0]): void {
     this.body?.setMode(mode);
+  }
+
+  /** Empty the group and forget the sector, so the next `show` rebuilds. */
+  hide(): void {
+    if (this.key === "") return;
+    this.key = "";
+    this.clear();
   }
 
   private clear(): void {

@@ -6,6 +6,7 @@ import { Backdrop, backdrop } from "./render/Backdrop.js";
 import { Planet } from "./render/Planet.js";
 import { planLight, shadeAt, type SectorLight } from "./render/light.js";
 import { GasGiant } from "./render/GasGiant.js";
+import { planHero, type HeroKind } from "./render/scenery.js";
 import { PALETTE } from "./render/palette.js";
 import {
   buildBastion,
@@ -203,6 +204,14 @@ const campaign = load(window.localStorage, Date.now());
 let sectorLightKey = "";
 let sectorLight: SectorLight = planLight(campaign.seed, campaign.current);
 sectorLightKey = `${campaign.seed}:${campaign.current}`;
+
+/**
+ * The sector's hero body, cached alongside the light in the same key
+ * comparison below — one `planHero` draw per sector, not per frame. `giant`
+ * and `planet` used to run unconditionally every frame regardless of what
+ * this decides; now each only shows when it is the sector's cast member.
+ */
+let sectorHero: HeroKind = planHero(campaign.seed, campaign.current);
 
 /**
  * The sector's star, as a real light — `docs/environment.md` §1.5: the whole
@@ -1011,13 +1020,18 @@ function frame(now: number): void {
     sectorLight = planLight(campaign.seed, campaign.current);
     sun.position.copy(sectorLight.position);
     sun.color.copy(sectorLight.colour);
+    sectorHero = planHero(campaign.seed, campaign.current);
   }
   // `show`/`follow` read `player.position` alone, not the camera, so unlike
   // `sky.follow(stage.camera)` below they do not have to wait for
   // `placeCamera` to run first — see `render/GasGiant.ts`'s own header.
-  giant.show(campaign.seed, campaign.current, sectorLight);
-  giant.follow(player.position);
-  giant.update(dt);
+  // Only the sector's cast member shows; `planHero` picked one of six, the
+  // giant included, so this used to run unconditionally and no longer does.
+  if (sectorHero === "giant") {
+    giant.show(campaign.seed, campaign.current, sectorLight);
+    giant.follow(player.position);
+    giant.update(dt);
+  } else giant.hide();
 
   trace.begin();
   session.ordnance.draw(trace);
@@ -1069,9 +1083,12 @@ function frame(now: number): void {
   // you would actually launch into is the better of the two readings anyway.
   sky.show(campaign.seed, campaign.current);
   // World-space, so it is told the sector and then left alone apart from the
-  // leash that stops the player flying into it.
-  planet.show(campaign.seed, campaign.current);
-  planet.follow(player.position);
+  // leash that stops the player flying into it. Only shows when it is the
+  // sector's hero — see the giant's own version of this comment above.
+  if (sectorHero === "ringed") {
+    planet.show(campaign.seed, campaign.current);
+    planet.follow(player.position);
+  } else planet.hide();
   // The jump's own charge drives the tear, so the sky winds up with the drive
   // and stops the instant it lets go — no second clock to keep in step.
   sky.warp(session.hyperwarp.phase === "charging" ? session.hyperwarp.progress : 0);

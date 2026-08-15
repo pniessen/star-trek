@@ -152,9 +152,15 @@ check("...and differs between sectors", lit.other, "two sectors share a star pos
 // mesh onto a `uRotation` uniform in the same rebuild (`update`'s own
 // comment has the reasoning), so this now reads that uniform rather than
 // `body.rotation.y`, which no longer changes. `window.__giant` is the live
-// instance the frame loop already drives.
+// instance the frame loop drives, but the frame loop now only calls `show`
+// when `planHero` casts the giant for the sector in play (`render/scenery.ts`),
+// so this calls `show` directly first — the same thing the giant-seeding
+// block below it already does — rather than trusting an unconditional
+// per-frame call that no longer exists.
 const giant = await page.evaluate(() => {
   const g = window.__giant;
+  const { planLight } = window.__light;
+  g.show(1, 0, planLight(1, 0));
   const positionAttr = g.body?.geometry?.getAttribute("position");
   const hasShaderUniforms = typeof g.body?.material?.uniforms?.uFlowScale?.value === "number";
   const before = g.body ? g.body.material.uniforms.uRotation.value : 0;
@@ -221,6 +227,32 @@ check(
   "...and differs for a different sector",
   giantSeeded.hue1 !== giantSeeded.hue2,
   `hue1=${giantSeeded.hue1} hue2=${giantSeeded.hue2}`,
+);
+
+// ── the hero draw is seeded and covers the roster ───────────────────────────
+// `planHero` is pure — no `window.__` global carries it, so this imports the
+// module directly the way the giant/fixture checks above call their own
+// functions directly. 64 sectors at the smallest weight 0.10 misses a kind
+// with probability ~0.001 per kind at a fixed seed; this runs one fixed seed,
+// so it is deterministic in practice — if the chosen hash lands unluckily,
+// bump the sweep rather than reseeding the world.
+const hero = await page.evaluate(async () => {
+  const { planHero } = await import("/src/render/scenery.ts");
+  const seed = 4242;
+  const kinds = new Set();
+  for (let s = 0; s < 64; s++) kinds.add(planHero(seed, s));
+  return {
+    deterministic: planHero(seed, 7) === planHero(seed, 7),
+    differs: planHero(seed, 7) !== planHero(seed, 8) || planHero(seed, 7) !== planHero(seed, 9),
+    kinds: [...kinds].sort(),
+  };
+});
+check("the hero draw repeats for the same seed and sector", hero.deterministic, "");
+check("...and is not one constant across sectors", hero.differs, "");
+check(
+  "every hero kind occurs somewhere on one board's worth of sectors",
+  ["bare", "giant", "moon", "ringed", "rocks", "sun"].every((k) => hero.kinds.includes(k)),
+  `kinds=${hero.kinds.join(",")}`,
 );
 
 // ── the fixture is seeded ───────────────────────────────────────────────────

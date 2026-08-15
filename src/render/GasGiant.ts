@@ -1098,6 +1098,13 @@ export class GasGiant {
     material.uniforms.uRotation.value += GIANT.rotationRate * dt;
   }
 
+  /** Empty the group and forget the sector, so the next `show` rebuilds. */
+  hide(): void {
+    if (this.key === "") return;
+    this.key = "";
+    this.clear();
+  }
+
   /** Torn down on a sector change, the same moment `Planet.clear` and
    * `Comet.clear` are. */
   clear(): void {
