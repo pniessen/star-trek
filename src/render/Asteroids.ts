@@ -5,6 +5,7 @@ import {
   CylinderGeometry,
   Group,
   IcosahedronGeometry,
+  MathUtils,
   Matrix4,
   Mesh,
   MeshLambertMaterial,
@@ -45,6 +46,21 @@ import { VectorObject } from "./VectorObject.js";
  * asteroids is not." Every rock in a group is merged into one
  * `BufferGeometry`, so a field of dozens of rocks costs one draw call, not
  * dozens.
+ *
+ * **The hero field excludes the docking corridor.** `heroCentreMin`/`Max`
+ * (90–150) already overlaps the range the starbase itself stands at (118,
+ * `main.ts`'s own `STARBASE_POSITION`) — so in a fraction of `"rocks"`
+ * sectors, an un-excluded roll would seed a rock inside the station or
+ * across the one lane docking is mandatory through. Docking cannot be
+ * skipped, so a rock embedded in it would read as broken rather than as
+ * hazard. `buildHeroField` rejects and rerolls (bounded, below) any near-field
+ * rock whose sphere comes within `dockExclusionMargin` of the segment from
+ * the station to its gate — checked pre-merge, against each rock's own
+ * build-time position, because fixing this post-merge would mean reshuffling
+ * every already-seeded field to move one rock aside. The exclusion is narrow
+ * (a single ~15-unit segment plus a 14-unit margin, against a field spread
+ * over a 120-unit ellipsoid) so the field still reads as crowding the sector
+ * — it just parts around the one lane a run is required to fly.
  */
 export const ASTEROIDS = {
   /** Desaturated grey-brown — a locked mitigation (Global Constraints), not
@@ -78,6 +94,14 @@ export const ASTEROIDS = {
    * just around it, is a real option. */
   heroSpreadXZ: 120,
   heroSpreadY: 10,
+  /** How close a near-field rock's sphere may come to the docking corridor
+   * segment (station to gate) before it is rejected and rerolled — see the
+   * class docblock's own paragraph on the exclusion. */
+  dockExclusionMargin: 14,
+  /** Reroll attempts before a rock that keeps landing in the corridor is
+   * simply dropped rather than forced somewhere the rng never chose — a
+   * 35-rock field reads the same as a 36-rock one. */
+  dockExclusionRerolls: 8,
 
   // ── far band — depth only, never collidable ─────────────────────────
   farCount: 80,
@@ -123,6 +147,39 @@ interface LocalRock {
  * built once and never disposed; only the geometries it lights are ever
  * per-sector. */
 const ROCK_MATERIAL = new MeshLambertMaterial({ color: ASTEROIDS.color, fog: false });
+
+/**
+ * The docking corridor's own two endpoints, world space — hard-coded rather
+ * than imported from `game/docking.ts`, on purpose: every file in this game
+ * has kept the dependency one-way, `game/` importing `render/` and never the
+ * reverse (`game/session.ts`'s own `Rock` type is declared structurally for
+ * the identical reason — importing `render/Asteroids.ts` there would drag
+ * `three`'s `BufferGeometryUtils` and the render layer along for four
+ * fields). Reaching into `docking.ts` from here would be the first import
+ * against that grain, and it would also pull in `audio/sound.js` (`Docking`'s
+ * own import) for two numbers. So: **staleness warning** — `station` mirrors
+ * `main.ts`'s `STARBASE_POSITION` (0, 0, 118) and `gate` is that point minus
+ * `game/docking.ts`'s own `DOCK_GEOMETRY.gateOffset` (15) along -Z. If either
+ * constant ever moves, this drifts out of step with it silently.
+ */
+const DOCK_CORRIDOR = {
+  station: new Vector3(0, 0, 118),
+  gate: new Vector3(0, 0, 103),
+} as const;
+
+/**
+ * Point-to-segment distance, 3D — the sphere-vs-capsule test a near-field
+ * rock is rejected against so it cannot land in the docking corridor. `t` is
+ * clamped to the segment itself so a point beyond either endpoint measures
+ * against that endpoint, not the infinite line through it.
+ */
+function distanceToSegment(point: Vector3, a: Vector3, b: Vector3): number {
+  const ab = new Vector3().subVectors(b, a);
+  const lengthSq = ab.lengthSq();
+  const t = lengthSq > 0 ? MathUtils.clamp(new Vector3().subVectors(point, a).dot(ab) / lengthSq, 0, 1) : 0;
+  const closest = a.clone().addScaledVector(ab, t);
+  return point.distanceTo(closest);
+}
 
 /**
  * A rock's local offset within a flattened ellipsoid centred on the group's
@@ -304,9 +361,38 @@ export class Asteroids {
 
     this.nearLocal = [];
     const parts: BufferGeometry[] = [];
+    // Scratch vector for the corridor-exclusion check below, reused across
+    // every rock and every reroll attempt rather than allocated per try.
+    const worldPos = new Vector3();
     for (let i = 0; i < ASTEROIDS.heroCount; i++) {
       const r = ASTEROIDS.heroRadiusMin + rng.next() * (ASTEROIDS.heroRadiusMax - ASTEROIDS.heroRadiusMin);
-      const { x, y, z } = sampleEllipsoid(rng, ASTEROIDS.heroSpreadXZ, ASTEROIDS.heroSpreadY);
+      // Reject-and-reroll: this field's centre (90-150 from origin) already
+      // overlaps the starbase's own range (118), so an un-excluded roll can
+      // seed a rock inside the station or across its docking corridor —
+      // which is mandatory to fly, so a rock embedded in it reads as broken.
+      // Checked pre-merge, at this rock's own build-time position (the
+      // field's rotation is 0 here, so world position is just the centre
+      // plus the local sample — the same relationship `syncRocks` re-derives
+      // every frame at whatever angle the tumble has since reached). Bounded
+      // at `dockExclusionRerolls` tries; a rock that keeps landing there is
+      // dropped rather than forced somewhere the rng never chose.
+      let sample = sampleEllipsoid(rng, ASTEROIDS.heroSpreadXZ, ASTEROIDS.heroSpreadY);
+      let placed = false;
+      for (let attempt = 0; attempt < ASTEROIDS.dockExclusionRerolls; attempt++) {
+        worldPos.set(
+          this.nearCentre.x + sample.x,
+          this.nearCentre.y + sample.y,
+          this.nearCentre.z + sample.z,
+        );
+        const clearance = distanceToSegment(worldPos, DOCK_CORRIDOR.station, DOCK_CORRIDOR.gate) - r;
+        if (clearance >= ASTEROIDS.dockExclusionMargin) {
+          placed = true;
+          break;
+        }
+        sample = sampleEllipsoid(rng, ASTEROIDS.heroSpreadXZ, ASTEROIDS.heroSpreadY);
+      }
+      if (!placed) continue;
+      const { x, y, z } = sample;
       this.nearLocal.push({ x, y, z, r });
       parts.push(jitterRock(r, rng).translate(x, y, z));
     }
