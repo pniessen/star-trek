@@ -307,15 +307,30 @@ export class Hostile {
   private reveal = 0;
 
   /**
-   * The Lance's own tell. `null` between shots; set to `slabTime` (below) —
-   * reused as a general per-hostile clock rather than a dedicated one,
-   * since `updateAltitude` already accumulates it unconditionally, every
-   * frame, regardless of aim, cloak or withdrawal state, which is exactly
-   * the property a charge timestamp needs — the instant `sound.lanceCharge`
-   * fires.
+   * Unconditional elapsed seconds since this hostile spawned — advanced as
+   * the very first line of `update`, before any early return, specifically
+   * so `chargedAt` below has a clock that cannot stall.
+   *
+   * **Not `slabTime`.** An earlier version of `chargedAt` reused `slabTime`
+   * on the claim that `updateAltitude` accumulates it unconditionally —
+   * false: `updateAltitude` returns *before* `this.slabTime += dt` whenever
+   * `flight.threeD` is false (the `Y` key), which froze `slabTime` outright
+   * with the slab off and made every Lance's `chargedAt` gate permanently
+   * unsatisfiable (`clock - chargedAt` stuck at 0), so no sniper could ever
+   * fire again. `slabTime` is correctly conditional for what it actually
+   * is — the slab wander's own phase, which has to pause with the slab —
+   * so a charge timer needs a clock of its own rather than borrowing one
+   * whose being conditional is somebody else's feature.
+   */
+  private clock = 0;
+
+  /**
+   * The Lance's own tell. `null` between shots; set to `clock` (above) — a
+   * dedicated, unconditional per-hostile clock — at the instant
+   * `sound.lanceCharge` fires.
    *
    * This is not merely a "fired once" flag; it is the gate the fire
-   * condition itself now reads (`slabTime - chargedAt >= LANCE_LEAD`).
+   * condition itself now reads (`clock - chargedAt >= LANCE_LEAD`).
    * A flag alone was the original, un-gated version's bug: the sniper's own
    * strafing (`orbit`) makes `aimError < 0.4` intermittent by design, so
    * `cooldown` could cross `LANCE_CHARGE_AT` while aim was bad (no charge),
@@ -381,6 +396,11 @@ export class Hostile {
     flank = false,
     rocks: readonly Rock[] = [],
   ): void {
+    // Unconditional, before any early return below (the degenerate
+    // `distance < 1e-3` guard included) — see `clock`'s own docblock for
+    // why this cannot live any later or reuse an existing conditional one.
+    this.clock += dt;
+
     this.revealed = false;
 
     const toPlayer = player.position.clone().sub(this.position);
@@ -528,7 +548,7 @@ export class Hostile {
         this.cooldown <= LANCE_CHARGE_AT &&
         aimError < 0.4
       ) {
-        this.chargedAt = this.slabTime;
+        this.chargedAt = this.clock;
         sound.lanceCharge(this.position.x, this.position.z);
       }
     }
@@ -542,7 +562,7 @@ export class Hostile {
     // and the shot landing together, zero warning. Every other class has no
     // charge tell and this is trivially true for them.
     const sniperReady =
-      this.kind !== "sniper" || (this.chargedAt !== null && this.slabTime - this.chargedAt >= LANCE_LEAD);
+      this.kind !== "sniper" || (this.chargedAt !== null && this.clock - this.chargedAt >= LANCE_LEAD);
 
     // A withdrawing hostile has stopped fighting, not merely stopped
     // pursuing — the whole point is that it costs the player nothing more to

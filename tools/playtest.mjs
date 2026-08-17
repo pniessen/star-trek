@@ -1509,72 +1509,117 @@ check(
 // frame — the tell and the shot landing together, zero warning. The fix
 // (`Hostile.chargedAt`, `LANCE_LEAD` in `game/hostiles.ts`) makes the fire
 // condition wait on the charge having actually run for `LANCE_LEAD` seconds
-// first. This drives the real game loop rather than trusting the maths in
-// isolation: force a sniper into perfect, permanent aim — removing the AI's
-// own aim-acquisition timing as a variable, the same shortcut the Warden and
-// rock tests take — and watch for the moment its `cooldown` jumps back up to
-// `fireInterval` (the shot firing), recording what `chargedAt` and the
-// per-hostile clock (`slabTime`, reused as one — see that field's own
-// docblock) showed on the frame immediately before it.
-await page.evaluate(() => {
-  window.__pin = setInterval(() => { window.__player.hull = 1; }, 80);
-  window.__fleet.clear();
-  window.__session.breakTimer = Infinity; // no wave spawn contaminating this fleet
-});
-const lanceGate = await page.evaluate(async () => {
-  const { LANCE_LEAD } = await import("/src/game/hostiles.ts");
-  const player = window.__player;
-  player.velocity.set(0, 0, 0);
-  const target = window.__fleet.spawn("sniper", player.position.clone(), 0);
-  // Just above the charge threshold, so the charge trips within a couple of
-  // frames via the normal `cooldown -= dt` crossing rather than starting
-  // already charged — the spawn floor is covered separately by construction.
-  target.cooldown = 0.5;
+// first, timed off `Hostile.clock` — a *dedicated* unconditional per-hostile
+// clock, not `slabTime`: a first pass reused `slabTime` and shipped a real
+// regression, because `updateAltitude` returns before its own
+// `slabTime += dt` whenever the slab is off (`Y`, `flight.threeD`), which
+// froze the gate's clock outright and made every Lance go permanently silent
+// the moment a player had the slab switched off. `observeLanceGate` below
+// drives the real game loop rather than trusting the maths in isolation —
+// force a sniper into perfect, permanent aim, removing the AI's own
+// aim-acquisition timing as a variable, the same shortcut the Warden and
+// rock tests take — and watches for the moment its `cooldown` jumps back up
+// to `fireInterval` (the shot firing), recording what `chargedAt` and
+// `clock` showed on the frame immediately before it. Run once with the slab
+// on and once with it off, so the regression this reviewer caught has its
+// own permanent check.
+async function observeLanceGate() {
+  await page.evaluate(() => {
+    window.__pin = setInterval(() => { window.__player.hull = 1; }, 80);
+    window.__fleet.clear();
+    window.__session.ordnance.clear(); // no stray bolt from a prior run still in flight
+    window.__session.breakTimer = Infinity; // no wave spawn contaminating this fleet
+  });
+  const result = await page.evaluate(async () => {
+    const { LANCE_LEAD } = await import("/src/game/hostiles.ts");
+    const player = window.__player;
+    player.velocity.set(0, 0, 0);
+    const target = window.__fleet.spawn("sniper", player.position.clone(), 0);
+    // Just above the charge threshold, so the charge trips within a couple of
+    // frames via the normal `cooldown -= dt` crossing rather than starting
+    // already charged — the spawn floor is covered separately by construction.
+    target.cooldown = 0.5;
 
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  let before = null;
-  let fired = false;
-  for (let i = 0; i < 400 && !fired; i++) {
-    // Perfect, permanent aim at a fixed in-range standoff, recomputed every
-    // frame off the player's own live position.
-    target.position.set(player.position.x, 0, player.position.z - 40);
-    target.velocity.set(0, 0, 0);
-    target.heading = Math.atan2(
-      player.position.x - target.position.x,
-      player.position.z - target.position.z,
-    );
-    before = { cooldown: target.cooldown, chargedAt: target.chargedAt, clock: target.slabTime };
-    await wait(16);
-    // The shot firing is `this.cooldown = this.spec.fireInterval` inside the
-    // class's own fire block — a jump back up near 2.6s from whatever low or
-    // negative value it was counting through.
-    fired = target.cooldown > before.cooldown + 1;
-  }
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    let before = null;
+    let fired = false;
+    for (let i = 0; i < 400 && !fired; i++) {
+      // Perfect, permanent aim at a fixed in-range standoff, recomputed every
+      // frame off the player's own live position.
+      target.position.set(player.position.x, 0, player.position.z - 40);
+      target.velocity.set(0, 0, 0);
+      target.heading = Math.atan2(
+        player.position.x - target.position.x,
+        player.position.z - target.position.z,
+      );
+      before = { cooldown: target.cooldown, chargedAt: target.chargedAt, clock: target.clock };
+      await wait(16);
+      // The shot firing is `this.cooldown = this.spec.fireInterval` inside the
+      // class's own fire block — a jump back up near 2.6s from whatever low or
+      // negative value it was counting through.
+      fired = target.cooldown > before.cooldown + 1;
+    }
 
-  window.__fleet.clear();
-  return {
-    fired,
-    chargedBeforeFire: before?.chargedAt ?? null,
-    lead: before?.chargedAt != null ? target.slabTime - before.chargedAt : null,
-    lastLanceCharge: window.__sound.lastLanceCharge,
-    lanceLead: LANCE_LEAD,
-  };
-});
-await page.evaluate(() => {
-  clearInterval(window.__pin);
-  delete window.__pin;
-  window.__session.breakTimer = 0;
-});
-check("a Lance's shot is observed within the test window", lanceGate.fired, JSON.stringify(lanceGate));
+    window.__fleet.clear();
+    // The sniper itself is gone, but the bolt it just fired is a separate
+    // object in `Ordnance.projectiles` and outlives the hostile that fired
+    // it (`BOLT.life` is 1.5s) — left alone, it goes on flying after this
+    // function returns and can land on the player mid-way through whatever
+    // test runs next. Clear it here, the instant the observation is done,
+    // rather than leaving it to arrive as an unexplained shield hit later.
+    window.__session.ordnance.clear();
+    return {
+      fired,
+      chargedBeforeFire: before?.chargedAt ?? null,
+      lead: before?.chargedAt != null ? target.clock - before.chargedAt : null,
+      lastLanceCharge: window.__sound.lastLanceCharge,
+      lanceLead: LANCE_LEAD,
+    };
+  });
+  await page.evaluate(() => {
+    clearInterval(window.__pin);
+    delete window.__pin;
+    window.__session.breakTimer = 0;
+  });
+  return result;
+}
+
+const lanceGateOn = await observeLanceGate();
+check("a Lance's shot is observed within the test window", lanceGateOn.fired, JSON.stringify(lanceGateOn));
 check(
   "...and it was charged at least LANCE_LEAD seconds before it fired, on the game's own clock — the tell always has time to be heard",
-  lanceGate.fired && lanceGate.chargedBeforeFire !== null && lanceGate.lead >= lanceGate.lanceLead - 0.05,
-  JSON.stringify(lanceGate),
+  lanceGateOn.fired && lanceGateOn.chargedBeforeFire !== null && lanceGateOn.lead >= lanceGateOn.lanceLead - 0.05,
+  JSON.stringify(lanceGateOn),
 );
 check(
   "...and the charge cue itself actually sounded during the test",
-  lanceGate.lastLanceCharge !== null,
-  JSON.stringify(lanceGate.lastLanceCharge),
+  lanceGateOn.lastLanceCharge !== null,
+  JSON.stringify(lanceGateOn.lastLanceCharge),
+);
+
+// The regression itself: identical check, slab off. `Hostile.clock` has to
+// keep advancing regardless of `flight.threeD`, or this whole block goes
+// back to failing silently (a sniper that spawns but can never re-fire is
+// invisible to every check above, which only look for one which already has).
+await page.keyboard.press("y");
+state = await waitFor((s) => s.flight3d === false, 3000);
+check("the slab is off for the regression check", state.flight3d === false, `flight3d=${state.flight3d}`);
+
+const lanceGateOff = await observeLanceGate();
+
+await page.keyboard.press("y");
+state = await waitFor((s) => s.flight3d === true, 3000);
+check("the slab is back on after the regression check", state.flight3d === true, `flight3d=${state.flight3d}`);
+
+check(
+  "...with the slab off, a Lance's shot is still observed within the test window (the slabTime regression)",
+  lanceGateOff.fired,
+  JSON.stringify(lanceGateOff),
+);
+check(
+  "...and it was still charged at least LANCE_LEAD seconds before it fired — `Hostile.clock` does not stall when `slabTime` does",
+  lanceGateOff.fired && lanceGateOff.chargedBeforeFire !== null && lanceGateOff.lead >= lanceGateOff.lanceLead - 0.05,
+  JSON.stringify(lanceGateOff),
 );
 
 // ── rock collision ────────────────────────────────────────────────────────────
