@@ -84,10 +84,36 @@ export interface Ghost {
   age: number;
 }
 
+/**
+ * One arm-crossing, as an instant rather than a mark on the tube. `Ghost`
+ * (and the resolved contacts' own fade, tracked in `painted`) is what the
+ * scanner still remembers; `Paint` is what it just said, which is the half
+ * `sound.ping` (`audio/sound.ts`) needs — a paint is a single event, and
+ * turning the picture back into events after the fact would mean
+ * re-deriving "did the arm cross this bearing this frame" a second time
+ * outside the one place that already knows.
+ */
+export interface Paint {
+  /** Scanner's own convention: `atan2(forward, right)` — see `update`. */
+  readonly bearing: number;
+  readonly range: number;
+  /** `max(cloak, interference)` at the instant the arm crossed. 0 for a clean contact. */
+  readonly vague: number;
+  /** The ghost's own drawn radius, world units; 0 for a resolved contact. */
+  readonly spread: number;
+}
+
 const MAX_GHOSTS = 24;
 
 export class ScannerModel {
   readonly ghosts: Ghost[] = [];
+
+  /**
+   * Every paint the arm made *this frame*, cleared at the top of the next
+   * `update`. One entry per contact swept this frame, resolved or not —
+   * see `Paint`'s own docblock for why this exists alongside `ghosts`.
+   */
+  readonly paints: Paint[] = [];
 
   /** Screen-space angle of the sweep arm, radians. Decreases: the arm runs clockwise. */
   arm = Math.PI / 2;
@@ -97,6 +123,7 @@ export class ScannerModel {
   private live = new Set<Hostile>();
 
   update(dt: number, player: Ship, fleet: Fleet): void {
+    this.paints.length = 0;
     const previous = this.arm;
     this.arm = wrap(this.arm - SCANNER.sweepRate * dt);
 
@@ -131,7 +158,8 @@ export class ScannerModel {
       // inside a comet's tail is exactly as unresolved as either cause alone
       // would make it, never more.
       const vague = Math.max(hostile.cloak, hostile.interference);
-      if (vague > 0.05) this.paintGhost(hostile, range, vague);
+      const spread = vague > 0.05 ? this.paintGhost(hostile, range, vague) : 0;
+      this.paints.push({ bearing, range, vague, spread });
     }
   }
 
@@ -151,7 +179,8 @@ export class ScannerModel {
     this.painted.clear();
   }
 
-  private paintGhost(hostile: Hostile, range: number, vague: number): void {
+  /** @returns the ghost's own drawn radius — `paints` (and so `sound.ping`) reads the same number the eye does. */
+  private paintGhost(hostile: Hostile, range: number, vague: number): number {
     if (this.ghosts.length >= MAX_GHOSTS) this.ghosts.shift();
 
     // Error falls with range — a Shroud on top of you paints a tight ring, which
@@ -166,12 +195,14 @@ export class ScannerModel {
     // always contains the truth.
     const angle = Math.random() * Math.PI * 2;
     const offset = Math.sqrt(Math.random()) * spread;
+    const drawn = Math.max(spread, 2);
     this.ghosts.push({
       x: hostile.position.x + Math.cos(angle) * offset,
       z: hostile.position.z + Math.sin(angle) * offset,
-      spread: Math.max(spread, 2),
+      spread: drawn,
       age: 0,
     });
+    return drawn;
   }
 }
 

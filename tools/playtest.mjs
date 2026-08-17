@@ -611,6 +611,27 @@ check(
 state = await waitFor((s) => s.wave >= 1 && s.hostiles > 0);
 check("wave spawns", state.wave >= 1 && state.hostiles > 0, JSON.stringify(state));
 
+// ── the scanner as a second ear ─────────────────────────────────────────────
+// With hostiles up, the arm sweeps across at least one of them within a
+// single revolution (~1.5s at `SCANNER.sweepRate`, `4.2` rad/s) and
+// `drawHud`'s own `drawScanner` (which is the only place `ScannerModel.update`
+// runs) records the crossing as a paint; `main.ts` drains that into
+// `sound.ping` on the very next frame. Polled rather than a fixed sleep, the
+// same reasoning `waitFor` itself gives — a SwiftShader host and a real GPU
+// do not buy the same amount of simulated time per wall-clock second.
+// `!= null` deliberately, not `!== null`: before this field exists at all,
+// `window.__sound.lastPing` reads back `undefined`, and `undefined !== null`
+// is true — a strict check would report a ping before the feature exists.
+let pingSeen = await page.evaluate(() => window.__sound.lastPing != null);
+{
+  const deadline = Date.now() + 6000;
+  while (!pingSeen && Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    pingSeen = await page.evaluate(() => window.__sound.lastPing != null);
+  }
+}
+check("the scanner's own sweep reaches the ear: lastPing records after a wave is up", pingSeen);
+
 // ── shoot something ─────────────────────────────────────────────────────────
 // Park a hostile dead ahead at close range rather than sweeping and hoping:
 // whether a blind sweep finds a target is luck, and a flaky check is worse

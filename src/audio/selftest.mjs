@@ -299,6 +299,7 @@ function everyCue(s) {
   s.mineBlast(5, 5);
   s.mineLay(6, 6);
   s.decloak(7, 7);
+  s.ping(0.3, 60, 20);
   s.withdraw(6, 6);
   s.dispatch();
   s.wave(3);
@@ -1361,6 +1362,167 @@ let chain;
     "silence() resets the relay timer, so the next run's first starved frame ticks immediately",
     ticksAfterSilence.length === 1,
     `${ticksAfterSilence.length}`,
+  );
+}
+
+// ── 13. the scanner as a second ear, and the Shroud's swell ────────────────
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  // A wide, unresolved return: two tone voices, clearly detuned.
+  let from = mark();
+  s.ping(0.3, 60, 20);
+  let tones = voicesSince(from).filter((v) => v.kind === "tone");
+  ok("a wide-spread ping schedules two tone voices on the panel bus", tones.length === 2, `${tones.length}`);
+  ok("...both sine", tones.every((v) => v.wave === "sine"), tones.map((v) => v.wave).join(","));
+  let [lo, hi] = tones.map((v) => v.from).sort((a, b) => a - b);
+  let beat = (hi - lo) / ((hi + lo) / 2);
+  ok("...detuned from each other by at least 2% — rough, per spread/errorFar × 0.03", beat >= 0.02, `${beat}`);
+  ok(
+    "lastPing records the spread it was given, for the probe",
+    s.lastPing !== null && s.lastPing.spread === 20,
+    JSON.stringify(s.lastPing),
+  );
+
+  // A near-resolved return, well under the ghost floor of 2: the same two
+  // voices, close enough together to read as one note.
+  ctx.currentTime += 1; // clears the 90ms gate and reaps the last ping's voices
+  from = mark();
+  s.ping(0.3, 60, 1);
+  tones = voicesSince(from).filter((v) => v.kind === "tone");
+  [lo, hi] = tones.map((v) => v.from).sort((a, b) => a - b);
+  beat = (hi - lo) / ((hi + lo) / 2);
+  ok("a tight-spread ping detunes under a third of a percent — a clean unison", beat < 0.003, `${beat}`);
+
+  // A resolved contact (spread 0) is that same unison at its cleanest.
+  ctx.currentTime += 1;
+  from = mark();
+  s.ping(0.3, 60, 0);
+  tones = voicesSince(from).filter((v) => v.kind === "tone");
+  ok(
+    "a resolved contact's two voices land on exactly the same frequency",
+    tones.length === 2 && tones[0].from === tones[1].from,
+    `${tones.map((v) => v.from)}`,
+  );
+
+  // Rate limit: several contacts can cross the arm in the same frame, and a
+  // chorus of pips is not information — a second ping inside 90ms is
+  // dropped outright, not thinned.
+  ctx.currentTime += 1;
+  const dropFrom = mark();
+  s.ping(0.3, 60, 5);
+  ok("a ping schedules voices", voicesSince(dropFrom).length > 0, "");
+  const secondFrom = mark();
+  s.ping(0.7, 40, 5);
+  ok(
+    "a second ping inside 90ms is dropped entirely",
+    voicesSince(secondFrom).length === 0,
+    `${voicesSince(secondFrom).length}`,
+  );
+  ctx.currentTime += 0.1; // past PING.rate
+  const thirdFrom = mark();
+  s.ping(0.7, 40, 5);
+  ok(
+    "...and is allowed again once 90ms has passed",
+    voicesSince(thirdFrom).length === 2,
+    `${voicesSince(thirdFrom).length}`,
+  );
+
+  // The duck: pinging reaches into the weapon bus and no other, same
+  // structural bus-gain identification §3's duck test uses.
+  ctx.currentTime += 1;
+  const master = nodes.find((n) => n.kind === "gain" && n.out.some((o) => o.kind === "biquad" && o.type === "highpass"));
+  const busGains = nodes.filter((n) => n.kind === "gain" && n.out.includes(master));
+  const beforeEvents = busGains.map((g) => g.gain.events.length);
+  s.ping(0, 30, 3);
+  const duckedBuses = busGains.filter((g, i) => g.gain.events.length > beforeEvents[i]);
+  ok("ping ducks exactly one bus (weapon)", duckedBuses.length === 1, `${duckedBuses.length} buses touched`);
+
+  // Pan follows the scanner's own bearing convention (`ScannerModel.update`):
+  // 0 is dead right (`cos(0) = 1`), π is dead left.
+  ctx.currentTime += 1;
+  const rightFrom = mark();
+  s.ping(0, 30, 0);
+  const rightPan = nodes.slice(rightFrom).find((n) => n.kind === "panner");
+  ok(
+    "bearing 0 (the scanner's own right axis) pans hard right",
+    rightPan && rightPan.pan.value > 0.5,
+    rightPan ? `${rightPan.pan.value}` : "no panner",
+  );
+  ctx.currentTime += 1;
+  const leftFrom = mark();
+  s.ping(Math.PI, 30, 0);
+  const leftPan = nodes.slice(leftFrom).find((n) => n.kind === "panner");
+  ok(
+    "bearing π (dead left) pans hard left",
+    leftPan && leftPan.pan.value < -0.5,
+    leftPan ? `${leftPan.pan.value}` : "no panner",
+  );
+
+  // ── the Shroud's swell ───────────────────────────────────────────────────
+  // Re-voiced from a detuned pair to an fm swell: a modulator driving the
+  // carrier's frequency (§8's own fm plumbing), the carrier itself climbing
+  // (the swell), and a plain resolving tone landing in the Shroud's own
+  // bolt register just before the real bolt.
+  const dFrom = mark();
+  s.decloak(10, 10);
+  const dFresh = nodes.slice(dFrom);
+  const oscs = dFresh.filter((n) => n.kind === "oscillator");
+  ok("decloak builds three oscillators: an fm pair plus a resolving tone", oscs.length === 3, `${oscs.length}`);
+
+  // The fm pair, found the way §8 finds one: the one gain node fed by an
+  // oscillator (the modulator) whose own output reaches another
+  // oscillator's frequency param (the carrier) — unique regardless of how
+  // many plain tone oscillators share the same node list.
+  const depthGain = dFresh.find(
+    (g) => g.kind === "gain" && oscs.some((o) => o.out.includes(g)) && oscs.some((c) => g.out.includes(c.frequency)),
+  );
+  const modulator = oscs.find((o) => depthGain && o.out.includes(depthGain));
+  const carrier = oscs.find((o) => depthGain && depthGain.out.includes(o.frequency));
+  const resolveTone = oscs.find((o) => o !== modulator && o !== carrier);
+  ok("an fm pair exists: a modulator driving the carrier's frequency", !!depthGain && !!modulator && !!carrier, "no fm pair found");
+  near(
+    "the modulator sits at the golden ratio × the carrier — inharmonic, deliberately not shieldHit's 2.01",
+    modulator && carrier ? modulator.frequency.events[0][1] / carrier.frequency.events[0][1] : 0,
+    1.618,
+    1e-6,
+  );
+  ok(
+    "the carrier climbs — `to` lands above its own starting frequency (the swell)",
+    carrier && carrier.frequency.events.some((e) => e[0] === "exp" && e[1] > carrier.frequency.events[0][1]),
+    "",
+  );
+  ok(
+    "the modulator's own depth carries a scheduled envelope (the index settling)",
+    depthGain && depthGain.gain.events.length >= 2,
+    "",
+  );
+  const depthRamp = depthGain && depthGain.gain.events.find((e) => e[0] === "exp");
+  const carrierAt = carrier ? carrier.frequency.events[0][2] : 0;
+  near(
+    "...settling across the whole wind-up (`indexDecay: CLOAK_WIND`, 0.45s) rather than a struck note's usual quick decay",
+    depthRamp ? depthRamp[2] - carrierAt : -1,
+    0.45,
+    0.01,
+  );
+
+  ok("a resolving tone follows, in the Shroud's own bolt register", !!resolveTone, "no resolve tone found");
+  near(
+    "...starting at 520 Hz — hostileFire's own opening note",
+    resolveTone ? resolveTone.frequency.events[0][1] : 0,
+    520,
+    1e-6,
+  );
+  near(
+    "...landing `CLOAK_WIND - 0.03` after the swell opens — three hundredths of a second before the real bolt",
+    resolveTone ? resolveTone.frequency.events[0][2] - carrierAt : -1,
+    0.45 - 0.03,
+    0.01,
   );
 }
 

@@ -13,9 +13,15 @@ import { Synth, type Bed } from "./Synth.js";
  * actually are, so a bolt fired from your port quarter arrives on your left.
  * Timbre follows from that rather than leading it — the panel and the Warden
  * speak in triangles and sines because they are talking to you, and the guns
- * on both sides are harsh because a gun is. The Shroud gets the one timbre
- * nothing else uses: two detuned oscillators beating against each other, which
- * is what "unresolved" sounds like, exactly as magenta is what it looks like.
+ * on both sides are harsh because a gun is. The Shroud's decloak used to be
+ * the one thing here voiced as two detuned oscillators beating against each
+ * other; it has moved to the `fm` voice's own bell shape instead — an index
+ * that settles from inharmonic to plain across the whole wind-up, because
+ * *resolving* is an arc and a fixed timbre could only ever gesture at one.
+ * Detuned beating moved rather than retired: `ping` (§ the scanner, heard,
+ * below) spends the same device on the same idea, roughness standing in for
+ * how wide a return's own drawn uncertainty is — so "unresolved" is still
+ * something you can hear, just no longer the Shroud's alone to say.
  *
  * **The sound is where the event is.** Distance attenuates and bearing pans,
  * from one listener updated once a frame. That is not atmosphere — it is the
@@ -49,6 +55,45 @@ const FULL_THREAT = 1100;
 const HALF_RANGE = 34;
 /** Hard panning is disorienting when the source is a few metres off the nose. */
 const PAN_WIDTH = 0.8;
+
+/**
+ * Mirrors `SCANNER.errorFar` and `CloakSpec.wind` (`hud/scanner.ts`,
+ * `game/hostiles.ts`) rather than importing either: both pull in `Ship.ts`,
+ * which pulls in `three` and the rest of the game, and the audiotest
+ * tsc-emits `sound.ts` standalone (see its own header) — the same reasoning
+ * `game/session.ts` already gives for declaring structural types locally
+ * rather than importing across that boundary. If either source constant
+ * moves, this drifts silently; that trade is the price of the standalone
+ * build and is `docs/todo.md`'s to watch, not this file's to solve.
+ */
+const PING = {
+  /** `SCANNER.errorFar` — the ghost's own uncertainty ceiling, world units. */
+  errorFar: 26,
+  /** Minimum gap between two pings, seconds — several contacts can paint in
+   *  one frame and a chorus of pips is not information, it is noise. */
+  rate: 0.09,
+  duckDb: 3,
+  duckSeconds: 0.12,
+} as const;
+
+/**
+ * `CloakSpec.wind` — the Shroud always winds up for 0.45s before its first
+ * bolt. See `PING`'s own docblock for why this is a mirrored constant
+ * rather than an import.
+ */
+const CLOAK_WIND = 0.45;
+
+/**
+ * The scanner's ping's own pitch. 1650 Hz sits in the gap between the
+ * bank's two other high voices rather than inside either: the phaser's own
+ * downsweep (`phaser`, below — 1900–2260 Hz falling to a 700 Hz floor)
+ * only passes through 1650 Hz for a few milliseconds per shot and never
+ * rests there, and the radio's telephone band (`speak`, `Synth.ts` —
+ * 300–3400 Hz) leaves it well clear of the 3400 Hz top edge, where a
+ * transmitted voice's own sibilance and the band's own rolloff already
+ * crowd. A pip at 1650 Hz reads against both without living inside either.
+ */
+const PING_FREQ = 1650;
 
 /**
  * The reactor bed. `docs/audio-prior-art.md` §6.1: two oscillators a few
@@ -156,6 +201,16 @@ export class Sound {
    * and start reading as a buzz; two pitches turn the same burst into a figure.
    */
   private phaserFlip = 0;
+
+  /** Audio-clock time (`ctx.currentTime`) the last ping actually sounded — `ping`'s own rate gate. */
+  private lastPingAt = -Infinity;
+
+  /**
+   * The probe's own hook: when a ping last sounded and how rough it was.
+   * `null` until the first one, same convention as every other "nothing has
+   * happened yet" field in this file.
+   */
+  lastPing: { at: number; spread: number } | null = null;
 
   get muted(): boolean {
     return this.synth.muted;
@@ -286,8 +341,10 @@ export class Sound {
     this.synth.silence();
     // A new run (or the title screen) starts the relay tick's own clock
     // fresh rather than inheriting a `reactorTickAt` from whatever the last
-    // run's reserve was doing when it ended.
+    // run's reserve was doing when it ended. `lastPingAt` is the same
+    // argument applied to `ping`'s own rate gate.
     this.reactorTickAt = -Infinity;
+    this.lastPingAt = -Infinity;
   }
 
   // ── weapons ──────────────────────────────────────────────────────────────
@@ -981,75 +1038,128 @@ export class Sound {
     });
   }
 
+  // ── the scanner, heard ───────────────────────────────────────────────────
+
+  /**
+   * The tube's own arm, given a voice. `ScannerModel.update`
+   * (`hud/scanner.ts`) records every paint it makes this frame — resolved or
+   * not — and `main.ts` drains that list into this method right after
+   * `drawHud`, so a contact crossing the sweep is now an event in both
+   * senses at once. Reading the tube is a skill under pressure; hearing it
+   * confirm what you just saw (or warn you before you looked) is the same
+   * instrument doing its job through a second channel.
+   *
+   * Two `tone` voices rather than one, detuned by `spread` — the beating
+   * vocabulary this file used to reserve for the Shroud alone (see the file
+   * header) — because a paint's own roughness *is* the ghost's own drawn
+   * uncertainty: a resolved contact (`spread === 0`) is a clean unison, a
+   * return painted at the rim is a rough ~3% beat you cannot mistake for one
+   * note. `spread` is read raw off the paint rather than reprojected, since
+   * `ScannerModel` already computed the exact number the ring on the tube is
+   * drawn with — recomputing it here would just be a second, riskier copy
+   * of `paintGhost`'s own arithmetic.
+   *
+   * Rate-limited to `PING.rate` — several contacts can cross the arm in the
+   * same frame, and a chorus of pips is not information — and it ducks the
+   * weapon bus (Task 1's `duck`), because a busy phaser exchange is exactly
+   * when a fresh, unresolved return is most worth not burying.
+   *
+   * @param bearing the scanner's own convention (`atan2(forward, right)` —
+   *   see `ScannerModel.update`), read straight off the paint rather than
+   *   projected through `place`: a paint already carries where it is
+   *   relative to the ship, not a world position to re-derive that from.
+   * @param range   world units from the ship. Falloff matches `place`'s own.
+   * @param spread  the ghost's own drawn radius, world units; 0 resolved.
+   */
+  ping(bearing: number, range: number, spread: number): void {
+    const now = this.synth.context?.ctx.currentTime;
+    if (now === undefined || now - this.lastPingAt < PING.rate) return;
+    this.lastPingAt = now;
+    this.lastPing = { at: now, spread };
+
+    const level = this.levelForRange(range);
+    // Scanner bearing: right is 0, ahead is π/2 (`ScannerModel.update`'s own
+    // `atan2(forward, right)`), which is exactly `place`'s own `right`
+    // component read as `cos(bearing)` instead of re-derived from a
+    // position — the same axes, the paint already in them.
+    const pan = clamp(Math.cos(bearing), -1, 1) * PAN_WIDTH;
+    // Rough when wide, unison at or under `spread: 2` (the ghost's own
+    // floor) — see the docblock above.
+    const detune = clamp(spread / PING.errorFar, 0, 1) * 0.03;
+
+    const g = this.synth.group();
+    for (const mul of [1 - detune, 1 + detune]) {
+      this.synth.play({
+        bus: "panel",
+        group: g,
+        wave: "sine",
+        freq: PING_FREQ * mul,
+        level: 0.07 * level,
+        attack: 0.001,
+        decay: 0.05,
+        pan,
+      });
+    }
+    this.synth.duck("weapon", PING.duckDb, PING.duckSeconds);
+  }
+
   // ── the Shroud ───────────────────────────────────────────────────────────
 
   /**
    * The most important sound in the game.
    *
-   * The cloaker is only fair because it materialises over 0.45s before it fires,
-   * and until now that tell was a flare somewhere off screen — useless if you
-   * were not already looking at it. This is the same tell in a medium that does
-   * not need you to be facing the right way. It rises, because everything else
-   * that matters here falls; it is two detuned oscillators, because that is the
-   * timbre reserved for what will not resolve; it is panned, so it says which
-   * way to turn; and it carries a floor under its distance attenuation, because
-   * a warning you cannot hear is not a warning. The crack at 0.42s is the hull
-   * finishing — which is three hundredths of a second before the first bolt.
+   * The cloaker is only fair because it materialises over `CLOAK_WIND` (0.45s)
+   * before it fires, and until now that tell was a flare somewhere off screen —
+   * useless if you were not already looking at it. This is the same tell in a
+   * medium that does not need you to be facing the right way.
+   *
+   * Re-voiced from a pair of detuned oscillators (the timbre this file used to
+   * reserve for the Shroud alone — see the file header, and `ping` above,
+   * which inherited the device) to the `fm` voice's own bell shape: bright and
+   * inharmonic (`ratio: 1.618`, deliberately not a small-integer ratio like
+   * `shieldHit`'s 2.01) at the moment it opens, its index settling toward
+   * plain across the *whole* wind-up rather than a struck note's usual quick
+   * decay (`indexDecay: CLOAK_WIND`) — so the sound's own arc **is** the tell:
+   * "unresolved, clarifying" rather than a fixed texture that has to be read
+   * as a state. The carrier climbs too (`to`), a swell rather than a held
+   * pitch. What resolves it is a plain `tone` in the Shroud's own bolt
+   * register — `hostileFire`'s 520→300 sawtooth, note for note — landing
+   * `CLOAK_WIND - 0.03` in: three hundredths of a second before the real
+   * bolt, so the ear hears the shape of what is coming before it arrives.
+   * Both layers keep the floor under distance attenuation and the panning
+   * `decloak` always had, because a warning you cannot hear or place is not
+   * a warning.
    */
   decloak(x: number, z: number): void {
     const { level, pan } = this.place(x, z, 0.62);
-    // Five layers, one slot — the hostile bus's cap of 4 would otherwise mute
-    // the resolving note that lands with the crack, the whole point of which
-    // is to arrive together with it.
+    // Two layers, one slot — the swell and its own resolve are one event,
+    // not two competing ones.
     const g = this.synth.group();
-    for (const detune of [1, 1.043]) {
-      this.synth.play({
-        bus: "hostile",
-        group: g,
-        wave: "sawtooth",
-        freq: 300 * detune,
-        to: 1500 * detune,
-        level: 0.15 * level,
-        attack: 0.06,
-        decay: 0.38,
-        pan,
-      });
-    }
     this.synth.play({
-      kind: "noise",
+      kind: "fm",
       bus: "hostile",
       group: g,
-      filter: "bandpass",
-      q: 3,
-      freq: 700,
-      to: 4200,
-      level: 0.14 * level,
-      attack: 0.09,
-      decay: 0.35,
-      pan,
-    });
-    this.synth.play({
-      kind: "noise",
-      bus: "hostile",
-      group: g,
-      filter: "highpass",
-      freq: 2400,
-      level: 0.17 * level,
-      attack: 0.002,
-      decay: 0.2,
-      delay: 0.42,
+      ratio: 1.618,
+      index: 6,
+      indexDecay: CLOAK_WIND,
+      wave: "sawtooth",
+      freq: 240,
+      to: 620,
+      level: 0.22 * level,
+      attack: 0.05,
+      decay: CLOAK_WIND,
       pan,
     });
     this.synth.play({
       bus: "hostile",
       group: g,
-      wave: "triangle",
-      freq: 1500,
-      to: 420,
-      level: 0.13 * level,
+      wave: "sawtooth",
+      freq: 520,
+      to: 300,
+      level: 0.18 * level,
       attack: 0.002,
-      decay: 0.3,
-      delay: 0.42,
+      decay: 0.13,
+      delay: CLOAK_WIND - 0.03,
       pan,
     });
   }
@@ -1775,10 +1885,15 @@ export class Sound {
     const dx = x - this.lx;
     const dz = z - this.lz;
     const distance = Math.hypot(dx, dz);
-    const level = Math.max(floor, 1 / (1 + Math.pow(distance / HALF_RANGE, 1.7)));
+    const level = Math.max(floor, this.levelForRange(distance));
     if (distance < 1e-3) return { level, pan: 0 };
     const right = (dx * Math.cos(this.lh) - dz * Math.sin(this.lh)) / distance;
     return { level, pan: clamp(right, -1, 1) * PAN_WIDTH };
+  }
+
+  /** The falloff curve every placed sound shares — `ping` reads off it directly, since a paint already carries a range rather than a world position to project. */
+  private levelForRange(range: number): number {
+    return 1 / (1 + Math.pow(range / HALF_RANGE, 1.7));
   }
 }
 

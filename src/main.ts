@@ -38,7 +38,7 @@ import { Session } from "./game/session.js";
 import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
 import type { DeathSequence } from "./game/death.js";
-import { drawHud } from "./hud/draw.js";
+import { contacts, drawHud } from "./hud/draw.js";
 import { load, save } from "./chart/persistence.js";
 import { colOf, indexOf, inBounds, neighbours, rowOf } from "./chart/sectors.js";
 import { DECISIONS, decide } from "./chart/command.js";
@@ -1236,6 +1236,19 @@ function frame(now: number): void {
     commandSelection,
     commandMessage,
   });
+
+  // The scanner's own paints, heard: `ScannerModel.update` (called inside
+  // `drawHud`'s own `drawScanner`, above) records every arm-crossing this
+  // frame — resolved and unresolved alike — and clears the list at its own
+  // top the next time it runs. `drawScanner` only runs while there is a tube
+  // to draw (the title, the command view, the deck log and the epitaph all
+  // return out of `drawHud` before reaching it), so on every frame where it
+  // did not, `contacts.paints` is simply whatever the last real frame left —
+  // draining it here, right after every read, is what stops a mode change
+  // from replaying the same stale paints as pings forever into, say, the
+  // command view.
+  for (const paint of contacts.paints) sound.ping(paint.bearing, paint.range, paint.spread);
+  contacts.paints.length = 0;
 
   if (DEBUG_PROBE) {
     const skyReport = sky.describe();

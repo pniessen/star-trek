@@ -53,8 +53,17 @@ const dim = PALETTE.trace.clone().multiplyScalar(0.5);
 const scratch = new Color();
 const point = new Vector3();
 
-/** What the scanner has been told, as opposed to what is true. See `scanner.ts`. */
-const contacts = new ScannerModel();
+/**
+ * What the scanner has been told, as opposed to what is true. See `scanner.ts`.
+ *
+ * Exported — this module is otherwise the renderer's own, but `main.ts`
+ * needs the live instance, not a copy: `contacts.paints` is only ever fresh
+ * for the frame `drawScanner` (below) actually calls `contacts.update`,
+ * which only happens while there is a tube to draw. `main.ts` drains
+ * `paints` into `sound.ping` right after this module's own `drawHud`
+ * returns; this file stays audio-free itself.
+ */
+export const contacts = new ScannerModel();
 
 /** Centred on `cx`. Used by every full-screen panel. */
 function centred(hud: Hud, text: string, cx: number, y: number, scale: number, color: Color): void {
