@@ -489,9 +489,13 @@ export class Session {
       // failing — fires the relay click exactly once, on the transition into
       // it, the same before/after convention just used for `panelRestore`.
       if (!blippedBefore && this.death.blipped) sound.relayTick();
-      // Every frame of the sequence: the beds die on the panel's own power
-      // curve rather than being cut separately from it.
-      sound.deathPower(this.death.power);
+      // Every frame of the breakup and the drift — never the tally, whose
+      // readout has its own cue (`panelRestore`, above) and where the beds
+      // are meant to go back to their ordinary silence: `sound.panelRestore`
+      // clears the hold this puts on `Sound.update`'s own `alive` gate, and
+      // calling this again the same frame (or any frame after) would
+      // immediately re-arm it.
+      if (this.death.phase !== "tally") sound.deathPower(this.death.power);
       // Once the panel comes back up for the readout the screen belongs to it.
       // The pack circling the wreck is the right thing to watch during the
       // drift and pure noise across four lines of numbers.

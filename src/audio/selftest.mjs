@@ -1716,6 +1716,65 @@ let chain;
   );
 }
 
+// ── 15b. deathPower survives Sound.update()'s own alive:false gate ─────────
+// The regression this section exists to catch: `main.ts` calls `Sound.update`
+// every frame regardless of `Session.state`, with `alive: false` for the
+// entire death sequence — and its own gate used to zero the engine/reactor
+// beds' level outright on that flag alone, well inside `Bed`'s own glide,
+// which made `deathPower`'s own dimming inaudible no matter what `power()`
+// wrote a moment earlier. Interleaved here in the exact order production
+// code uses: `deathPower(p)` then `update({alive:false, ...})`, every frame.
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+
+  // Build the reactor bed live first, the way a real run does before death.
+  s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 1, starved: false });
+  const lowpassFilters = nodes.filter((n) => n.kind === "biquad" && n.type === "lowpass");
+  const reactorFilter = lowpassFilters.find(
+    (f) => nodes.filter((n) => n.kind === "oscillator" && n.out.includes(f)).length === 2,
+  );
+  const reactorTremolo = nodes.find((n) => n.kind === "gain" && reactorFilter.out.includes(n));
+  const reactorGain = nodes.find((n) => n.kind === "gain" && reactorTremolo.out.includes(n));
+  const lastTarget = () => reactorGain.gain.events[reactorGain.gain.events.length - 1][1];
+
+  const targets = [];
+  for (const p of [1.0, 0.85, 0.7, 0.55, 0.4, 0.3]) {
+    ctx.currentTime += 0.2;
+    s.deathPower(p);
+    s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: false, docked: false, energy: 1, starved: false });
+    targets.push(lastTarget());
+  }
+  ok(
+    "while deathPower is active, update()'s alive:false gate does not zero the reactor",
+    targets.every((v) => v > 0),
+    JSON.stringify(targets),
+  );
+  ok(
+    "...and the target follows the falling power, not a fixed level",
+    targets.every((v, i) => i === 0 || v <= targets[i - 1] + 1e-9),
+    JSON.stringify(targets),
+  );
+
+  // panelRestore hands the alive gate back: the very next alive:false
+  // update() zeroes the reactor exactly as it did before deathPower existed.
+  ctx.currentTime += 0.2;
+  s.panelRestore();
+  s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: false, docked: false, energy: 1, starved: false });
+  ok("panelRestore hands the alive gate back — a dead, non-dying scene zeroes the reactor again", lastTarget() === 0, `${lastTarget()}`);
+
+  // silence() clears the same hold, independent of panelRestore.
+  ctx.currentTime += 0.2;
+  s.deathPower(0.5);
+  s.silence();
+  ctx.currentTime += 0.2;
+  s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: false, docked: false, energy: 1, starved: false });
+  ok("silence() also clears the deathPower hold", lastTarget() === 0, `${lastTarget()}`);
+}
+
 // ── deathPower drives every bed's own filter and gain ──────────────────────
 {
   const ctx = makeContext();

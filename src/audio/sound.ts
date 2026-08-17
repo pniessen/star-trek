@@ -219,6 +219,31 @@ export class Sound {
    */
   private reactorTickAt = -Infinity;
 
+  /**
+   * True from the first `deathPower` call of a death until `panelRestore`
+   * (the tally taking the panel back) or `silence()` clears it.
+   *
+   * `update()` is called every frame regardless of `Session.state` — see
+   * `main.ts` — and its own `scene.alive` gate is what zeroes the engine and
+   * reactor beds' *level* the instant a run ends, which happens well inside
+   * `Bed`'s own 0.12s glide. Without this flag, that gate wins the same
+   * frame `deathPower`'s own `Bed.power` scaling is trying to make audible:
+   * `set()` (called from `update()`, after `deathPower()` in the frame
+   * order `game/session.ts` keeps) always runs last and would overwrite
+   * `power()`'s target with a flat 0 regardless of `DeathSequence.power`,
+   * silencing the beds before the flicker ever reaches them. While this is
+   * true, `update()` treats a dead-but-dying scene as if it were still
+   * alive for the purposes of the engine/reactor *level* calculation, so the
+   * beds keep their normal computed target and `powerScale` (already
+   * multiplied in by `Bed.set`) is the only thing doing the dimming.
+   * `game/session.ts` stops calling `deathPower` once the death sequence
+   * reaches `"tally"` — the emergency-power readout has its own cue
+   * (`panelRestore`) — so the ordinary `alive` gate resumes there exactly as
+   * it always has, and beds fall silent for the tally the same way they did
+   * before this flag existed.
+   */
+  private deathPowerActive = false;
+
   /** The listener: where the ship is and which way it is pointing. */
   private lx = 0;
   private lz = 0;
@@ -300,6 +325,11 @@ export class Sound {
   update(scene: SoundScene): void {
     const pressure = clamp(scene.threat / FULL_THREAT, 0, 1);
     const hurt = 1 - clamp(scene.hull, 0, 1);
+    // The death sequence's own hold on the engine/reactor gate — see
+    // `deathPowerActive`'s own docblock for why `scene.alive` alone cannot
+    // be trusted to decide these two beds' level while a death is dimming
+    // them on purpose.
+    const dying = this.deathPowerActive;
 
     // The alert used to be a sustained bed riding threat. It is now a pulse —
     // see `alertBeat`, and `AlertPulse` for why — so this bed is held at
@@ -312,7 +342,7 @@ export class Sound {
     // clamps is a ship with its drive shut down.
     const moving = clamp(scene.speed / 62, 0, 1);
     this.engine?.set(
-      scene.alive && !scene.docked ? 0.028 + scene.thrust * 0.075 + moving * 0.022 : 0,
+      (scene.alive || dying) && !scene.docked ? 0.028 + scene.thrust * 0.075 + moving * 0.022 : 0,
       0,
       150 + scene.thrust * 430 + moving * 240,
       0,
@@ -325,7 +355,7 @@ export class Sound {
     // bed. Docked, the drive is shut down the same way the engine's is, but a
     // moored hull still has station power feeding it, so it idles rather than
     // going fully silent.
-    const reactorLevel = scene.alive ? (scene.docked ? 0.02 : 0.05) : 0;
+    const reactorLevel = scene.alive || dying ? (scene.docked ? 0.02 : 0.05) : 0;
     // Droop only below a quarter reserve, continuous at the boundary
     // (0.5 + 2×0.25 = 1); starved overrides it outright rather than merely
     // extending the same curve to zero, because a starved reserve is a
@@ -405,9 +435,14 @@ export class Sound {
    * The death sequence's own reach into the beds, called every frame with
    * `DeathSequence.power` (0..1) so the reactor dies exactly on the panel's
    * own flicker rather than as a separate cut. Every bed I own, the same
-   * list `hitStop` already walks.
+   * list `hitStop` already walks. Sets `deathPowerActive` — see that
+   * field's own docblock for why `update()`'s ordinary `alive` gate has to
+   * stand down while this is in force, and for why the caller
+   * (`game/session.ts`) stops calling this once the death sequence reaches
+   * `"tally"` rather than this method clearing the flag on its own.
    */
   deathPower(power: number): void {
+    this.deathPowerActive = true;
     for (const bed of [this.alert, this.engine, this.reactor]) bed?.power(power);
   }
 
@@ -421,6 +456,7 @@ export class Sound {
     this.reactorTickAt = -Infinity;
     this.lastPingAt = -Infinity;
     this.lastMineTickAt = -Infinity;
+    this.deathPowerActive = false;
   }
 
   // ── weapons ──────────────────────────────────────────────────────────────
@@ -2150,8 +2186,14 @@ export class Sound {
     this.synth.play({ group: g, wave: "sawtooth", freq: 180, to: 40, level: 0.2, attack: 0.005, decay: 0.95 });
   }
 
-  /** Emergency power finding the bus, under the epitaph. */
+  /**
+   * Emergency power finding the bus, under the epitaph. Also the moment the
+   * engine/reactor beds' level goes back to the ordinary `alive` gate —
+   * see `deathPowerActive`'s own docblock — since the readout from here on
+   * has its own cue rather than the dying beds' own dimming.
+   */
   panelRestore(): void {
+    this.deathPowerActive = false;
     const g = this.synth.group();
     this.synth.play({
       bus: "panel",
