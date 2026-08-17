@@ -689,8 +689,16 @@ already; these remain:
 
 - **Escalation should add partials, not raise level.** CHI 2024, n=1,699 —
   amplification alone measurably hurt perceived competence.
-- **The compressor's 6 ms lookahead costs impact sync** in a game built around
-  hit-stop. Either shorten it or accept the smear deliberately.
+- ~~**The compressor's 6 ms lookahead costs impact sync** in a game built
+  around hit-stop. Either shorten it or accept the smear deliberately.~~
+  **Resolved, 2026-08-16.** Already done, and done before this bullet was
+  ever revisited: `Synth.build()`'s master chain has no
+  `DynamicsCompressorNode` at all — a `tanh` `WaveShaperNode` limiter took its
+  place, zero-latency and unable to clip, exactly the alternative
+  `docs/audio-prior-art.md` §5 names. `selftest.mjs` §2 asserts it directly
+  (`ok("no compressor: the 6 ms lookahead is gone", compressors === 0)`) and
+  checks the shaper's transfer function against `tanh` to within `1e-3`. The
+  smear this bullet worried about is gone with the node that caused it.
 - **Verify the autoplay gesture path end to end.** The contract is that nothing
   sounds until a key is pressed and that the first failure retires the whole
   audio layer rather than raising in the frame loop. It has not been exercised

@@ -307,6 +307,7 @@ function everyCue(s) {
   s.hyperwarpArrive();
   s.scram();
   s.alertBeat(110, 4);
+  s.hitStop(0.1);
   s.conditionChange(true);
   s.conditionChange(false);
   s.allyHail(8, 8);
@@ -1047,6 +1048,96 @@ let chain;
   // bus — routing it into a bus would be feedback.
   const master = nodes.find((n) => n.kind === "gain" && n.out.some((o) => o.kind === "biquad" && o.type === "highpass"));
   ok("the convolver feeds master, not a bus", conv.out.length === 1 && conv.out[0] === master, "");
+}
+
+// ── 11. hit-stop marks the beds ─────────────────────────────────────────────
+
+{
+  // `Bed.dip` itself, built directly with a `tone` spec so both the filter
+  // and (unlike the noise-kind engine bed below) the pitch params exist to
+  // assert against.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const synth = new Synth();
+  synth.start();
+
+  const from = mark();
+  const bed = synth.bed({ kind: "tone", wave: "sawtooth", filter: "lowpass", q: 4, ratio: 1.5 });
+  bed.set(0.4, 220, 900, 0, 0);
+  const fresh = nodes.slice(from);
+  const filterNode = fresh.find((n) => n.kind === "biquad");
+  // The bed also builds an LFO oscillator (for the tremolo), which `dip`
+  // never touches — so the pitch oscillators are the ones that feed the
+  // filter, not merely every oscillator in the graph.
+  const pitchOscillators = fresh.filter((n) => n.kind === "oscillator" && n.out.includes(filterNode));
+  ok(
+    "set() at a live level builds a filter and two pitch oscillators",
+    filterNode !== undefined && pitchOscillators.length === 2,
+    `${pitchOscillators.length}`,
+  );
+
+  const filterEventsBefore = filterNode.frequency.events.length;
+  const pitchEventsBefore = pitchOscillators[0].frequency.events.length;
+
+  bed.dip(0.12);
+
+  ok(
+    "dip writes at least a dip-and-recover pair to the filter",
+    filterNode.frequency.events.length - filterEventsBefore >= 2,
+    `${filterNode.frequency.events.length - filterEventsBefore}`,
+  );
+  ok(
+    "dip writes the same pair to a pitch",
+    pitchOscillators[0].frequency.events.length - pitchEventsBefore >= 2,
+    `${pitchOscillators[0].frequency.events.length - pitchEventsBefore}`,
+  );
+
+  const filterEvents = filterNode.frequency.events;
+  const dipEvent = filterEvents[filterEvents.length - 2];
+  const recoverEvent = filterEvents[filterEvents.length - 1];
+  ok("the dip drops the filter to 0.55 of its last target", Math.abs(dipEvent[1] - 900 * 0.55) < 1e-6, `${dipEvent[1]}`);
+  ok(
+    "...and recovers to the target it was already heading for, not a hardcoded one",
+    Math.abs(recoverEvent[1] - 900) < 1e-6,
+    `${recoverEvent[1]}`,
+  );
+  ok("the dip is fast and the recovery is slower", dipEvent[3] < recoverEvent[3], `${dipEvent[3]} vs ${recoverEvent[3]}`);
+
+  // A bed that never reached a live level never built nodes — `dip` on one is
+  // a guarded no-op, the same contract `set` itself keeps.
+  const silent = synth.bed({ kind: "tone" });
+  silent.dip(0.1);
+  ok("dip on a bed with no nodes does not throw", true);
+}
+
+{
+  // The wiring: `sound.hitStop` marks every live bed it owns. Only the
+  // engine bed is ever live through `update()` — the alert bed is held at
+  // silence by design (see `Sound.update`'s own comment) — so this exercises
+  // the filter side of the dip; the pitch side is already covered above,
+  // since a noise bed (the engine's own kind) has no pitch params at all.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false });
+
+  const filters = nodes.filter((n) => n.kind === "biquad" && n.type === "lowpass");
+  ok("update() under thrust builds exactly the engine bed's filter", filters.length === 1, `${filters.length}`);
+  const before = filters[0].frequency.events.length;
+
+  s.hitStop(0.12);
+
+  ok(
+    "hitStop writes a dip-and-recover pair to the engine's filter",
+    filters[0].frequency.events.length - before >= 2,
+    `${filters[0].frequency.events.length - before}`,
+  );
+
+  // The silent alert bed rides along in the same call and never throws.
+  ok("hitStop with a never-built bed in the mix does not throw", true);
 }
 
 // ── report ─────────────────────────────────────────────────────────────────

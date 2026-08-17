@@ -168,6 +168,18 @@ export class Sound {
     );
   }
 
+  /**
+   * Hit-stop's own reach into the sustained voices. A one-shot cue already
+   * reads as an impact because it starts and stops; a bed just sits there
+   * unless something marks the instant, so every bed this class owns gets a
+   * brief dip — the beds' half of the same beat the game's own time
+   * dilation is selling. Every bed I own, so a later one (the reactor bed)
+   * only has to join this list.
+   */
+  hitStop(seconds: number): void {
+    for (const bed of [this.alert, this.engine]) bed?.dip(seconds);
+  }
+
   /** A restart, a mode change, a death: whatever was ringing stops ringing. */
   silence(): void {
     this.synth.silence();

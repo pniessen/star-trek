@@ -1,3 +1,5 @@
+import { sound } from "../audio/sound.js";
+
 /**
  * A few frames of time dilation when something lands.
  *
@@ -49,9 +51,16 @@ export class HitStop {
     return this.remaining > 0;
   }
 
-  /** Refresh the window. Never accumulates, never exceeds `HIT_STOP.max`. */
+  /**
+   * Refresh the window. Never accumulates, never exceeds `HIT_STOP.max`.
+   *
+   * Marks the beds here rather than at each call site — every strike, from
+   * whichever system asks for one, dips the sustained voices the same way
+   * the game's own time dilates, and no caller has to remember to do it.
+   */
   strike(duration: number): void {
     this.remaining = Math.min(HIT_STOP.max, Math.max(this.remaining, duration));
+    sound.hitStop(duration);
   }
 
   /** @param realDt wall-clock seconds — never the dilated ones. */

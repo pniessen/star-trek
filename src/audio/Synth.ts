@@ -945,6 +945,15 @@ interface BedNodes {
 export class Bed {
   private nodes: BedNodes | null = null;
 
+  /**
+   * The filter cutoff and per-oscillator pitch targets `set` last asked for —
+   * not what is currently sounding, which `setTargetAtTime` is still gliding
+   * toward. `dip` recovers to these rather than to a hardcoded value, so a bed
+   * dipped mid-glide still lands where the game actually wants it.
+   */
+  private lastCutoff = 0;
+  private lastPitches: number[] = [];
+
   constructor(
     private readonly synth: Synth,
     private readonly spec: BedSpec,
@@ -969,13 +978,54 @@ export class Bed {
       const now = rig.ctx.currentTime;
       const glide = 0.12;
       nodes.gain.gain.setTargetAtTime(Math.max(0, level), now, glide);
-      nodes.filter.frequency.setTargetAtTime(clamp(cutoff, 30, 16000), now, glide);
+      const cutoffTarget = clamp(cutoff, 30, 16000);
+      nodes.filter.frequency.setTargetAtTime(cutoffTarget, now, glide);
+      this.lastCutoff = cutoffTarget;
       nodes.lfo.frequency.setTargetAtTime(clamp(rate, 0.05, 24), now, glide);
       nodes.depth.gain.setTargetAtTime(clamp(depth, 0, 0.5), now, glide);
       nodes.tremolo.gain.setTargetAtTime(1 - clamp(depth, 0, 0.5), now, glide);
       for (let i = 0; i < nodes.pitches.length; i++) {
         const ratio = i === 0 ? 1 : (this.spec.ratio ?? 1.5);
-        nodes.pitches[i].setTargetAtTime(clamp(freq * ratio, 20, 16000), now, glide);
+        const pitchTarget = clamp(freq * ratio, 20, 16000);
+        nodes.pitches[i].setTargetAtTime(pitchTarget, now, glide);
+        this.lastPitches[i] = pitchTarget;
+      }
+    } catch (error) {
+      this.synth.fail(error);
+    }
+  }
+
+  /**
+   * A brief lowpass-and-pitch dip that recovers on its own — hit-stop's own
+   * cue for a sustained voice, since a bed cannot itself be time-dilated the
+   * way a game-time envelope can. Driven by the audio clock, wall-clock like
+   * hit-stop, so the dip and the frame it marks stay in the same instant
+   * regardless of `Session.timeScale`.
+   *
+   * A no-op on a bed that never reached a live level: `nodes` is null and
+   * there is nothing to dip. Never throws, on the same contract as `set`.
+   *
+   * @param seconds how long the dip takes to recover — hit-stop's own window.
+   */
+  dip(seconds: number): void {
+    const rig = this.synth.context;
+    if (!rig) return;
+    const nodes = this.nodes;
+    if (!nodes) return;
+
+    try {
+      const now = rig.ctx.currentTime;
+      const attack = 0.008;
+      nodes.filter.frequency.setTargetAtTime(this.lastCutoff * 0.55, now, attack);
+      for (let i = 0; i < nodes.pitches.length; i++) {
+        nodes.pitches[i].setTargetAtTime((this.lastPitches[i] ?? 0) * 0.94, now, attack);
+      }
+
+      const recoverAt = now + seconds * 0.25;
+      const recoverTau = seconds / 3;
+      nodes.filter.frequency.setTargetAtTime(this.lastCutoff, recoverAt, recoverTau);
+      for (let i = 0; i < nodes.pitches.length; i++) {
+        nodes.pitches[i].setTargetAtTime(this.lastPitches[i] ?? 0, recoverAt, recoverTau);
       }
     } catch (error) {
       this.synth.fail(error);
