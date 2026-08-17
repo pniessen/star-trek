@@ -2018,6 +2018,43 @@ let chain;
   s.approach(0.8, false);
   ok("approach rate-limits to one call per 0.35s", voicesSince(from).length === 0, `${voicesSince(from).length}`);
 
+  // Important #5(a): `approach` holds one persistent `radio`-bus group token
+  // for the whole aligning session, not a fresh one per call. Proven by
+  // filling two of the bus's three slots directly first (ungrouped, so each
+  // costs its own slot), then calling `approach` twice, `APPROACH.rate`
+  // apart, both times on-course (`onCourseHold` is 0.4s — longer than the
+  // 0.35s retrigger, so the first voice is still ringing when the second
+  // call fires). If `approach` asked `Synth.group()` for a fresh token every
+  // call, the second call would need a *second* distinct slot while the
+  // first was still live — 2 fillers + 2 distinct approach groups is 4 on a
+  // bus capped at 3 — and get silently dropped. One shared token needs only
+  // the one slot for the whole session, so the second call schedules fine.
+  {
+    const gCtx = makeContext();
+    globalThis.AudioContext = function () { return gCtx; };
+    nodes = [];
+    const gSound = new Sound();
+    gSound.start();
+    gSound.listen(0, 0, 0);
+    // Long enough to still be live (unreaped) after the 0.35s advance below —
+    // a near-zero-duration filler would already have been reaped by the
+    // second call regardless of the bug, and prove nothing.
+    const filler = { syllables: [], duration: 2 };
+    gSound.synth.speak({ phrase: filler, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+    gSound.synth.speak({ phrase: filler, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+
+    gSound.approach(0, true); // the session's first call — takes the one free slot
+    gCtx.currentTime += 0.35; // clears the rate gate, still inside the first voice's own ~0.48s span
+    const from2 = mark();
+    gSound.approach(0, true); // still the same session — must not be refused
+    const secondCallVoices = voicesSince(from2);
+    ok(
+      "a second, overlapping approach call in the same session still schedules — one shared slot, not two",
+      secondCallVoices.length === 1,
+      `${secondCallVoices.length}`,
+    );
+  }
+
   // The four registers agree: every frequency collected above is a motif
   // degree times a plain octave — the whole point of this task.
   const allFreqs = [depositVoices[0].from, tick[0].from, ...steps.map((v) => v.from), ...tallyVoices.map((v) => v.from)];
@@ -2184,8 +2221,9 @@ let chain;
   capSynth.start();
   const tiny = { syllables: [{ at: 0, length: 0.05, pitch: 160, f1: 500, f2: 1500, f3: 2500, level: 1 }], duration: 0.05 };
   const capFrom = mark();
+  const capResults = [];
   for (let i = 0; i < 5; i++) {
-    capSynth.speak({ phrase: tiny, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+    capResults.push(capSynth.speak({ phrase: tiny, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] }));
   }
   const capVoices = voicesSince(capFrom);
   ok(
@@ -2193,6 +2231,43 @@ let chain;
     capVoices.filter((v) => v.kind === "tone").length === 3,
     `${capVoices.filter((v) => v.kind === "tone").length} tones scheduled`,
   );
+  ok(
+    "...and speak's own return value says exactly that: true × 3, then false × 2",
+    JSON.stringify(capResults) === JSON.stringify([true, true, true, false, false]),
+    JSON.stringify(capResults),
+  );
+
+  // Important #5(b): `Radio.say` must not run its own bookkeeping for a
+  // phrase `Synth.speak` refused to schedule. Fill the radio bus directly
+  // (bypassing `Radio`, the same technique the cap test above uses), then
+  // ask a fresh `Radio` for a phrase against that already-full bus and
+  // confirm the refusal left no trace: `lastPhrase` unmoved, no duck.
+  {
+    const fullCtx = makeContext();
+    globalThis.AudioContext = function () { return fullCtx; };
+    nodes = [];
+    const fullSynth = new Synth();
+    fullSynth.start();
+    const fullRadio = new Radio(fullSynth);
+    for (let i = 0; i < 3; i++) {
+      fullSynth.speak({ phrase: tiny, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+    }
+    const master = nodes.find((n) => n.kind === "gain" && n.out.some((o) => o.kind === "biquad" && o.type === "highpass"));
+    const busGains = nodes.filter((n) => n.kind === "gain" && n.out.includes(master));
+    const beforeEvents = busGains.map((g) => g.gain.events.length);
+    const lastPhraseBefore = fullRadio.lastPhrase;
+    fullRadio.say("ours", "dispatch", { now: fullCtx.currentTime, rng: Math.random });
+    ok(
+      "Radio.say against an already-full bus leaves lastPhrase untouched",
+      fullRadio.lastPhrase === lastPhraseBefore,
+      JSON.stringify(fullRadio.lastPhrase),
+    );
+    ok(
+      "...and does not duck the weapon bus either",
+      busGains.every((g, i) => g.gain.events.length === beforeEvents[i]),
+      "",
+    );
+  }
 
   // `Sound.say`'s own never-throw contract. Unlike every other cue, this
   // one runs pure logic (`Radio.say`'s bookkeeping, `composePhrase`)

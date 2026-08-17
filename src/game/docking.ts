@@ -239,6 +239,13 @@ export class Docking {
     if (g.visible && g.inGate && !wasInGate) sound.gate();
 
     if (!g.visible) {
+      // Leaving `"aligning"` — release `approach`'s own session token
+      // (`Sound.approachEnd`'s own docblock) so a later, fresh aligning
+      // session does not inherit one whose voices finished ringing long ago.
+      // Guarded on the phase actually having been aligning: this branch also
+      // runs on every ordinary frame guidance stays out of range, where the
+      // token is already `null` and the call is a harmless no-op either way.
+      if (this.phase === "aligning") sound.approachEnd();
       this.phase = "none";
       this.rearm = false;
       this.status = "";
@@ -263,6 +270,9 @@ export class Docking {
             : "ON APPROACH";
 
     if (!this.rearm && g.inGate && g.speedOk && g.headingOk) {
+      // Leaving `"aligning"` the other way — capture engaging rather than
+      // guidance dropping out. Same release as above, same reason.
+      sound.approachEnd();
       this.phase = "capture";
       this.captureProgress = 0;
       this.captureFrom.copy(player.position);

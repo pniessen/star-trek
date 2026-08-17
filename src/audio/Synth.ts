@@ -498,10 +498,20 @@ export class Synth {
    * it goes through the same cap check `play` does and needs no `group`.
    * Mirrors `play`'s never-throw contract exactly: guarded the same way,
    * failed the same way.
+   *
+   * Returns whether a voice was actually scheduled — `false` on every guard
+   * above (no rig, failed, silenced, context not running), on the bus cap
+   * refusing the cue, and on an internal failure that retires the layer;
+   * `true` once the voice is pushed. `play` stays `void` — nothing reads
+   * whether an ordinary one-shot cue was admitted — but `Radio.say` has its
+   * own bookkeeping (`busyUntil`, `queueBoundary`, `lastPhrase`, the weapon-
+   * bus duck) riding on this one specifically, and running that bookkeeping
+   * for a phrase that never actually reached the bus is exactly the bug this
+   * return value exists to let the caller avoid.
    */
-  speak(spec: PhraseSpec): void {
+  speak(spec: PhraseSpec): boolean {
     const rig = this.rig;
-    if (!rig || this.failed || this.silenced || rig.ctx.state !== "running") return;
+    if (!rig || this.failed || this.silenced || rig.ctx.state !== "running") return false;
 
     try {
       const ctx = rig.ctx;
@@ -511,7 +521,7 @@ export class Synth {
 
       this.reap(now);
       const busName = spec.bus;
-      if (this.count(busName) >= BUS_CAPS[busName]) return;
+      if (this.count(busName) >= BUS_CAPS[busName]) return false;
 
       const chain: AudioNode[] = [];
 
@@ -626,8 +636,10 @@ export class Synth {
         if (index >= 0) this.voices.splice(index, 1);
       };
       this.voices.push(voice);
+      return true;
     } catch (error) {
       this.fail(error);
+      return false;
     }
   }
 

@@ -288,7 +288,7 @@ export class Radio {
     const phrase = composePhrase(overrideFor(event, cadence), rng);
     const span = phrase.duration + 2 * SQUELCH_LEN;
 
-    this.synth.speak({
+    const scheduled = this.synth.speak({
       phrase,
       bus: "radio",
       // Distance is the tell: a near Lance's charge chatter louder than a
@@ -301,6 +301,17 @@ export class Radio {
       pan,
       delay,
     });
+    // `Synth.speak` refuses silently — a full `radio` bus, most likely,
+    // since every guard ahead of the cap check is already covered by
+    // `Sound.say`'s own `!this.synth.live` return — and used to leave this
+    // method's own bookkeeping running anyway: `busyUntil`/`queueBoundary`
+    // would book the party busy against a voice that was never actually
+    // scheduled, `lastPhrase` would claim a phrase spoke that never sounded,
+    // and the duck below would dip the weapon bus for nothing. All three are
+    // real state a caller (a probe, a later `say`) can observe, so a refusal
+    // has to leave no trace rather than a trace for an event that did not
+    // happen.
+    if (!scheduled) return;
     // Ducks through however long this phrase is on air, delay included —
     // `Synth.duck` has no delay parameter of its own, so a queued phrase's
     // dip starts now and simply covers the wait too.

@@ -388,6 +388,29 @@ export class Sound {
   private lastApproachAt = -Infinity;
 
   /**
+   * `approach`'s own budget token on the `radio` bus — one persistent
+   * `Synth.group()` id for the whole aligning session, not a fresh one per
+   * call. `APPROACH.rate` (0.35s) is *shorter* than the voices it schedules
+   * (`onCourseHold` alone is 0.4s, before its own decay), so consecutive
+   * calls legitimately overlap in time — that overlap is the point, it is
+   * what makes retriggering read as one held tone rather than a series of
+   * blips. A fresh `group()` per call used to mean two overlapping calls
+   * counted as two separate slots on `radio`'s own cap of 3 (one per party),
+   * so roughly a third of the time the approach range was quietly spending
+   * two of the channel's three slots on itself, competing with the Warden's
+   * and the enemy's own chatter for a shared budget none of them actually
+   * grew. Reusing one token for the session means every voice `approach`
+   * schedules, however many overlap, is still exactly one slot — `Synth.
+   * count()` dedupes live voices by `group`, so this is free.
+   *
+   * `null` between aligning sessions. Set on `approach`'s first call in a
+   * fresh session; released by `approachEnd()` (`Docking` calls it the
+   * instant `phase` leaves `"aligning"`) and by `silence()` (a restart mid-
+   * approach must not leave a stale token for the next session to inherit).
+   */
+  private approachGroup: number | null = null;
+
+  /**
    * The probe's own hook: when a ping last sounded and how rough it was.
    * `null` until the first one, same convention as every other "nothing has
    * happened yet" field in this file.
@@ -782,6 +805,11 @@ export class Sound {
     this.lastPingAt = -Infinity;
     this.lastMineTickAt = -Infinity;
     this.lastApproachAt = -Infinity;
+    // `approach`'s own session token, released the same way `approachEnd`
+    // releases it on an ordinary phase change — a restart mid-approach must
+    // not hand the next run's first aligning session a token left over from
+    // this one.
+    this.approachGroup = null;
     this.deathPowerActive = false;
     this.radio.reset();
     // The threat duck, released: a run that just ended should not leave the
@@ -2431,9 +2459,17 @@ export class Sound {
     if (now === undefined || now - this.lastApproachAt < APPROACH.rate) return;
     this.lastApproachAt = now;
 
+    // One token for the whole aligning session — `approachGroup`'s own
+    // docblock has the full reasoning. Every voice below shares it, on-course
+    // included, so the range never asks the `radio` bus for more than the
+    // one slot it has always conceptually been.
+    if (this.approachGroup === null) this.approachGroup = this.synth.group();
+    const g = this.approachGroup;
+
     if (onCourse) {
       this.synth.play({
         bus: "radio",
+        group: g,
         wave: "sine",
         freq: APPROACH.freq,
         level: APPROACH.level,
@@ -2444,8 +2480,8 @@ export class Sound {
       return;
     }
 
-    // Two layers, one slot — the letter is one gesture, not two competing ones.
-    const g = this.synth.group();
+    // Two layers, still the one session slot — the letter is one gesture,
+    // not two competing ones.
     const starboard = offCourse >= 0;
     const first = starboard ? APPROACH.dot : APPROACH.dash;
     const second = starboard ? APPROACH.dash : APPROACH.dot;
@@ -2470,6 +2506,20 @@ export class Sound {
       decay: 0.03,
       delay: first + 0.03 + APPROACH.gap,
     });
+  }
+
+  /**
+   * Releases `approach`'s own persistent group token. `Docking` calls this
+   * the instant `phase` leaves `"aligning"` — visibility lost, or capture
+   * engaged — so a later, fresh aligning session (a second dock, or the same
+   * one re-attempted after drifting back out of guidance range) starts its
+   * own token rather than inheriting one whose voices finished ringing
+   * seconds or minutes ago. Also called from `silence()`, for the restart
+   * case: a run ending mid-approach must not hand the next run's first
+   * aligning session a token left over from this one.
+   */
+  approachEnd(): void {
+    this.approachGroup = null;
   }
 
   /** Entering the capture ring. A tick, so the gate is something you hear pass. */
