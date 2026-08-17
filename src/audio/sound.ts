@@ -791,6 +791,21 @@ export class Sound {
     // level `update`'s own duck was riding.
     this.synth.spaceLevel(1);
     this.inComet = false;
+    // A restart (or any other call into `silence`) while standing inside
+    // the comet must not leave its mist latched for whatever follows.
+    // `inComet` above already clears the *latch* itself, but that alone is
+    // not enough: `insideComet(0)` on the very next frame reads "already
+    // outside" and no-ops, and `enterSector`'s own key cache reads the next
+    // same-sector call — the common case, since a restart does not move the
+    // ship to a different sector — as nothing having changed and skips it
+    // too. Between the two, nothing was ever going to call
+    // `applySectorRoom` again, so the comet's own `RoomDesign` — the
+    // loudest send in the bank — would keep ringing for the entire next
+    // run. Clearing the key forces the next `enterSector` call to actually
+    // re-apply the sector's own room, which is also exactly what a restart
+    // into a genuinely different sector already gets for free from a fresh
+    // key.
+    this.sectorKey = "";
   }
 
   // ── weapons ──────────────────────────────────────────────────────────────

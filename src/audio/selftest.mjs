@@ -2500,6 +2500,38 @@ const { roomFor } = await import(join(out, "audio/acoustics.js"));
 }
 
 {
+  // Important #3: a restart inside the comet must not leave its mist
+  // latched for the run that follows. `silence()` used to clear `inComet`
+  // alone, which left `enterSector`'s own key cache still holding the
+  // pre-restart key — the next same-sector `enterSector` call (the common
+  // case; a restart does not move the ship) read as "nothing changed" and
+  // never called `applySectorRoom` again, so the comet's `RoomDesign`
+  // (the loudest send in the bank) kept ringing through the whole next run.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  s.enterSector("rocks", false, 11, 4);
+  ok("rocks room is showing before the comet", s.room.name === "rocks", JSON.stringify(s.room));
+
+  s.insideComet(0.6); // above the enter threshold: the tail takes over
+  ok("the comet's mist takes over", s.room.name === "comet", JSON.stringify(s.room));
+
+  s.silence(); // restart (R) in the same sector; Ship.reset zeroes interference
+  s.insideComet(0); // the frame loop's own next call, now that interference is zero
+
+  s.enterSector("rocks", false, 11, 4); // same key as before the restart
+  ok(
+    "after a restart, re-entering the same sector shows the sector's own room again, not the comet's",
+    s.room && s.room.name === "rocks",
+    JSON.stringify(s.room),
+  );
+}
+
+{
   // The threat duck: `update` scales every open send down as threat rises,
   // and `silence` lets go of the duck immediately rather than waiting for
   // threat to fall back to zero.
