@@ -250,6 +250,10 @@ first-draft guesses in the same sense as everything above.
 - the alert's threat scaling — tension or nuisance, undecidable from source
 - the decloak, which has to cut through a firefight without being the loudest
   thing in the game
+- `hardDock`'s fm layer's `indexDecay = 0.05` — a guess at "short" against its
+  own 0.3s decay, unflown like the rest; too short and the clunk loses the
+  bell character entirely, too long and it drifts back toward `shieldHit`'s
+  ring
 
 **Impulse power** — `Ship.IMPULSE = 0.32` and `IMPULSE_FLOOR = 0.02`. Is
 limping home at a third of thrust a mercy or a punishment?

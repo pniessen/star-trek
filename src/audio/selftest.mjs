@@ -866,6 +866,26 @@ let chain;
   near("the modulator sits at ratio × carrier", modulator ? modulator.frequency.events[0][1] : 0, 220 * 1.4, 1e-6);
   const modGain = fresh.find((g) => g.kind === "gain" && modulator && modulator.out.includes(g));
   ok("the index decays (a ramp is scheduled on the modulator gain)", modGain && modGain.gain.events.length >= 2, "index has no envelope");
+
+  // `index: 0` would otherwise schedule an exponential ramp starting from a
+  // literal 0, which real WebAudio throws on — and that throw lands inside
+  // `play`'s try/catch, retiring the whole audio layer for the session. The
+  // depth gain's own initial value must be floored the same way the voice
+  // envelope's is.
+  const zeroFrom = mark();
+  synth.play({ kind: "fm", bus: "impact", freq: 220, index: 0, decay: 0.2, level: 0.2 });
+  const zeroFresh = nodes.slice(zeroFrom);
+  const zeroOscs = zeroFresh.filter((n) => n.kind === "oscillator");
+  const zeroCarrier = zeroOscs.find((o) =>
+    zeroFresh.some((g) => g.kind === "gain" && o.out.includes(g) && g.gain.events[0] && g.gain.events[0][1] === 0.0001),
+  );
+  const zeroModulator = zeroOscs.find((o) => o !== zeroCarrier);
+  const zeroDepth = zeroFresh.find((g) => g.kind === "gain" && zeroModulator && zeroModulator.out.includes(g));
+  ok(
+    "index: 0 floors the depth gain instead of starting an exponential ramp from 0",
+    zeroDepth && zeroDepth.gain.events[0] && zeroDepth.gain.events[0][1] >= 0.0001,
+    zeroDepth ? `${zeroDepth.gain.events[0][1]}` : "no depth gain found",
+  );
 }
 
 // ── report ─────────────────────────────────────────────────────────────────

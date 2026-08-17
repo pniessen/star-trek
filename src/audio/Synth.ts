@@ -332,7 +332,11 @@ export class Synth {
         modulator.frequency.setValueAtTime(clamp(spec.freq * ratio, 1, 18000), at);
         const depth = ctx.createGain();
         const index = spec.index ?? 3;
-        depth.gain.setValueAtTime(index * spec.freq, at);
+        // Floored for the same reason the voice envelope's own gain is
+        // floored at 0.0001 rather than 0: an exponential ramp cannot start
+        // from a literal 0, and an `index: 0` caller would otherwise throw
+        // inside `play`'s try/catch and retire the whole audio layer.
+        depth.gain.setValueAtTime(Math.max(index * spec.freq, 0.0001), at);
         // The index is the timbre's own envelope: bright and inharmonic on the
         // attack, settling toward a plain tone — a struck bell, not a held one.
         depth.gain.exponentialRampToValueAtTime(0.01, at + Math.max(spec.indexDecay ?? spec.decay, 0.01));
