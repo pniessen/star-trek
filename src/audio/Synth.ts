@@ -26,11 +26,28 @@
  */
 
 /**
- * Four buses, so the mix is a handful of constants in one place rather than a
+ * Nine buses, so the mix is a handful of constants in one place rather than a
  * level on every cue. Weapons are their own bus because phasers fire every
  * 0.16s and are the one thing here that can genuinely become fatiguing.
+ *
+ * `hostile`, `mechanism` and `alert` split out of the original `weapon`/
+ * `impact`/`panel` grab-bag so the static caps below (`BUS_CAPS`) mean
+ * something: a wave of hostiles firing has its own budget that a mine field
+ * or a hard dock cannot steal from, and vice versa. `radio` and `echo` are
+ * built ahead of the consumers that use them (the three-party radio and
+ * positional rock echo, both later tasks) so the whole bus/cap vocabulary
+ * lands in one place rather than growing bus-by-bus.
  */
-export type Bus = "weapon" | "impact" | "panel" | "bed";
+export type Bus =
+  | "weapon"
+  | "impact"
+  | "hostile"
+  | "mechanism"
+  | "panel"
+  | "bed"
+  | "alert"
+  | "radio"
+  | "echo";
 
 export interface VoiceSpec {
   /** Pitched by default; `noise` swaps the oscillator for filtered noise. */
@@ -69,20 +86,40 @@ export interface BedSpec {
 }
 
 /**
- * Ceiling on simultaneous voices. A wave-eight fight with a chain of mines
- * going off and three hostiles firing will ask for more than this, and the
- * honest answer is to refuse the surplus rather than to let a hundred
- * oscillators accumulate — the eleventh explosion in a second is not
- * information anyone is listening for.
+ * Ceiling on simultaneous voices, per bus rather than global — the
+ * four-channel-chip principle from `docs/audio-prior-art.md` §6. A wave-eight
+ * fight with a chain of mines going off and three hostiles firing will ask
+ * for more than any one of these, and the honest answer is to refuse the
+ * surplus rather than to let a hundred oscillators accumulate — the eleventh
+ * explosion in a second is not information anyone is listening for. Splitting
+ * the old single `MAX_VOICES = 18` into per-bus budgets means a busy hostile
+ * bus can no longer starve a hard dock of its own two voices: each channel
+ * degrades on its own terms. First-draft numbers, `docs/todo.md`'s tuning
+ * list.
  */
-const MAX_VOICES = 18;
+const BUS_CAPS: Record<Bus, number> = {
+  weapon: 3,
+  impact: 4,
+  hostile: 4,
+  mechanism: 2,
+  panel: 2,
+  bed: 2,
+  alert: 1,
+  radio: 3, // one per party — ours, warden, theirs
+  echo: 3,
+};
 
-/** Peak gain per bus. The entire mix balance is these four numbers. */
+/** Peak gain per bus. The entire mix balance is these nine numbers. */
 const BUS_LEVELS: Record<Bus, number> = {
   weapon: 0.5,
   impact: 0.85,
+  hostile: 0.7,
+  mechanism: 0.7,
   panel: 0.7,
   bed: 0.6,
+  alert: 0.7,
+  radio: 0.75,
+  echo: 0.55,
 };
 
 /**
@@ -123,6 +160,8 @@ interface Voice {
   readonly end: number;
   readonly gain: GainNode;
   readonly source: AudioScheduledSourceNode;
+  /** Which bus's budget this voice counts against. */
+  readonly bus: Bus;
 }
 
 type ContextCtor = typeof AudioContext;
@@ -204,13 +243,16 @@ export class Synth {
       const end = at + attack + hold + Math.max(spec.decay, 0.01);
 
       this.reap(now);
+      const busName = spec.bus ?? "impact";
       // Cap and drop, never steal. The pool used to cut the voice nearest the
       // end of its life to make room; `audio-prior-art.md` §5 and §6.2 are both
       // explicit that this is backwards — a shot that never sounds in a dense
       // moment is imperceptible, and a voice cut while it is still saying
       // something is not. Dropping also degrades *predictably*, which is the
       // half of §6's static-allocation argument that needs no new numbers.
-      if (this.voices.length >= MAX_VOICES) return;
+      // Per-bus rather than global, so a busy hostile bus cannot starve the
+      // mechanism bus of the two voices a hard dock needs.
+      if (this.count(busName) >= BUS_CAPS[busName]) return;
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0.0001, at);
@@ -256,18 +298,18 @@ export class Synth {
         source = osc;
       }
 
-      const bus = rig.buses[spec.bus ?? "impact"];
+      const busGain = rig.buses[busName];
       if (spec.pan !== undefined && typeof ctx.createStereoPanner === "function") {
         const panner = ctx.createStereoPanner();
         panner.pan.value = clamp(spec.pan, -1, 1);
-        gain.connect(panner).connect(bus);
+        gain.connect(panner).connect(busGain);
         chain.push(panner);
       } else {
-        gain.connect(bus);
+        gain.connect(busGain);
       }
 
       source.stop(end + 0.02);
-      const voice: Voice = { end, gain, source };
+      const voice: Voice = { end, gain, source, bus: busName };
       source.onended = () => {
         // The whole chain, not just the gain. A filter or a panner left hanging
         // off a dead source is a node the engine has to keep considering, and
@@ -302,6 +344,30 @@ export class Synth {
     try {
       const now = rig.ctx.currentTime;
       for (const voice of [...this.voices]) this.cut(voice, now);
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * A smoothed dip on one bus that recovers on its own — the "duck the world,
+   * do not raise the alarm" move from `docs/audio-prior-art.md`: the radio
+   * ducks the weapon bus a few dB while a phrase plays; threat ducks the space.
+   * Depth in dB (positive = quieter), recovery in seconds. Never below silence,
+   * never above the bus's own level, and it composes: a second duck during a
+   * recovery restarts the dip from wherever the gain is.
+   */
+  duck(bus: Bus, depthDb: number, seconds: number): void {
+    const rig = this.rig;
+    if (!rig || this.failed) return;
+    try {
+      const gain = rig.buses[bus].gain;
+      const now = rig.ctx.currentTime;
+      const level = BUS_LEVELS[bus];
+      const dipped = level * Math.pow(10, -Math.abs(depthDb) / 20);
+      gain.cancelScheduledValues(now);
+      gain.setTargetAtTime(dipped, now, 0.012);
+      gain.setTargetAtTime(level, now + 0.05, Math.max(seconds, 0.05) / 3);
     } catch (error) {
       this.fail(error);
     }
@@ -392,6 +458,13 @@ export class Synth {
     for (let i = this.voices.length - 1; i >= 0; i--) {
       if (this.voices[i].end <= now) this.voices.splice(i, 1);
     }
+  }
+
+  /** Live voices on one bus, after `reap` — what `play` checks against `BUS_CAPS`. */
+  private count(bus: Bus): number {
+    let n = 0;
+    for (const voice of this.voices) if (voice.bus === bus) n++;
+    return n;
   }
 
   private cut(voice: Voice, now: number): void {

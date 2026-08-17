@@ -89,7 +89,14 @@ function clamp(value: number, low: number, high: number): number {
 }
 
 export class Sound {
-  private readonly synth = new Synth();
+  /**
+   * @internal Public rather than private so the audiotest's duck assertion,
+   * and later tasks that need the bench itself rather than a cue
+   * (`sound.synth.setSpace(...)`, the radio's `Radio` construction), can
+   * reach it. Not for game code — every real call site goes through a named
+   * cue on `Sound`.
+   */
+  readonly synth = new Synth();
   private alert: Bed | null = null;
   private engine: Bed | null = null;
 
@@ -321,7 +328,7 @@ export class Sound {
     // sounds nobody can hear.
     if (level < 0.06) return;
     this.synth.play({
-      bus: "weapon",
+      bus: "hostile",
       wave: "sawtooth",
       freq: 520,
       to: 300,
@@ -341,7 +348,7 @@ export class Sound {
     const { level, pan } = this.place(x, z);
     if (level < 0.06) return;
     this.synth.play({
-      bus: "weapon",
+      bus: "hostile",
       wave: "sawtooth",
       freq: 300,
       to: 640,
@@ -358,7 +365,6 @@ export class Sound {
     if (level < 0.06) return;
     this.synth.play({
       kind: "noise",
-      bus: "weapon",
       filter: "bandpass",
       q: 2.2,
       freq: 1900,
@@ -534,7 +540,7 @@ export class Sound {
     // as charge being moved through something rather than as a filter closing.
     this.synth.play({
       kind: "noise",
-      bus: "panel",
+      bus: "mechanism",
       filter: "bandpass",
       q: 4,
       freq: 2600,
@@ -546,7 +552,7 @@ export class Sound {
     // Up, and landing on a fifth — the only interval in the bank that resolves,
     // because the one thing this sound has to say is that it worked.
     this.synth.play({
-      bus: "panel",
+      bus: "mechanism",
       wave: "square",
       freq: 220,
       to: 330,
@@ -582,6 +588,7 @@ export class Sound {
     const { level, pan } = this.place(x, z);
     this.synth.play({
       kind: "noise",
+      bus: "hostile",
       filter: "lowpass",
       q: 0.9,
       freq: 1300,
@@ -592,6 +599,7 @@ export class Sound {
       pan,
     });
     this.synth.play({
+      bus: "hostile",
       wave: "sine",
       freq: 150,
       to: 40,
@@ -607,6 +615,7 @@ export class Sound {
     const { level, pan } = this.place(x, z);
     if (level < 0.08) return;
     this.synth.play({
+      bus: "hostile",
       wave: "triangle",
       freq: 880,
       to: 700,
@@ -813,6 +822,7 @@ export class Sound {
     const { level, pan } = this.place(x, z, 0.62);
     for (const detune of [1, 1.043]) {
       this.synth.play({
+        bus: "hostile",
         wave: "sawtooth",
         freq: 300 * detune,
         to: 1500 * detune,
@@ -824,6 +834,7 @@ export class Sound {
     }
     this.synth.play({
       kind: "noise",
+      bus: "hostile",
       filter: "bandpass",
       q: 3,
       freq: 700,
@@ -835,6 +846,7 @@ export class Sound {
     });
     this.synth.play({
       kind: "noise",
+      bus: "hostile",
       filter: "highpass",
       freq: 2400,
       level: 0.17 * level,
@@ -844,6 +856,7 @@ export class Sound {
       pan,
     });
     this.synth.play({
+      bus: "hostile",
       wave: "triangle",
       freq: 1500,
       to: 420,
@@ -913,7 +926,7 @@ export class Sound {
       [57.4, 110, 0.055],
     ]) {
       this.synth.play({
-        bus: "panel",
+        bus: "mechanism",
         wave: "sawtooth",
         freq: from,
         to,
@@ -928,7 +941,7 @@ export class Sound {
     // climbing rather than as a hiss being faded in.
     this.synth.play({
       kind: "noise",
-      bus: "panel",
+      bus: "mechanism",
       filter: "bandpass",
       q: 6,
       freq: 220,
@@ -942,10 +955,10 @@ export class Sound {
 
   /** Cut short. The spin-down is the refund of nothing, said in one syllable. */
   hyperwarpAbort(): void {
-    this.synth.play({ bus: "panel", wave: "sawtooth", freq: 82, to: 41, level: 0.08, decay: 0.22 });
+    this.synth.play({ bus: "mechanism", wave: "sawtooth", freq: 82, to: 41, level: 0.08, decay: 0.22 });
     this.synth.play({
       kind: "noise",
-      bus: "panel",
+      bus: "mechanism",
       filter: "bandpass",
       q: 5,
       freq: 1800,
@@ -963,7 +976,7 @@ export class Sound {
   hyperwarpArrive(): void {
     this.synth.play({
       kind: "noise",
-      bus: "impact",
+      bus: "mechanism",
       filter: "highpass",
       freq: 900,
       to: 120,
@@ -971,11 +984,11 @@ export class Sound {
       attack: 0.004,
       decay: 0.5,
     });
-    this.synth.play({ bus: "impact", wave: "sine", freq: 220, to: 41, level: 0.18, decay: 0.55 });
+    this.synth.play({ bus: "mechanism", wave: "sine", freq: 220, to: 41, level: 0.18, decay: 0.55 });
     // The far side, a beat later: thin, high, and alone, because you arrived
     // cold and the sector has not said anything back yet.
     this.synth.play({
-      bus: "panel",
+      bus: "mechanism",
       wave: "triangle",
       freq: 1318.5,
       level: 0.07,
@@ -992,7 +1005,7 @@ export class Sound {
   scram(): void {
     this.synth.play({
       kind: "noise",
-      bus: "panel",
+      bus: "mechanism",
       filter: "bandpass",
       q: 3,
       freq: 2400,
@@ -1004,7 +1017,7 @@ export class Sound {
     // Rising, because the reserve is going up, but thin and short so it never
     // reads as a reward.
     this.synth.play({
-      bus: "panel",
+      bus: "mechanism",
       wave: "triangle",
       freq: 196,
       to: 392,
@@ -1038,7 +1051,7 @@ export class Sound {
     const shape = { attack: ALERT_RISE, hold: 0.045, decay: 0.07 };
 
     this.synth.play({
-      bus: "panel",
+      bus: "alert",
       // The waveform follows the tier for the same reason the partials do: a
       // plain beat should be plain all the way down.
       wave: components > 1 ? "sawtooth" : "triangle",
@@ -1049,7 +1062,7 @@ export class Sound {
     if (components < 2) return;
 
     this.synth.play({
-      bus: "panel",
+      bus: "alert",
       wave: "sawtooth",
       freq: frequency * ALERT_SECOND,
       level: ALERT_LEVEL * 0.73,
@@ -1063,7 +1076,7 @@ export class Sound {
     // beating starts but not how fast it beats.
     for (const offset of [-ALERT_AM_RATE, ALERT_AM_RATE]) {
       this.synth.play({
-        bus: "panel",
+        bus: "alert",
         wave: "sine",
         freq: Math.max(30, frequency + offset),
         level: ALERT_LEVEL * ALERT_AM_DEPTH * 0.5,
@@ -1103,7 +1116,7 @@ export class Sound {
         ];
     for (const [mul, delay, level] of burst) {
       this.synth.play({
-        bus: "panel",
+        bus: "alert",
         wave: red ? "sawtooth" : "triangle",
         freq: base * mul,
         to: base * mul * 1.9,
@@ -1117,7 +1130,7 @@ export class Sound {
     if (!red) return;
     this.synth.play({
       kind: "noise",
-      bus: "panel",
+      bus: "alert",
       filter: "bandpass",
       q: 4,
       freq: 700,
@@ -1283,7 +1296,7 @@ export class Sound {
 
   /** Entering the capture ring. A tick, so the gate is something you hear pass. */
   gate(): void {
-    this.synth.play({ bus: "panel", wave: "sine", freq: 1244, level: 0.07, decay: 0.06 });
+    this.synth.play({ bus: "mechanism", wave: "sine", freq: 1244, level: 0.07, decay: 0.06 });
   }
 
   /**
@@ -1303,7 +1316,7 @@ export class Sound {
       [1.5, 0.07],
     ]) {
       this.synth.play({
-        bus: "panel",
+        bus: "mechanism",
         wave: "sine",
         freq: 120 * ratio,
         to: 480 * ratio,
@@ -1315,7 +1328,7 @@ export class Sound {
     }
     this.synth.play({
       kind: "noise",
-      bus: "panel",
+      bus: "mechanism",
       filter: "bandpass",
       q: 2.5,
       freq: 400,
@@ -1331,6 +1344,7 @@ export class Sound {
   hardDock(): void {
     this.synth.play({
       kind: "noise",
+      bus: "mechanism",
       filter: "lowpass",
       q: 0.8,
       freq: 600,
@@ -1339,9 +1353,10 @@ export class Sound {
       attack: 0.001,
       decay: 0.22,
     });
-    this.synth.play({ wave: "sine", freq: 96, to: 52, level: 0.3, attack: 0.002, decay: 0.3 });
+    this.synth.play({ bus: "mechanism", wave: "sine", freq: 96, to: 52, level: 0.3, attack: 0.002, decay: 0.3 });
     this.synth.play({
       kind: "noise",
+      bus: "mechanism",
       filter: "bandpass",
       q: 12,
       freq: 780,
@@ -1355,10 +1370,10 @@ export class Sound {
   /** One blip per system restored, climbing. @param step 0…3 */
   service(step: number): void {
     const note = SERVICE_NOTES[clamp(step, 0, SERVICE_NOTES.length - 1)];
-    this.synth.play({ bus: "panel", wave: "triangle", freq: note, level: 0.12, decay: 0.16 });
+    this.synth.play({ bus: "mechanism", wave: "triangle", freq: note, level: 0.12, decay: 0.16 });
     this.synth.play({
       kind: "noise",
-      bus: "panel",
+      bus: "mechanism",
       filter: "highpass",
       freq: 3200,
       level: 0.04,
@@ -1412,6 +1427,7 @@ export class Sound {
   depart(): void {
     this.synth.play({
       kind: "noise",
+      bus: "mechanism",
       filter: "highpass",
       freq: 200,
       to: 1500,
@@ -1419,7 +1435,7 @@ export class Sound {
       attack: 0.05,
       decay: 0.45,
     });
-    this.synth.play({ wave: "sine", freq: 70, to: 132, level: 0.13, attack: 0.02, decay: 0.4 });
+    this.synth.play({ bus: "mechanism", wave: "sine", freq: 70, to: 132, level: 0.13, attack: 0.02, decay: 0.4 });
   }
 
   // ── the end of a run ─────────────────────────────────────────────────────
