@@ -2329,6 +2329,49 @@ const { roomFor } = await import(join(out, "audio/acoustics.js"));
 }
 
 {
+  // Important #2: the boot sector must not go dry forever. `main.ts` calls
+  // `enterSector` every frame starting from before the first gesture — the
+  // title screen, the attract demo's own boot sector — so the very first
+  // call in a real session has no rig to build a convolver in yet. The old
+  // code cached the key on that call anyway, which made the first
+  // *post*-gesture call with the same `(seed, sector, shoal)` read as a
+  // no-op forever after: the boot sector (and the attract demo, which never
+  // changes sectors) stayed dry for the entire run.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.listen(0, 0, 0);
+
+  // Pre-gesture: no rig, so this must not build anything and must not latch
+  // the key either.
+  s.enterSector("rocks", false, 11, 4);
+  ok("pre-gesture: no convolver yet", !nodes.some((n) => n.kind === "convolver"), "");
+  ok("pre-gesture: the probe still reports no room", s.room === null, JSON.stringify(s.room));
+
+  // The gesture arrives.
+  s.start();
+
+  // Same sector, same args — the exact call the frame loop makes every
+  // frame regardless of whether the sector actually changed.
+  s.enterSector("rocks", false, 11, 4);
+  const conv = nodes.find((n) => n.kind === "convolver");
+  ok("post-gesture: the same call now builds a convolver", conv && conv.buffer !== null, "");
+  ok(
+    "post-gesture: the probe reports the room that was asked for",
+    s.room && s.room.name === "rocks",
+    JSON.stringify(s.room),
+  );
+  const sends = nodes.filter((n) => n.kind === "gain" && n.out.includes(conv));
+  const levels = s.synth.sendLevels();
+  ok(
+    "post-gesture: sends are actually open, not left at 0",
+    sends.length > 0 && levels.weapon > 0,
+    JSON.stringify(levels),
+  );
+}
+
+{
   // `Synth.setSpace`'s own `sameDesign` guard, exercised directly rather
   // than through `Sound`'s own key cache — the guard exists precisely so a
   // caller that does *not* key-cache first (or, like `insideComet`, calls

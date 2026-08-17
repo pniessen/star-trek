@@ -501,10 +501,25 @@ export class Sound {
    * to restore) but does not touch the convolver — the tail's own
    * suppression is total, and a rocks field's slap-echo has no business
    * fading back in until the tail actually lets go.
+   *
+   * `main.ts` calls this every frame from before the first gesture (the
+   * title screen, the attract demo's own boot sector), when
+   * `this.synth.context` is still `null` — `applySectorRoom` would call
+   * into `Synth.setSpace`, which itself no-ops on a missing rig, so the
+   * room silently never reaches the convolver. The key still must not be
+   * committed on that call: it would then read as "already applied" for
+   * every future call with the same `(seed, sector, shoal)`, so the very
+   * first frame after the gesture — the one that actually has a rig to
+   * build a convolver in — would short-circuit on the key cache and leave
+   * the boot sector (and the attract demo, which never jumps sectors)
+   * dry for the entire run despite `__sound.room` claiming wet. Returning
+   * before either cache write is what lets a post-gesture call with the
+   * *same* args still be a real, first-time change.
    */
   enterSector(hero: HeroKind, shoal: boolean, seed: number, sector: number): void {
     const key = `${seed}:${sector}:${shoal}`;
     if (key === this.sectorKey) return;
+    if (this.synth.context === null) return;
     this.sectorKey = key;
     this.sector = { hero, shoal, seed, sector };
     if (!this.inComet) this.applySectorRoom();
