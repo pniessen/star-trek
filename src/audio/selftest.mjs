@@ -498,18 +498,53 @@ let chain;
   const s = new Sound();
   s.start();
   s.listen(0, 0, 0);
+  // The cap counts cues, not voices (owner's ruling, 2026-08-16 — no
+  // exceptions: `phaser` and `kill` are grouped exactly like every other
+  // multi-layer cue). A `hit` phaser is two layers — the zap and its return
+  // blip — sharing one group, so the weapon bus's cap of 3 admits 3 phaser
+  // *cues*, which is 6 voices, not 3.
   let from = mark();
   for (let i = 0; i < 40; i++) s.phaser(true, 1);
-  ok("the weapon bus is capped at 3", voicesSince(from).length === 3, `${voicesSince(from).length}`);
+  const phaserLayers = 2; // zap + return blip, since hit === true
+  ok(
+    "the weapon bus is capped at 3 cues, not 3 voices",
+    voicesSince(from).length === 3 * phaserLayers,
+    `${voicesSince(from).length}, wanted ${3 * phaserLayers}`,
+  );
   from = mark();
   for (let i = 0; i < 40; i++) s.hostileFire(3, 3);
-  ok("the hostile bus is capped at 4", voicesSince(from).length === 4, `${voicesSince(from).length}`);
+  ok("the hostile bus is capped at 4 (hostileFire is a single voice, ungrouped)", voicesSince(from).length === 4, `${voicesSince(from).length}`);
   from = mark();
   for (let i = 0; i < 40; i++) s.kill(4, 4, 1);
   const killVoices = voicesSince(from).length;
-  ok("the impact bus is capped at 4 (per voice, whatever a kill layers)", killVoices <= 4, `${killVoices}`);
+  const killLayers = 3; // lowpass body + sine tone + highpass crack, one group
+  ok(
+    "the impact bus is capped at 4 cues, not 4 voices",
+    killVoices === 4 * killLayers,
+    `${killVoices}, wanted ${4 * killLayers}`,
+  );
   const cancelled = nodes.slice(from).some((n) => n.kind === "gain" && n.gain.events.some((e) => e[0] === "cancel"));
   ok("nothing already sounding was cut", !cancelled);
+
+  // A slot frees once its voices are reaped. Fill the (so-far untouched)
+  // panel bus to its cap of 2 with two distinct groups — one of them two
+  // layers, to confirm a multi-layer group still frees as a unit — then a
+  // third, separate group is refused; advance the clock past every filling
+  // voice's own `end`, and the freed slot admits a fresh group again.
+  const fillA = s.synth.group();
+  s.synth.play({ bus: "panel", group: fillA, freq: 500, level: 0.1, decay: 0.05 });
+  s.synth.play({ bus: "panel", group: fillA, freq: 501, level: 0.1, decay: 0.05 });
+  const fillB = s.synth.group();
+  s.synth.play({ bus: "panel", group: fillB, freq: 600, level: 0.1, decay: 0.05 });
+  const blockedFrom = mark();
+  const blocked = s.synth.group();
+  s.synth.play({ bus: "panel", group: blocked, freq: 700, level: 0.1, decay: 0.05 });
+  ok("a bus at its cap refuses a third, separate group", voicesSince(blockedFrom).length === 0, `${voicesSince(blockedFrom).length}`);
+  ctx.currentTime += 1; // past every filling voice's decay
+  const freedFrom = mark();
+  const freed = s.synth.group();
+  s.synth.play({ bus: "panel", group: freed, freq: 800, level: 0.1, decay: 0.05 });
+  ok("the slot frees once its voices are reaped", voicesSince(freedFrom).length === 1, `${voicesSince(freedFrom).length}`);
   // Duck: a smoothed dip on one bus that recovers.
   //
   // Bus gains are identified structurally rather than by a name the mock does

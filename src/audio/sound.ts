@@ -206,12 +206,12 @@ export class Sound {
     // enough that it never reads as two different weapons.
     const base = (this.phaserFlip ? 1900 : 2260) * (0.98 + Math.random() * 0.04);
     const landed = clamp(reach, 0, 1);
-    // Not grouped: a phaser's optional return blip is a legitimate second
-    // voice competing for the weapon bus's own cap on its own terms, the same
-    // as a second shot would — grouping it would let far more concurrent
-    // shots sound than the cap intends, which is not the bug being fixed here.
+    // Two layers, one slot: the zap and its return blip are one shot, not two
+    // competing events — the cap counts cues, no exceptions (owner's ruling).
+    const g = this.synth.group();
     this.synth.play({
       bus: "weapon",
+      group: g,
       wave: "square",
       freq: base,
       // The floor, and the floor is a hard rule rather than a consequence: the
@@ -232,6 +232,7 @@ export class Sound {
       this.synth.play({
         kind: "noise",
         bus: "weapon",
+        group: g,
         filter: "highpass",
         freq: 1900,
         level: 0.07,
@@ -394,8 +395,10 @@ export class Sound {
   /** A torpedo on a hull that survives it. */
   impact(x: number, z: number): void {
     const { level, pan } = this.place(x, z);
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "bandpass",
       q: 1.4,
       freq: 900,
@@ -406,6 +409,7 @@ export class Sound {
       pan,
     });
     this.synth.play({
+      group: g,
       wave: "triangle",
       freq: 150,
       to: 70,
@@ -420,8 +424,10 @@ export class Sound {
   thud(x: number, z: number): void {
     const { level, pan } = this.place(x, z);
     if (level < 0.06) return;
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "lowpass",
       freq: 420,
       to: 160,
@@ -431,6 +437,7 @@ export class Sound {
       pan,
     });
     this.synth.play({
+      group: g,
       wave: "triangle",
       freq: 90,
       to: 55,
@@ -444,8 +451,14 @@ export class Sound {
   /** @param size relative to a Raider; a Bastion is worth more air than a Raider. */
   kill(x: number, z: number, size: number): void {
     const { level, pan } = this.place(x, z);
+    // Three layers, one slot — the cap counts cues, no exceptions (owner's
+    // ruling). A kill's own body/crack layers stay together the same way a
+    // kill burst or a mine chain now stays correctly bounded by how many
+    // *kills* the impact bus can carry, not how many oscillators.
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "lowpass",
       q: 0.8,
       freq: 2200,
@@ -456,6 +469,7 @@ export class Sound {
       pan,
     });
     this.synth.play({
+      group: g,
       wave: "sine",
       freq: 260 / size,
       to: 46,
@@ -467,6 +481,7 @@ export class Sound {
     // The crack at the front, so the blast has an edge and not just a body.
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "highpass",
       freq: 3000,
       level: 0.13 * level,
@@ -479,7 +494,9 @@ export class Sound {
   /** Absorbed by a facing: metallic and ringing, and deliberately not alarming. */
   shieldHit(x: number, z: number): void {
     const { level, pan } = this.place(x, z, 0.35);
+    const g = this.synth.group();
     this.synth.play({
+      group: g,
       wave: "sawtooth",
       freq: 640,
       to: 430,
@@ -490,6 +507,7 @@ export class Sound {
     });
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "bandpass",
       q: 9,
       freq: 1500,
@@ -554,11 +572,13 @@ export class Sound {
    * a decision with three empty quarters behind it.
    */
   brace(): void {
+    const g = this.synth.group();
     // Down: the facings being stripped. Bandpass rather than lowpass so it reads
     // as charge being moved through something rather than as a filter closing.
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "bandpass",
       q: 4,
       freq: 2600,
@@ -571,6 +591,7 @@ export class Sound {
     // because the one thing this sound has to say is that it worked.
     this.synth.play({
       bus: "mechanism",
+      group: g,
       wave: "square",
       freq: 220,
       to: 330,
@@ -587,8 +608,13 @@ export class Sound {
    * the money leaving.
    */
   breach(): void {
+    // Four layers across two buses, one slot on each — a group token is safe
+    // to share across buses since `count` filters by bus before it looks at
+    // group, so the impact half and the panel half are budgeted separately.
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "lowpass",
       q: 0.7,
       freq: 700,
@@ -597,16 +623,18 @@ export class Sound {
       attack: 0.002,
       decay: 0.45,
     });
-    this.synth.play({ wave: "sine", freq: 120, to: 48, level: 0.28, attack: 0.004, decay: 0.5 });
-    this.synth.play({ bus: "panel", wave: "square", freq: 466, level: 0.07, decay: 0.16 });
-    this.synth.play({ bus: "panel", wave: "square", freq: 349, level: 0.07, decay: 0.2, delay: 0.17 });
+    this.synth.play({ group: g, wave: "sine", freq: 120, to: 48, level: 0.28, attack: 0.004, decay: 0.5 });
+    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 466, level: 0.07, decay: 0.16 });
+    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 349, level: 0.07, decay: 0.2, delay: 0.17 });
   }
 
   mineBlast(x: number, z: number): void {
     const { level, pan } = this.place(x, z);
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
       bus: "hostile",
+      group: g,
       filter: "lowpass",
       q: 0.9,
       freq: 1300,
@@ -618,6 +646,7 @@ export class Sound {
     });
     this.synth.play({
       bus: "hostile",
+      group: g,
       wave: "sine",
       freq: 150,
       to: 40,
@@ -664,11 +693,13 @@ export class Sound {
    */
   loomOpen(x: number, z: number): void {
     const at = this.place(x, z, 0.7);
+    const g = this.synth.group();
     for (const [freq, level] of [
       [62, 0.11],
       [93, 0.07],
     ] as const) {
       this.synth.play({
+        group: g,
         wave: "sawtooth",
         freq,
         to: freq * 1.06,
@@ -681,6 +712,7 @@ export class Sound {
     }
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "bandpass",
       q: 7,
       freq: 260,
@@ -730,9 +762,11 @@ export class Sound {
    * a door.
    */
   loomSeal(): void {
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
       bus: "impact",
+      group: g,
       filter: "lowpass",
       q: 0.8,
       freq: 900,
@@ -747,6 +781,7 @@ export class Sound {
     ] as const) {
       this.synth.play({
         bus: "panel",
+        group: g,
         wave: "sawtooth",
         freq,
         to: freq * 0.94,
@@ -762,8 +797,10 @@ export class Sound {
   /** Brushing a filament. A wire against a hull: harsh, brief, and placed. */
   loomTouch(x: number, z: number): void {
     const { level, pan } = this.place(x, z, 0.25);
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "bandpass",
       q: 11,
       freq: 2100,
@@ -774,6 +811,7 @@ export class Sound {
       pan,
     });
     this.synth.play({
+      group: g,
       wave: "sawtooth",
       freq: 240,
       to: 130,
@@ -793,11 +831,13 @@ export class Sound {
    */
   loomCollapse(x: number, z: number): void {
     const at = this.place(x, z, 0.55);
+    const g = this.synth.group();
     for (const [freq, level] of [
       [93, 0.09],
       [62, 0.1],
     ] as const) {
       this.synth.play({
+        group: g,
         wave: "sawtooth",
         freq,
         to: 34,
@@ -810,6 +850,7 @@ export class Sound {
     }
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "bandpass",
       q: 5,
       freq: 2200,
@@ -991,10 +1032,12 @@ export class Sound {
 
   /** Cut short. The spin-down is the refund of nothing, said in one syllable. */
   hyperwarpAbort(): void {
-    this.synth.play({ bus: "mechanism", wave: "sawtooth", freq: 82, to: 41, level: 0.08, decay: 0.22 });
+    const g = this.synth.group();
+    this.synth.play({ bus: "mechanism", group: g, wave: "sawtooth", freq: 82, to: 41, level: 0.08, decay: 0.22 });
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "bandpass",
       q: 5,
       freq: 1800,
@@ -1044,9 +1087,11 @@ export class Sound {
    * should sound like a thing you had to do.
    */
   scram(): void {
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "bandpass",
       q: 3,
       freq: 2400,
@@ -1059,6 +1104,7 @@ export class Sound {
     // reads as a reward.
     this.synth.play({
       bus: "mechanism",
+      group: g,
       wave: "triangle",
       freq: 196,
       to: 392,
@@ -1263,9 +1309,11 @@ export class Sound {
   /** Anything else it says. One note, so a talkative escort is not a tune. */
   allyComms(x: number, z: number): void {
     const at = this.place(x, z, 0.4);
-    this.squelch(at);
+    const g = this.synth.group();
+    this.squelch(at, 0, g);
     this.synth.play({
       bus: "panel",
+      group: g,
       wave: "triangle",
       freq: 659.25,
       level: 0.075 * at.level,
@@ -1284,8 +1332,10 @@ export class Sound {
    */
   allyFire(x: number, z: number): void {
     const at = this.place(x, z);
+    const g = this.synth.group();
     this.synth.play({
       bus: "weapon",
+      group: g,
       wave: "triangle",
       freq: 760,
       to: 520,
@@ -1297,6 +1347,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "weapon",
+      group: g,
       filter: "highpass",
       freq: 2600,
       level: 0.03 * at.level,
@@ -1312,9 +1363,11 @@ export class Sound {
    */
   allyLost(x: number, z: number): void {
     const at = this.place(x, z, 0.4);
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
       bus: "impact",
+      group: g,
       filter: "lowpass",
       q: 0.7,
       freq: 1800,
@@ -1330,6 +1383,7 @@ export class Sound {
     ] as const) {
       this.synth.play({
         bus: "panel",
+        group: g,
         wave: "triangle",
         freq: note,
         to: note * 0.94,
@@ -1343,9 +1397,11 @@ export class Sound {
   }
 
   sectorClear(): void {
-    this.synth.play({ bus: "panel", wave: "triangle", freq: 659.25, level: 0.11, decay: 0.18 });
+    const g = this.synth.group();
+    this.synth.play({ bus: "panel", group: g, wave: "triangle", freq: 659.25, level: 0.11, decay: 0.18 });
     this.synth.play({
       bus: "panel",
+      group: g,
       wave: "triangle",
       freq: 987.77,
       level: 0.11,
@@ -1451,10 +1507,12 @@ export class Sound {
   /** One blip per system restored, climbing. @param step 0…3 */
   service(step: number): void {
     const note = SERVICE_NOTES[clamp(step, 0, SERVICE_NOTES.length - 1)];
-    this.synth.play({ bus: "mechanism", wave: "triangle", freq: note, level: 0.12, decay: 0.16 });
+    const g = this.synth.group();
+    this.synth.play({ bus: "mechanism", group: g, wave: "triangle", freq: note, level: 0.12, decay: 0.16 });
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "highpass",
       freq: 3200,
       level: 0.04,
@@ -1512,9 +1570,11 @@ export class Sound {
 
   /** The clamps letting go, and the shove off them. */
   depart(): void {
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "highpass",
       freq: 200,
       to: 1500,
@@ -1522,15 +1582,26 @@ export class Sound {
       attack: 0.05,
       decay: 0.45,
     });
-    this.synth.play({ bus: "mechanism", wave: "sine", freq: 70, to: 132, level: 0.13, attack: 0.02, decay: 0.4 });
+    this.synth.play({
+      bus: "mechanism",
+      group: g,
+      wave: "sine",
+      freq: 70,
+      to: 132,
+      level: 0.13,
+      attack: 0.02,
+      decay: 0.4,
+    });
   }
 
   // ── the end of a run ─────────────────────────────────────────────────────
 
   /** Everything falls at once, and takes longer to do it than anything else. */
   death(): void {
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
+      group: g,
       filter: "lowpass",
       q: 0.7,
       freq: 2400,
@@ -1539,14 +1610,16 @@ export class Sound {
       attack: 0.004,
       decay: 1.4,
     });
-    this.synth.play({ wave: "sine", freq: 300, to: 30, level: 0.3, attack: 0.01, decay: 1.5 });
-    this.synth.play({ wave: "sawtooth", freq: 220, to: 28, level: 0.15, attack: 0.02, decay: 1.2 });
+    this.synth.play({ group: g, wave: "sine", freq: 300, to: 30, level: 0.3, attack: 0.01, decay: 1.5 });
+    this.synth.play({ group: g, wave: "sawtooth", freq: 220, to: 28, level: 0.15, attack: 0.02, decay: 1.2 });
   }
 
   /** Emergency power finding the bus, under the epitaph. */
   panelRestore(): void {
+    const g = this.synth.group();
     this.synth.play({
       bus: "panel",
+      group: g,
       wave: "sine",
       freq: 60,
       to: 190,
@@ -1556,6 +1629,7 @@ export class Sound {
     });
     this.synth.play({
       bus: "panel",
+      group: g,
       wave: "triangle",
       freq: 1046.5,
       level: 0.07,
