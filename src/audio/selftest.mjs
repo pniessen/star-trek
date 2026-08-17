@@ -280,7 +280,7 @@ const TEST_PHRASE = { syllables: [{ at: 0, length: 0.08, pitch: 160, f1: 500, f2
 /** Every cue in the bank, called the way the game calls it. */
 function everyCue(s) {
   s.listen(0, 0, 0);
-  s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false });
+  s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false, energy: 0.7, starved: false });
   s.synth.speak({ phrase: TEST_PHRASE, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
   s.synth.setSpace({ tailSeconds: 0.3, tailCutoffHz: 3500, earlyReflections: [{ at: 0.02, gain: 0.4 }], wet: 0.25 });
   s.synth.spaceLevel(0.5);
@@ -448,7 +448,7 @@ function everyCue(s) {
   ok("mid-run failure: retired after one report", warnings.length === 1, `${warnings.length} warnings`);
   const after = mark();
   s.phaser(true, 1);
-  s.update({ threat: 9, hull: 1, thrust: 1, speed: 9, alive: true, docked: false });
+  s.update({ threat: 9, hull: 1, thrust: 1, speed: 9, alive: true, docked: false, energy: 1, starved: false });
   ok("mid-run failure: stays retired", voicesSince(after).length === 0);
 }
 
@@ -1112,28 +1112,52 @@ let chain;
 }
 
 {
-  // The wiring: `sound.hitStop` marks every live bed it owns. Only the
-  // engine bed is ever live through `update()` — the alert bed is held at
-  // silence by design (see `Sound.update`'s own comment) — so this exercises
-  // the filter side of the dip; the pitch side is already covered above,
-  // since a noise bed (the engine's own kind) has no pitch params at all.
+  // The wiring: `sound.hitStop` marks every live bed it owns. Both the
+  // engine and the reactor are live through `update()` now — the alert bed
+  // is still held at silence by design (see `Sound.update`'s own comment) —
+  // so this exercises the filter side of the dip on both, plus the
+  // reactor's pitch side (a noise bed, the engine's own kind, has no pitch
+  // params at all).
   const ctx = makeContext();
   globalThis.AudioContext = function () { return ctx; };
   nodes = [];
   const s = new Sound();
   s.start();
-  s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false });
+  s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false, energy: 1, starved: false });
 
-  const filters = nodes.filter((n) => n.kind === "biquad" && n.type === "lowpass");
-  ok("update() under thrust builds exactly the engine bed's filter", filters.length === 1, `${filters.length}`);
-  const before = filters[0].frequency.events.length;
+  const lowpassFilters = nodes.filter((n) => n.kind === "biquad" && n.type === "lowpass");
+  ok(
+    "update() under thrust builds the engine's and the reactor's filters",
+    lowpassFilters.length === 2,
+    `${lowpassFilters.length}`,
+  );
+  // Structural, not order-dependent: the engine is noise-kind (fed by a
+  // buffer source), the reactor is tone-kind (fed by two oscillators).
+  const engineFilter = lowpassFilters.find((f) => nodes.some((n) => n.kind === "buffersource" && n.out.includes(f)));
+  const reactorFilter = lowpassFilters.find((f) => f !== engineFilter);
+  ok("the engine's filter is fed by noise", engineFilter !== undefined);
+  ok("the reactor's filter is fed by something else — the two oscillators", reactorFilter !== undefined);
+
+  const engineBefore = engineFilter.frequency.events.length;
+  const reactorBefore = reactorFilter.frequency.events.length;
+  const reactorOscillators = nodes.filter((n) => n.kind === "oscillator" && n.out.includes(reactorFilter));
+  const reactorPitchBefore = reactorOscillators.map((o) => o.frequency.events.length);
 
   s.hitStop(0.12);
 
   ok(
     "hitStop writes a dip-and-recover pair to the engine's filter",
-    filters[0].frequency.events.length - before >= 2,
-    `${filters[0].frequency.events.length - before}`,
+    engineFilter.frequency.events.length - engineBefore >= 2,
+    `${engineFilter.frequency.events.length - engineBefore}`,
+  );
+  ok(
+    "hitStop writes a dip-and-recover pair to the reactor's filter too",
+    reactorFilter.frequency.events.length - reactorBefore >= 2,
+    `${reactorFilter.frequency.events.length - reactorBefore}`,
+  );
+  ok(
+    "...and to the reactor's own pitch oscillators",
+    reactorOscillators.every((o, i) => o.frequency.events.length - reactorPitchBefore[i] >= 2),
   );
 
   // The silent alert bed rides along in the same call and never throws.
@@ -1188,6 +1212,76 @@ let chain;
     filterNode.frequency.events.length > beforeReopen,
     `${filterNode.frequency.events.length} vs ${beforeReopen}`,
   );
+}
+
+// ── 12. the reactor bed breathes with the reserve ───────────────────────────
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 1, starved: false });
+
+  const lowpassFilters = nodes.filter((n) => n.kind === "biquad" && n.type === "lowpass");
+  // The engine is live at rest too (its idle level is a nonzero constant),
+  // so the reactor's filter is picked out structurally: it is the one fed
+  // by two oscillators, the beat itself, where the engine's is fed by noise.
+  const reactorFilter = lowpassFilters.find(
+    (f) => nodes.filter((n) => n.kind === "oscillator" && n.out.includes(f)).length === 2,
+  );
+  ok("update() builds the reactor's own filter", reactorFilter !== undefined);
+  const reactorOscillators = nodes.filter((n) => n.kind === "oscillator" && n.out.includes(reactorFilter));
+  ok(
+    "...fed by exactly two oscillators, the 58 Hz beat",
+    reactorOscillators.length === 2,
+    `${reactorOscillators.length}`,
+  );
+
+  const [base, detuned] = reactorOscillators.map((o) => o.frequency.events[0][1]);
+  near("the fundamental sits at 58 Hz at full energy", base, 58, 0.5);
+  near("the second oscillator sits at 58 × 1.0069 Hz — the ~0.4 Hz beat", detuned, 58 * 1.0069, 0.5);
+
+  // Starved, reserve nearly empty: the pitch target halves outright, rather
+  // than merely continuing the same droop curve toward zero.
+  s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 0.05, starved: true });
+  const baseStarved = reactorOscillators[0].frequency.events.at(-1)[1];
+  near("starved halves the reactor's pitch target", baseStarved, 29, 0.5);
+
+  // The relay tick: a sparse click on the panel bus — the bed bus's cap of 2
+  // is already spent on the engine and the reactor themselves — while
+  // starved. Advance the mock's audio clock, not real time, since the tick
+  // is scheduled off `ctx.currentTime` for the same reason `Bed.dip` is.
+  const panelBus = s.synth.context.buses.panel;
+  const from = mark();
+  for (let i = 0; i < 6; i++) {
+    ctx.currentTime += 0.5;
+    s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 0.05, starved: true });
+  }
+  const ticks = nodes
+    .slice(from)
+    .filter(
+      (n) =>
+        n.kind === "biquad" &&
+        n.type === "highpass" &&
+        n.frequency.events[0] &&
+        n.frequency.events[0][1] === 3200 &&
+        n.out.some((g) => g.kind === "gain" && g.out.includes(panelBus)),
+    );
+  ok("at least one relay tick fires within 3s of a starved reserve", ticks.length >= 1, `${ticks.length}`);
+
+  // Un-starved: the tick stops, and the accumulator resets rather than
+  // firing a backlog the instant starved next returns.
+  s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 1, starved: false });
+  const quietFrom = mark();
+  for (let i = 0; i < 6; i++) {
+    ctx.currentTime += 0.5;
+    s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 1, starved: false });
+  }
+  const noTicks = nodes
+    .slice(quietFrom)
+    .filter((n) => n.kind === "biquad" && n.type === "highpass" && n.frequency.events[0] && n.frequency.events[0][1] === 3200);
+  ok("the relay tick stops once the reserve is no longer starved", noTicks.length === 0, `${noTicks.length}`);
 }
 
 // ── report ─────────────────────────────────────────────────────────────────

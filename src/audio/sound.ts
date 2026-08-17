@@ -37,6 +37,10 @@ export interface SoundScene {
   /** False on the title screen and after the hull goes: the beds fall silent. */
   readonly alive: boolean;
   readonly docked: boolean;
+  /** 0…1 reserve; the reactor bed's cutoff, pitch and relay tick all read this. */
+  readonly energy: number;
+  /** `Ship.starved`'s own threshold, reused rather than re-guessed here. */
+  readonly starved: boolean;
 }
 
 /** Threat worth a full-volume alarm — roughly a wave-six field. */
@@ -45,6 +49,28 @@ const FULL_THREAT = 1100;
 const HALF_RANGE = 34;
 /** Hard panning is disorienting when the source is a few metres off the nose. */
 const PAN_WIDTH = 0.8;
+
+/**
+ * The reactor bed. `docs/audio-prior-art.md` §6.1: two oscillators a few
+ * tenths of a Hz apart near 58 Hz, lowpass 300-500 Hz with a slow LFO,
+ * present from run start — the machine under everything else, mapped to the
+ * one pool that pays for it.
+ */
+const REACTOR_BASE = 58;
+/** ~0.4 Hz beat at `REACTOR_BASE` — the second oscillator's ratio. */
+const REACTOR_RATIO = 1.0069;
+/** The breathing LFO's own rate. Slow enough to read as respiration, not tremolo. */
+const REACTOR_LFO_RATE = 0.08;
+/**
+ * Depth is the only per-frame roughness knob `Bed.set` exposes — `q` is fixed
+ * at construction — so hull damage is expressed here instead: a shallow
+ * breath at full hull, a rough one near death. Both stay well under the
+ * 0.5 ceiling `Bed.set` itself clamps to.
+ */
+const REACTOR_LFO_DEPTH = 0.08;
+const REACTOR_HURT_DEPTH = 0.22;
+/** How often the relay clicks while the reserve is starved. */
+const REACTOR_TICK_INTERVAL = 1.4;
 
 /** A major arpeggio, extended: the tally climbs this as the multiplier grows. */
 const ARPEGGIO = [0, 4, 7, 12, 16, 19, 24];
@@ -99,6 +125,16 @@ export class Sound {
   readonly synth = new Synth();
   private alert: Bed | null = null;
   private engine: Bed | null = null;
+  private reactor: Bed | null = null;
+
+  /**
+   * Audio-clock time the next relay tick is due. Wall-clock (`ctx.currentTime`),
+   * like `Bed.dip`, so the tick's own rhythm survives hit-stop and frame
+   * stutter alike. `0` both at boot and whenever `starved` goes false, so a
+   * fresh starved window always ticks on its first live frame rather than
+   * waiting out whatever was left of the last window's period.
+   */
+  private reactorTickAt = 0;
 
   /** The listener: where the ship is and which way it is pointing. */
   private lx = 0;
@@ -130,6 +166,15 @@ export class Sound {
     if (!this.engine) {
       this.engine = this.synth.bed({ kind: "noise", filter: "lowpass", q: 0.8 });
     }
+    if (!this.reactor) {
+      this.reactor = this.synth.bed({
+        kind: "tone",
+        wave: "sawtooth",
+        filter: "lowpass",
+        q: 1.2,
+        ratio: REACTOR_RATIO,
+      });
+    }
   }
 
   setPaused(paused: boolean): void {
@@ -152,8 +197,9 @@ export class Sound {
 
     // The alert used to be a sustained bed riding threat. It is now a pulse —
     // see `alertBeat`, and `AlertPulse` for why — so this bed is held at
-    // silence rather than removed: the machinery is one voice, and a future
-    // sustained layer (a reactor, a hull under load) would want it back.
+    // silence rather than removed: the machinery is one voice, and the
+    // reactor bed below is exactly the sustained layer this one was left in
+    // place for.
     this.alert?.set(0, 42 + pressure * 9, 170 + hurt * 220, 0, 0);
 
     // Engine. Under thrust it opens up; moored it is off, because a ship in the
@@ -166,6 +212,50 @@ export class Sound {
       0,
       0,
     );
+
+    // The reactor. Present under everything else from the moment a run goes
+    // live, never removed the way the alert bed's drone was — this is the one
+    // sustained voice `docs/audio-prior-art.md` §6.1 actually asks to be a
+    // bed. Docked, the drive is shut down the same way the engine's is, but a
+    // moored hull still has station power feeding it, so it idles rather than
+    // going fully silent.
+    const reactorLevel = scene.alive ? (scene.docked ? 0.02 : 0.05) : 0;
+    // Droop only below a quarter reserve, continuous at the boundary
+    // (0.5 + 2×0.25 = 1); starved overrides it outright rather than merely
+    // extending the same curve to zero, because a starved reserve is a
+    // distinct condition, not just a lower number.
+    const droop = scene.energy < 0.25 ? 0.5 + 2 * scene.energy : 1;
+    const pitchMul = scene.starved ? 0.5 : droop;
+    const cutoff = 220 + scene.energy * 260;
+    const depth = REACTOR_LFO_DEPTH + hurt * REACTOR_HURT_DEPTH;
+    this.reactor?.set(reactorLevel, REACTOR_BASE * pitchMul, cutoff, REACTOR_LFO_RATE, depth);
+
+    // The relay tick. A sparse click rather than an alarm — starved is
+    // already said by the pitch drop, this only marks time while it lasts.
+    // Scheduled off the audio clock so hit-stop and frame stutter cannot
+    // speed it up or stall it, the same reasoning `Bed.dip` uses.
+    if (scene.alive && scene.starved) {
+      const now = this.synth.context?.ctx.currentTime;
+      if (now !== undefined && now >= this.reactorTickAt) {
+        this.reactorTickAt = now + REACTOR_TICK_INTERVAL;
+        // On `panel`, not `bed`: the bed bus's cap of 2 is already spent on
+        // the engine and the reactor themselves, so a third bed-bus voice
+        // would be refused outright. This is a relay click on the panel, the
+        // same instrument `dispatch` and `service` speak through.
+        this.synth.play({
+          kind: "noise",
+          bus: "panel",
+          filter: "highpass",
+          freq: 3200,
+          q: 4,
+          level: 0.08,
+          attack: 0.001,
+          decay: 0.03,
+        });
+      }
+    } else {
+      this.reactorTickAt = 0;
+    }
   }
 
   /**
@@ -177,7 +267,7 @@ export class Sound {
    * only has to join this list.
    */
   hitStop(seconds: number): void {
-    for (const bed of [this.alert, this.engine]) bed?.dip(seconds);
+    for (const bed of [this.alert, this.engine, this.reactor]) bed?.dip(seconds);
   }
 
   /** A restart, a mode change, a death: whatever was ringing stops ringing. */

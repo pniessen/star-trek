@@ -1049,6 +1049,8 @@ function frame(now: number): void {
     // panel blips the crawl fires are the only thing that should be audible.
     alive: !briefing && presentation.mode !== "title" && session.state !== "dead",
     docked: session.docking.held,
+    energy: player.energy,
+    starved: player.starved,
   });
 
   // Newly spawned hostiles have to inherit the current geometry mode, and so
