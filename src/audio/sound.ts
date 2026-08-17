@@ -206,6 +206,10 @@ export class Sound {
     // enough that it never reads as two different weapons.
     const base = (this.phaserFlip ? 1900 : 2260) * (0.98 + Math.random() * 0.04);
     const landed = clamp(reach, 0, 1);
+    // Not grouped: a phaser's optional return blip is a legitimate second
+    // voice competing for the weapon bus's own cap on its own terms, the same
+    // as a second shot would — grouping it would let far more concurrent
+    // shots sound than the cap intends, which is not the bug being fixed here.
     this.synth.play({
       bus: "weapon",
       wave: "square",
@@ -259,10 +263,15 @@ export class Sound {
    * @param last the rack going empty, which is worth knowing without looking.
    */
   torpedo(last = false): void {
+    // Four layers, one budget slot: the punch/crack/body/report fire on the
+    // same instant as one report, not four competing events, so a busy
+    // weapon bus never mutes the shot down to three layers of its own.
+    const g = this.synth.group();
     // The punch. Ten milliseconds, and the loudest thing in the cue.
     this.synth.play({
       kind: "noise",
       bus: "weapon",
+      group: g,
       filter: "highpass",
       freq: 3000,
       level: 0.3,
@@ -273,6 +282,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "weapon",
+      group: g,
       filter: "highpass",
       freq: 1700,
       to: 480,
@@ -284,6 +294,7 @@ export class Sound {
     // reserved for the alert, the torpedoes, the mines and the death.
     this.synth.play({
       bus: "weapon",
+      group: g,
       wave: "sine",
       freq: 160,
       to: 46,
@@ -296,6 +307,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "weapon",
+      group: g,
       filter: "lowpass",
       q: 0.8,
       freq: 620,
@@ -306,7 +318,8 @@ export class Sound {
     });
     if (!last) return;
     // Twelve of these exist and the twelfth should say so. A dry mechanical
-    // tick behind the report — the rack finding nothing to load.
+    // tick behind the report — the rack finding nothing to load. Its own
+    // event, on its own bus, so it is not part of the shot's group.
     this.synth.play({
       kind: "noise",
       bus: "panel",
@@ -501,10 +514,14 @@ export class Sound {
    * keeps the sentence itself carrying the meaning.
    */
   dispatch(): void {
+    // Three layers, one slot — the panel bus's cap of 2 would otherwise mute
+    // the flat tone that carries the cue's own meaning.
+    const g = this.synth.group();
     for (const delay of [0, 0.07]) {
       this.synth.play({
         kind: "noise",
         bus: "panel",
+        group: g,
         filter: "bandpass",
         q: 16,
         freq: 2050,
@@ -516,6 +533,7 @@ export class Sound {
     }
     this.synth.play({
       bus: "panel",
+      group: g,
       wave: "sine",
       freq: 660,
       level: 0.05,
@@ -820,9 +838,14 @@ export class Sound {
    */
   decloak(x: number, z: number): void {
     const { level, pan } = this.place(x, z, 0.62);
+    // Five layers, one slot — the hostile bus's cap of 4 would otherwise mute
+    // the resolving note that lands with the crack, the whole point of which
+    // is to arrive together with it.
+    const g = this.synth.group();
     for (const detune of [1, 1.043]) {
       this.synth.play({
         bus: "hostile",
+        group: g,
         wave: "sawtooth",
         freq: 300 * detune,
         to: 1500 * detune,
@@ -835,6 +858,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "hostile",
+      group: g,
       filter: "bandpass",
       q: 3,
       freq: 700,
@@ -847,6 +871,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "hostile",
+      group: g,
       filter: "highpass",
       freq: 2400,
       level: 0.17 * level,
@@ -857,6 +882,7 @@ export class Sound {
     });
     this.synth.play({
       bus: "hostile",
+      group: g,
       wave: "triangle",
       freq: 1500,
       to: 420,
@@ -873,9 +899,13 @@ export class Sound {
   /** A wave arriving. Falls, and falls lower the deeper the run goes. */
   wave(index: number): void {
     const base = Math.max(180, 330 - index * 11);
+    // Three layers, one slot — the panel bus's cap of 2 would otherwise
+    // silently drop the noise swell every time.
+    const g = this.synth.group();
     for (const detune of [1, 1.012]) {
       this.synth.play({
         bus: "panel",
+        group: g,
         wave: "sawtooth",
         freq: base * detune,
         to: base * 0.38,
@@ -888,6 +918,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "panel",
+      group: g,
       filter: "bandpass",
       q: 1.6,
       freq: 200,
@@ -916,6 +947,9 @@ export class Sound {
     const attack = 0.12;
     const decay = 0.22;
     const hold = Math.max(0.1, duration - attack - decay);
+    // Four layers, one slot — the mechanism bus's cap of 2 would otherwise
+    // mute two of the three spreading partials that are the whole effect.
+    const g = this.synth.group();
 
     // Three partials that start nearly in unison and spread apart. Beating
     // between them is the whole effect — at the start they are one note, by
@@ -927,6 +961,7 @@ export class Sound {
     ]) {
       this.synth.play({
         bus: "mechanism",
+        group: g,
         wave: "sawtooth",
         freq: from,
         to,
@@ -942,6 +977,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "bandpass",
       q: 6,
       freq: 220,
@@ -974,9 +1010,13 @@ export class Sound {
    * seconds resolve rather than merely stop.
    */
   hyperwarpArrive(): void {
+    // Three layers, one slot — the mechanism bus's cap of 2 would otherwise
+    // mute the far-side note this cue closes on.
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "highpass",
       freq: 900,
       to: 120,
@@ -984,11 +1024,12 @@ export class Sound {
       attack: 0.004,
       decay: 0.5,
     });
-    this.synth.play({ bus: "mechanism", wave: "sine", freq: 220, to: 41, level: 0.18, decay: 0.55 });
+    this.synth.play({ bus: "mechanism", group: g, wave: "sine", freq: 220, to: 41, level: 0.18, decay: 0.55 });
     // The far side, a beat later: thin, high, and alone, because you arrived
     // cold and the sector has not said anything back yet.
     this.synth.play({
       bus: "mechanism",
+      group: g,
       wave: "triangle",
       freq: 1318.5,
       level: 0.07,
@@ -1049,9 +1090,16 @@ export class Sound {
     // One shape for every partial, so they fuse into a single beat with a
     // timbre rather than reading as a chord of separate notes.
     const shape = { attack: ALERT_RISE, hold: 0.045, decay: 0.07 };
+    // Up to four layers, one slot — the alert bus's cap of 1 exists so at
+    // most one beat sounds at a time, not so a single beat's own partials
+    // compete with each other. Without the group, the whole point of adding
+    // partials for urgency (CHI 2024: escalation is spectral, never level)
+    // would be capped away before it ever reached the ear.
+    const g = this.synth.group();
 
     this.synth.play({
       bus: "alert",
+      group: g,
       // The waveform follows the tier for the same reason the partials do: a
       // plain beat should be plain all the way down.
       wave: components > 1 ? "sawtooth" : "triangle",
@@ -1063,6 +1111,7 @@ export class Sound {
 
     this.synth.play({
       bus: "alert",
+      group: g,
       wave: "sawtooth",
       freq: frequency * ALERT_SECOND,
       level: ALERT_LEVEL * 0.73,
@@ -1077,6 +1126,7 @@ export class Sound {
     for (const offset of [-ALERT_AM_RATE, ALERT_AM_RATE]) {
       this.synth.play({
         bus: "alert",
+        group: g,
         wave: "sine",
         freq: Math.max(30, frequency + offset),
         level: ALERT_LEVEL * ALERT_AM_DEPTH * 0.5,
@@ -1102,6 +1152,11 @@ export class Sound {
    */
   conditionChange(red: boolean): void {
     const base = red ? 320 : 240;
+    // Two or three pulses plus, for red, a noise riser — one slot, for the
+    // same reason `alertBeat` needs one: the alert bus's cap of 1 is meant to
+    // keep two different *whoops* from overlapping, not to gate a single
+    // whoop's own burst down to its first pulse.
+    const g = this.synth.group();
     // Rising within the burst, never falling: Patterson's startle-avoidance
     // rule is that the first pulse is the quietest one.
     const burst = red
@@ -1117,6 +1172,7 @@ export class Sound {
     for (const [mul, delay, level] of burst) {
       this.synth.play({
         bus: "alert",
+        group: g,
         wave: red ? "sawtooth" : "triangle",
         freq: base * mul,
         to: base * mul * 1.9,
@@ -1131,6 +1187,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "alert",
+      group: g,
       filter: "bandpass",
       q: 4,
       freq: 700,
@@ -1157,10 +1214,11 @@ export class Sound {
    * where the ship is. Floored, because a friend arriving is worth hearing at
    * any range — the same argument as the decloak, for the opposite reason.
    */
-  private squelch(place: { level: number; pan: number }, delay = 0): void {
+  private squelch(place: { level: number; pan: number }, delay = 0, group?: number): void {
     this.synth.play({
       kind: "noise",
       bus: "panel",
+      group,
       filter: "bandpass",
       q: 14,
       freq: 1800,
@@ -1180,13 +1238,17 @@ export class Sound {
    */
   allyHail(x: number, z: number): void {
     const at = this.place(x, z, 0.5);
-    this.squelch(at);
+    // Squelch plus two rising notes, one slot — the panel bus's cap of 2
+    // would otherwise mute the second, resolving note.
+    const g = this.synth.group();
+    this.squelch(at, 0, g);
     for (const [note, delay] of [
       [523.25, 0.05],
       [783.99, 0.15],
     ] as const) {
       this.synth.play({
         bus: "panel",
+        group: g,
         wave: "triangle",
         freq: note,
         level: 0.1 * at.level,
@@ -1311,12 +1373,16 @@ export class Sound {
     const attack = 0.25;
     const decay = 0.3;
     const hold = Math.max(0.1, duration - attack - decay);
+    // Three layers, one slot — the mechanism bus's cap of 2 would otherwise
+    // mute one of the two sines that make the winding tone.
+    const g = this.synth.group();
     for (const [ratio, level] of [
       [1, 0.13],
       [1.5, 0.07],
     ]) {
       this.synth.play({
         bus: "mechanism",
+        group: g,
         wave: "sine",
         freq: 120 * ratio,
         to: 480 * ratio,
@@ -1329,6 +1395,7 @@ export class Sound {
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "bandpass",
       q: 2.5,
       freq: 400,
@@ -1342,9 +1409,13 @@ export class Sound {
 
   /** The clamps. Body, thud and a ring off the structure. */
   hardDock(): void {
+    // Three layers, one slot — the mechanism bus's cap of 2 would otherwise
+    // mute the ring off the structure that finishes the cue.
+    const g = this.synth.group();
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "lowpass",
       q: 0.8,
       freq: 600,
@@ -1353,10 +1424,20 @@ export class Sound {
       attack: 0.001,
       decay: 0.22,
     });
-    this.synth.play({ bus: "mechanism", wave: "sine", freq: 96, to: 52, level: 0.3, attack: 0.002, decay: 0.3 });
+    this.synth.play({
+      bus: "mechanism",
+      group: g,
+      wave: "sine",
+      freq: 96,
+      to: 52,
+      level: 0.3,
+      attack: 0.002,
+      decay: 0.3,
+    });
     this.synth.play({
       kind: "noise",
       bus: "mechanism",
+      group: g,
       filter: "bandpass",
       q: 12,
       freq: 780,
@@ -1401,9 +1482,14 @@ export class Sound {
     const root = 261.63 * Math.pow(2, semitones / 12);
     const notes = Math.min(ARPEGGIO.length, 4 + Math.floor(multiplier / 2.2));
 
+    // Up to eight layers (the run plus a sub note), one slot — this is the
+    // one cue where the panel bus's cap of 2 would otherwise be devastating:
+    // the whole "big bank is audibly bigger" design is the note count.
+    const g = this.synth.group();
     for (let i = 0; i < notes; i++) {
       this.synth.play({
         bus: "panel",
+        group: g,
         wave: "triangle",
         freq: root * Math.pow(2, ARPEGGIO[i] / 12),
         level: 0.13,
@@ -1414,6 +1500,7 @@ export class Sound {
     }
     this.synth.play({
       bus: "panel",
+      group: g,
       wave: "sine",
       freq: root / 2,
       level: 0.11,

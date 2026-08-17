@@ -285,6 +285,7 @@ function everyCue(s) {
   s.mineLay(6, 6);
   s.decloak(7, 7);
   s.withdraw(6, 6);
+  s.dispatch();
   s.wave(3);
   s.hyperwarpCharge(2);
   s.hyperwarpAbort();
@@ -524,6 +525,24 @@ let chain;
   s.synth.duck("weapon", 6, 0.4);
   const changed = busGains.filter((g, i) => g.gain.events.length > beforeEvents[i]);
   ok("duck writes a dip and a recovery on exactly one bus", changed.length === 1 && changed[0].gain.events.length - beforeEvents[busGains.indexOf(changed[0])] >= 2, `${changed.length} buses touched`);
+
+  // Groups: the cap counts cues, not layers (ruling, 2026-08-16 — see the
+  // report). `alertBeat`'s own partials share one budget slot, so a full
+  // klaxon's four layers all fit under the alert bus's cap of 1 — but a
+  // *second*, distinct beat finds the bus already occupied and is refused
+  // wholesale, not thinned.
+  from = mark();
+  s.alertBeat(110, 4);
+  const firstBeat = voicesSince(from).length;
+  const secondFrom = mark();
+  s.alertBeat(220, 4);
+  const secondBeat = voicesSince(secondFrom).length;
+  ok("a klaxon's four partials share one slot and all sound", firstBeat === 4, `${firstBeat}`);
+  ok(
+    "a second beat in the same instant is refused entirely (8 voices requested, 4 scheduled)",
+    secondBeat === 0,
+    `${secondBeat}`,
+  );
 }
 
 // ── 4. the alert escalates by spectrum, never by level ─────────────────────
@@ -574,20 +593,16 @@ let chain;
 {
   // `alertBeat` and `conditionChange` now live on the `alert` bus, capped at
   // 1 (Task 1: static per-bus budgets) — deliberately the tightest budget in
-  // the bank, since only one alert condition is ever live. Both cues still
-  // *build* several simultaneous voices (up to four partials for a klaxon
-  // beat; two or three pulses for a condition whoop), all scheduled at the
-  // same instant, so under a one-voice cap only the first `play()` call in
-  // each cue ever sounds — the fundamental for a beat, the first pulse for a
-  // whoop. This is a real consequence of the new cap, not a mock artefact
-  // (`ctx.currentTime` does not advance between synchronous calls in a real
-  // browser either), and it is recorded here rather than hidden: the higher
-  // tiers currently distinguish themselves only by the fundamental's own
-  // waveform (`sawtooth` vs `triangle`) and by the whoop's pulse count/timing
-  // *as written*, not as heard. Flagged in the report as a first-draft
-  // tension for the tuning pass — either the cap wants revisiting once the
-  // richer tiers are heard to actually vanish, or these cues want building as
-  // a single compound voice the way the fm/formant voices to come do.
+  // the bank, since only one alert condition is ever live. Both cues build
+  // several simultaneous voices (up to four partials for a klaxon beat; two
+  // or three pulses for a condition whoop) — and, per the ruling that the cap
+  // counts *cues*, not layers (2026-08-16 — see the report), both now open
+  // with `this.synth.group()` so their own partials share the bus's one slot
+  // rather than compete for it. A *separate* beat still only gets the slot
+  // once the previous one has ended, which the mock's frozen clock does not
+  // model on its own — a fresh `Sound` per call stands in for the real gap
+  // between distinct alert events (`AlertPulse` never re-fires mid-decay),
+  // isolating what this section actually tests: one beat's own layers.
   const beat = (components) => {
     const s = new Sound();
     s.start();
@@ -600,27 +615,23 @@ let chain;
   const klaxon = beat(4);
 
   ok("one partial when plain", plain.length === 1, `${plain.length}`);
-  ok(
-    "the alert bus's cap of 1 lets only the fundamental through, whatever the tier",
-    rough.length === 1 && klaxon.length === 1,
-    `${rough.length} / ${klaxon.length}`,
-  );
+  ok("two when roughened", rough.length === 2, `${rough.length}`);
+  ok("four at the top", klaxon.length === 4, `${klaxon.length}`);
   ok(
     "the fundamental's level never moves",
     plain[0].level === rough[0].level && rough[0].level === klaxon[0].level,
     `${plain[0].level} / ${rough[0].level} / ${klaxon[0].level}`,
   );
   ok("the fundamental's pitch never moves", plain[0].from === klaxon[0].from);
-  ok(
-    "the fundamental's own waveform still marks the tier",
-    plain[0].wave === "triangle" && rough[0].wave === "sawtooth" && klaxon[0].wave === "sawtooth",
-    `${plain[0].wave} / ${rough[0].wave} / ${klaxon[0].wave}`,
-  );
+  near("the second is a minor second up", rough[1].from / rough[0].from, 1.06, 0.005);
+  const offsets = klaxon.slice(2).map((v) => v.from - klaxon[0].from);
+  ok("the sidebands straddle it", offsets.includes(-40) && offsets.includes(40), offsets.join(","));
   ok(
     "every partial rises over 20 ms",
     [plain, rough, klaxon].flat().every((v) => v.attack >= 0.0199),
     "Patterson: under 10 ms is a startle reflex",
   );
+  ok("urgency adds energy rather than gain", klaxon.reduce((a, v) => a + v.level, 0) > plain[0].level);
 
   const whoop = (red) => {
     const s = new Sound();
@@ -632,14 +643,22 @@ let chain;
   const yellow = whoop(false);
   const red = whoop(true);
   const tones = (v) => v.filter((x) => x.kind === "tone");
-  ok("yellow's burst is written as two pulses, one surviving the cap", tones(yellow).length === 1, `${tones(yellow).length}`);
-  ok("red's burst is written as three pulses, one surviving the cap", tones(red).length === 1, `${tones(red).length}`);
+  ok("yellow is two pulses", tones(yellow).length === 2, `${tones(yellow).length}`);
+  ok("red is three", tones(red).length === 3, `${tones(red).length}`);
+  ok(
+    "they do not share a repetition rate",
+    tones(red)[1].at - tones(red)[0].at !== tones(yellow)[1].at - tones(yellow)[0].at,
+    "Patterson: rhythm distinguishes, timbre does not",
+  );
   near(
-    "and the surviving pulse sits at the same level for both",
-    tones(red)[0].level,
-    tones(yellow)[0].level,
+    "and they sit at the same level",
+    Math.max(...tones(red).map((v) => v.level)),
+    Math.max(...tones(yellow).map((v) => v.level)),
     1e-9,
   );
+  const rising = (v) => v.every((x, i) => i === 0 || x.level >= v[i - 1].level);
+  ok("red rises within the burst", rising(tones(red)), "the first pulse is the quietest");
+  ok("yellow rises within the burst", rising(tones(yellow)));
 }
 
 // ── 5. the two weapons, told apart ─────────────────────────────────────────
@@ -693,12 +712,12 @@ let chain;
   const e = shot(false, 1);
   ok("and no two are identical", a[0].from !== c[0].from && b[0].from !== e[0].from, "the jitter is doing nothing");
 
-  // `torpedo` fires all four of its layers at the same instant, and the
-  // weapon bus's cap of 3 means the fourth — "the report leaving", the
-  // quietest and least essential of the four — never gets a voice, whether
-  // or not anything else is contending for the bus. That is a genuine
-  // consequence of the cap rather than a mock artefact; flagged in the
-  // report as a first-draft tension for the tuning pass.
+  // `torpedo` fires all four of its layers at the same instant; grouped
+  // (Task 1 fix-up, 2026-08-16 — the cap counts cues, not layers), they share
+  // one slot on the weapon bus, well under its cap of 3, so the shell keeps
+  // its full four layers. The clock still advances between distinct reports —
+  // `torpedo(false)` then `torpedo(true)` are two separate shots, not one
+  // compound cue, so each gets a clean bus the way spaced-out real shots would.
   ctx.currentTime += 1;
   const from = mark();
   s.torpedo(false);
@@ -708,11 +727,11 @@ let chain;
   s.torpedo(true);
   const empty = voicesSince(lastFrom);
 
-  ok("the shell keeps 3 of its 4 layers under the weapon bus's cap", shell.length === 3, `${shell.length}`);
+  ok("the shell is four layers", shell.length === 4, `${shell.length}`);
   ok("the punch is first and instant", shell[0].attack <= 0.001, `${shell[0].attack}`);
   ok("the punch is the loudest of them", shell[0].level === Math.max(...shell.map((v) => v.level)));
   ok("it ends up under 120 Hz", shell.some((v) => v.kind === "tone" && v.to !== null && v.to < 120));
-  ok("the last one says so (the rack click, on its own bus, is unaffected)", empty.length === shell.length + 1);
+  ok("the last one says so", empty.length === shell.length + 1);
 
   // The point of the exercise: the two weapons share no register.
   const phaserBand = [Math.min(miss[0].from, miss[0].to), Math.max(miss[0].from, miss[0].to)];
@@ -724,7 +743,7 @@ let chain;
   );
   ok(
     "one is pitched, the other percussive",
-    miss.every((v) => v.kind === "tone") && shell.filter((v) => v.kind === "noise").length === 2,
+    miss.every((v) => v.kind === "tone") && shell.filter((v) => v.kind === "noise").length === 3,
   );
 }
 

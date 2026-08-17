@@ -73,6 +73,16 @@ export interface VoiceSpec {
   readonly delay?: number;
   /** -1 hard port, +1 hard starboard. */
   readonly pan?: number;
+  /**
+   * The layers of one sound share a budget slot. `BUS_CAPS` bounds *cues*, not
+   * oscillators — a torpedo report is one budget unit even though it is four
+   * `play` calls, an alert beat is one unit whether it is one partial or four.
+   * Get a token from `Synth.group()` once per cue and pass it on every layer;
+   * layers without a token (the common case, a single-voice cue) count
+   * individually, exactly as before. Task 3's formant `speak()` — a whole
+   * phrase, squelch included, as one voice — uses the same mechanism.
+   */
+  readonly group?: number;
 }
 
 export interface BedSpec {
@@ -162,6 +172,8 @@ interface Voice {
   readonly source: AudioScheduledSourceNode;
   /** Which bus's budget this voice counts against. */
   readonly bus: Bus;
+  /** Shares one budget slot with every other voice carrying the same token. */
+  readonly group?: number;
 }
 
 type ContextCtor = typeof AudioContext;
@@ -177,6 +189,8 @@ export class Synth {
   private silenced = false;
   private readonly voices: Voice[] = [];
   private readonly beds: Bed[] = [];
+  /** Backs `group()`. */
+  private groupSeq = 0;
 
   /** True once there is a running context to schedule into. */
   get live(): boolean {
@@ -251,8 +265,16 @@ export class Synth {
       // something is not. Dropping also degrades *predictably*, which is the
       // half of §6's static-allocation argument that needs no new numbers.
       // Per-bus rather than global, so a busy hostile bus cannot starve the
-      // mechanism bus of the two voices a hard dock needs.
-      if (this.count(busName) >= BUS_CAPS[busName]) return;
+      // mechanism bus of the two voices a hard dock needs. Per-*cue* within
+      // that, via `spec.group` — a compound cue's own layers were always
+      // meant to cost one slot, not one each; see `count` and `VoiceSpec.group`.
+      // A later layer of a group that has already paid for its slot is not
+      // asking for a new one, so it skips the check entirely — otherwise a
+      // cue's second layer would find its own first layer occupying the
+      // bus's last slot and refuse itself, which is exactly backwards.
+      const alreadyAdmitted =
+        spec.group !== undefined && this.voices.some((v) => v.bus === busName && v.group === spec.group);
+      if (!alreadyAdmitted && this.count(busName) >= BUS_CAPS[busName]) return;
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0.0001, at);
@@ -309,7 +331,7 @@ export class Synth {
       }
 
       source.stop(end + 0.02);
-      const voice: Voice = { end, gain, source, bus: busName };
+      const voice: Voice = { end, gain, source, bus: busName, group: spec.group };
       source.onended = () => {
         // The whole chain, not just the gain. A filter or a panner left hanging
         // off a dead source is a node the engine has to keep considering, and
@@ -460,11 +482,33 @@ export class Synth {
     }
   }
 
-  /** Live voices on one bus, after `reap` — what `play` checks against `BUS_CAPS`. */
+  /**
+   * Live *slots* on one bus, after `reap` — what `play` checks a brand-new
+   * cue against. A slot is one ungrouped voice, or one distinct `group`
+   * token: the four layers of a torpedo report count once between them, not
+   * four times. (A layer whose own group is *already* one of those slots
+   * skips this check entirely — see `play` — since it is not asking for a
+   * new one.)
+   */
   private count(bus: Bus): number {
+    const groups = new Set<number>();
     let n = 0;
-    for (const voice of this.voices) if (voice.bus === bus) n++;
-    return n;
+    for (const voice of this.voices) {
+      if (voice.bus !== bus) continue;
+      if (voice.group !== undefined) groups.add(voice.group);
+      else n++;
+    }
+    return n + groups.size;
+  }
+
+  /**
+   * A fresh token for `VoiceSpec.group` — call once per compound cue and hand
+   * the same value to every layer. Monotonic and never reused, so two cues
+   * that both call `group()` can never collide even if their voices happen to
+   * overlap in time.
+   */
+  group(): number {
+    return ++this.groupSeq;
   }
 
   private cut(voice: Voice, now: number): void {
