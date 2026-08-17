@@ -816,28 +816,6 @@ anything any task here actually changed:
   browser tab, and confirmed the same diagnosis on a clean, uncontended
   retry.
 
-Two more, found while gating the positional-echo task (the sound bank's own
-Task 13, `2026-08-16-sound-design/task-13-report.md` — a different report
-from the combat-feel pass's own Task 13 cited above, same number, different
-plan) and confirmed against a clean `git stash` with no other changes in the
-tree, so neither is caused by any in-flight feature work:
-
-- **"Forcing a sector changes the room within a frame"** — `bareRoom`/
-  `rockRoom`, both derived from `forceRoomSector()`'s `page.evaluate(() =>
-  window.__sound.room)`, come back plain JS `undefined` rather than the
-  `null`-or-room-object the poll loop assumes, so `bareRoom !== null &&
-  bareRoom.name…` throws on `.name` of `undefined` and takes the whole
-  harness process down rather than failing the one check. Reproduces
-  identically on an unmodified checkout. Once patched past (`!!bareRoom`
-  instead of `!== null`) the checks still genuinely *fail* rather than pass,
-  so this is two bugs stacked: a harness crash hiding a real assertion
-  failure underneath it.
-- **"`lastPhrase` of undefined"**, a few checks further on — a
-  `page.evaluate` reads `.lastPhrase` off something the page context does
-  not have at that point in the sequence, again reproducing on a clean
-  checkout, again taking the whole process down rather than failing one
-  check.
-
 Worth a maintainer's attention if any starts failing CI intermittently, but
 these are known rather than new defects, and out of scope for a docs pass to
 chase down.

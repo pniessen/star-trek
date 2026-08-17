@@ -1182,9 +1182,11 @@ export class Sound {
     // kill burst or a mine chain now stays correctly bounded by how many
     // *kills* the impact bus can carry, not how many oscillators.
     const g = this.synth.group();
-    // The body — the longest layer here, and the one `echoFrom` re-schedules
-    // off the rocks: a low rumble reads as "the same blast, from over there"
-    // in a way the crack's own 70ms decay never would.
+    // The body — not the longest layer (the sine below outlasts it at
+    // 0.5×size against this one's 0.42×size), but the one `echoFrom`
+    // re-schedules off the rocks: its `freq`/`to` is a real filter cutoff,
+    // so `ECHO.cutoffMul` has something to dull. The sine's `freq`/`to` is a
+    // pitch glide, not a cutoff, and the crack has no `to` at all.
     const tail = {
       kind: "noise" as const,
       filter: "lowpass" as const,
@@ -2777,10 +2779,14 @@ export class Sound {
   }
 
   /**
-   * The rocks answering back. `kill`, `mineBlast`, `impact` (a torpedo
-   * detonating) and `breach` each call this with their own tail voice — the
-   * longest noise/lowpass layer of the cue, the one that reads as the blast's
-   * body rather than its crack — and it re-schedules that same voice, once
+   * The rocks answering back. `kill`, `mineBlast` and `impact` (a torpedo
+   * detonating) each call this with their own filtered-noise layer — not
+   * necessarily the longest one in the cue, but the one whose `freq`/`to` is
+   * a genuine filter cutoff, which is what makes `ECHO.cutoffMul` mean
+   * something: scaling it down is a literal muffling, the way it would never
+   * be on a plain tone's own pitch glide. `breach` has no noise layer at
+   * all, so it hands over the lower of its two tones instead (see its own
+   * docblock). This method re-schedules whichever voice it is handed, once
    * per nearby rock, on the `echo` bus.
    *
    * `x`/`z` are the *source*'s position, not the listener's: the nearest
@@ -2800,6 +2806,10 @@ export class Sound {
    * worth of voices inside its own single slot — never three slots eaten by
    * one blast's own rock cluster. Silent outright when `echoRocks` is empty,
    * which is every sector without a hero rocks field.
+   *
+   * O(n log n) in `echoRocks.length` per call (a map, a filter, a sort) —
+   * fine at a few dozen rocks a sector, the field's own scale, but not a
+   * shape that should be asked to scale past it without a second look.
    */
   private echoFrom(x: number, z: number, tail: VoiceSpec): void {
     if (this.echoRocks.length === 0) return;
