@@ -1,4 +1,5 @@
 import { Synth, type Bed } from "./Synth.js";
+import { Radio, type Party, type RadioEvent, type Doctrine } from "./radio.js";
 
 /**
  * Every sound the game makes, in one bank.
@@ -249,6 +250,8 @@ export class Sound {
    * cue on `Sound`.
    */
   readonly synth = new Synth();
+  /** The one channel three parties share. See `radio.ts`'s own header. */
+  readonly radio = new Radio(this.synth);
   private alert: Bed | null = null;
   private engine: Bed | null = null;
   private reactor: Bed | null = null;
@@ -371,6 +374,24 @@ export class Sound {
     this.lx = x;
     this.lz = z;
     this.lh = heading;
+  }
+
+  /**
+   * The one call every party's chatter routes through — see `radio.ts`'s own
+   * header for what the channel is for. `x`/`z` place the voice the way
+   * every other placed cue does, through `place`'s own pan; omit them for a
+   * voice with nowhere in particular to be placed — HQ, speaking from
+   * outside the sector, the way `dispatch`'s own panel cue already does
+   * centred. `now` is read off the audio clock here rather than asked of the
+   * caller, same as every other cue in this file; if there is no rig yet
+   * (no gesture, no device), it falls back to 0 — `Radio`'s own bookkeeping
+   * still runs, harmlessly, since `Synth.speak` itself is the thing that
+   * actually no-ops with nothing to play through.
+   */
+  say(party: Party, event: RadioEvent, opts: { x?: number; z?: number; doctrine?: Doctrine; guard?: boolean } = {}): void {
+    const pan = opts.x !== undefined && opts.z !== undefined ? this.place(opts.x, opts.z).pan : undefined;
+    const now = this.synth.context?.ctx.currentTime ?? 0;
+    this.radio.say(party, event, { doctrine: opts.doctrine, guard: opts.guard, pan, now, rng: Math.random });
   }
 
   /**
@@ -1082,6 +1103,9 @@ export class Sound {
    * keeps the sentence itself carrying the meaning.
    */
   dispatch(): void {
+    // The preamble: `ours` on the one shared channel, before the flat tone
+    // below carries the line itself — a transmission opening, not a beep.
+    this.say("ours", "dispatch");
     // Three layers, one slot — the panel bus's cap of 2 would otherwise mute
     // the flat tone that carries the cue's own meaning.
     const g = this.synth.group();
@@ -1960,6 +1984,7 @@ export class Sound {
    * good news the game has.
    */
   allyHail(x: number, z: number): void {
+    this.say("warden", "hail", { x, z });
     const at = this.place(x, z, 0.5);
     // Squelch plus two rising notes, one slot — the panel bus's cap of 2
     // would otherwise mute the second, resolving note.
@@ -1985,6 +2010,7 @@ export class Sound {
 
   /** Anything else it says. One note, so a talkative escort is not a tune. */
   allyComms(x: number, z: number): void {
+    this.say("warden", "comms", { x, z });
     const at = this.place(x, z, 0.4);
     const g = this.synth.group();
     this.squelch(at, 0, g);
@@ -2039,6 +2065,7 @@ export class Sound {
    * where the hail had a rising one — the same two notes, the other way up.
    */
   allyLost(x: number, z: number): void {
+    this.say("warden", "lost", { x, z });
     const at = this.place(x, z, 0.4);
     const g = this.synth.group();
     this.synth.play({

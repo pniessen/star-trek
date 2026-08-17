@@ -2,6 +2,7 @@ import { Color, MathUtils, Vector3 } from "three";
 import { ALTITUDE, flight } from "./altitude.js";
 import { COMET } from "./comet.js";
 import { sound } from "../audio/sound.js";
+import type { Doctrine } from "../chart/commander.js";
 import { VectorObject } from "../render/VectorObject.js";
 import { PALETTE } from "../render/palette.js";
 import { BOLT, type Ordnance } from "./weapons.js";
@@ -395,6 +396,7 @@ export class Hostile {
     mines: Minefield,
     flank = false,
     rocks: readonly Rock[] = [],
+    doctrine: Doctrine = "raider",
   ): void {
     // Unconditional, before any early return below (the degenerate
     // `distance < 1e-3` guard included) — see `clock`'s own docblock for
@@ -550,6 +552,12 @@ export class Hostile {
       ) {
         this.chargedAt = this.clock;
         sound.lanceCharge(this.position.x, this.position.z);
+        sound.say("theirs", "charge", {
+          x: this.position.x,
+          z: this.position.z,
+          doctrine,
+          guard: this.guardName !== null,
+        });
       }
     }
 

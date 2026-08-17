@@ -41,7 +41,7 @@ import { WARDEN, Wing, type Duty, type Escort } from "./allies.js";
 import { Docking } from "./docking.js";
 import { HYPERWARP, Hyperwarp } from "./hyperwarp.js";
 import { intercept } from "../chart/enemyTurn.js";
-import { commanderOf, guardClass, warAct, type WarAct } from "../chart/commander.js";
+import { commanderOf, guardClass, warAct, type Doctrine, type WarAct } from "../chart/commander.js";
 import { creditSalvage, type Campaign } from "../chart/campaign.js";
 import { gainGround, loadoutOf } from "../chart/economy.js";
 import { jumpCharge } from "../chart/jump.js";
@@ -254,6 +254,29 @@ export class Session {
    * to roll while the act is failing. Reset in `restart`.
    */
   private guardSpawnedThisRun = false;
+
+  /**
+   * True once this wave has said `"theirs"`/`"flank"` on the radio — the
+   * chatter is the tell for `brawlerEngaged`'s own false→true edge, and that
+   * edge can otherwise cross several times a wave as the player passes in
+   * and out of a Brawler's fire range. Reset at the top of `spawnWave`.
+   */
+  private flankAnnouncedThisWave = false;
+
+  /**
+   * The commander's own doctrine, read fresh each time rather than cached —
+   * `commanderOf` is arithmetic over the campaign seed (see its own
+   * docblock), not a lookup, so there is nothing here worth memoising, and a
+   * cached copy would be one more thing to forget to invalidate on
+   * `restart`. Every `"theirs"` radio call reads this rather than
+   * recomputing `commanderOf` inline, so the enemy's chatter and the
+   * commander choosing its own guard class always agree on which doctrine is
+   * commanding the sector.
+   */
+  private get doctrine(): Doctrine {
+    return commanderOf(this.campaign.seed).doctrine;
+  }
+
   /**
    * Localhost-probe seam, `arrivedByJump`'s pattern: TypeScript keeps it
    * private, but a headless test can still poke it directly on the live
@@ -460,7 +483,7 @@ export class Session {
       // reads as a stopped program; a circling one reads as being finished off.
       // Nothing they fire can land — hit resolution is below this line.
       for (const hostile of this.fleet.hostiles) {
-        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks);
+        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks, this.doctrine);
       }
       // The Warden keeps flying too — `kill()` has already told it to break
       // off, so the last thing a run shows you is your escort turning away.
@@ -538,15 +561,31 @@ export class Session {
     // Ahead of the hostile loop for the same reason `interference` is: every
     // swarmer that reads the gate this frame should read this frame's answer.
     this.fleet.updateEngagement(player);
+    // The flank gate's own false→true edge, once per wave — chatter for a
+    // tactic committing, not a running commentary on whether it still holds
+    // this frame. No position: this is the enemy coordinating in general,
+    // not any one hostile's own voice.
+    if (this.fleet.brawlerEngaged && !this.flankAnnouncedThisWave) {
+      this.flankAnnouncedThisWave = true;
+      sound.say("theirs", "flank", { doctrine: this.doctrine });
+    }
 
     for (const hostile of this.fleet.hostiles) {
-      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks);
+      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks, this.doctrine);
       // The one warning the forward view gives you. Everything before this
       // moment happened on the scanner — and the sound is the half of the
       // warning that works when you are pointed the wrong way.
       if (hostile.revealed) {
         this.say("DECLOAKING");
         sound.decloak(hostile.position.x, hostile.position.z);
+        // The commit — squelch only, no phrase — the Shroud's own strike
+        // committing on the same channel the rest of the war talks over.
+        sound.say("theirs", "commit", {
+          x: hostile.position.x,
+          z: hostile.position.z,
+          doctrine: this.doctrine,
+          guard: hostile.guardName !== null,
+        });
       }
     }
     this.stepWithdrawals(player);
@@ -1118,6 +1157,17 @@ export class Session {
         HOSTILE_COLORS[hostile.kind],
       );
       sound.withdraw(hostile.position.x, hostile.position.z);
+      // The roll that set `withdrawing` happened back in `Hostile.damage()`,
+      // which has no campaign to read a doctrine off; this is where session
+      // next observes the same hostile, so the radio call reuses this
+      // already-existing observation point rather than threading doctrine
+      // into `hostiles.ts` for one more event.
+      sound.say("theirs", "withdraw", {
+        x: hostile.position.x,
+        z: hostile.position.z,
+        doctrine: this.doctrine,
+        guard: hostile.guardName !== null,
+      });
       this.fleet.retire(hostile);
     }
   }
@@ -1599,6 +1649,7 @@ export class Session {
   private spawnWave(player: Ship): void {
     this.wave++;
     this.state = "fighting";
+    this.flankAnnouncedThisWave = false;
 
     // Escalation is by class, not only by count. The first waves teach the
     // reticle; the Harrow arrives once you have a flying habit worth punishing,
@@ -1710,6 +1761,9 @@ export class Session {
 
     sound.wave(this.wave);
     this.say(`WAVE ${this.wave}`);
+    // The enemy's own voice, once a wave, in the commander's own doctrine —
+    // no position: a wave arriving is the whole sector, not one hostile.
+    sound.say("theirs", "wave", { doctrine: this.doctrine });
 
     // HQ used to speak here, right after `WAVE n`. It does not any more — see
     // the header of `dispatch.ts`: a signal that only ever lands in the gap

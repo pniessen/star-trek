@@ -34,6 +34,7 @@ execFileSync(
     "tsc",
     "src/audio/Synth.ts",
     "src/audio/sound.ts",
+    "src/audio/radio.ts",
     "src/audio/formant.ts",
     "src/audio/acoustics.ts",
     "src/game/alert.ts",
@@ -314,6 +315,7 @@ function everyCue(s) {
   s.withdraw(6, 6);
   s.dispatch();
   s.wave(3);
+  s.say("theirs", "wave", { doctrine: "raider" });
   s.hyperwarpCharge(2);
   s.hyperwarpAbort();
   s.hyperwarpArrive();
@@ -967,7 +969,9 @@ let chain;
   const gates = fresh.filter((n) => n.kind === "gain" && n.gain.events.length >= phrase.syllables.length * 2);
   ok("the syllable gate is a scheduled envelope sequence, not timers", gates.length >= 1, "no gain carries per-syllable events");
   ok("two squelch bursts bracket the phrase", fresh.filter((n) => n.kind === "buffersource").length === 2, "");
-  ok("a phrase counts as one radio voice", true); // budget asserted in Task 8's radio test
+  // Placeholder promoted to a real assertion — §17, Task 11's own radio
+  // section, is where the budget actually gets exercised, against `Radio`
+  // rather than a bare `synth.speak` loop.
 
   // Task 11 needs a squelch-only phrase (the Shroud's commit) — `speak` must
   // accept zero syllables gracefully rather than requiring `composePhrase`
@@ -1971,6 +1975,162 @@ let chain;
     "the four registers agree: every frequency is a motif degree × 2^k",
     allFreqs.every(onMotif),
     allFreqs.map((f) => f.toFixed(1)).join(","),
+  );
+}
+
+// ── 17. the radio: three parties, one channel ───────────────────────────────
+// Task 11. `Radio` (`radio.ts`) is the scheduling half — which party gets the
+// channel right now — over `composePhrase`'s pure grammar (Task 3, §9
+// above) and `Synth.speak`/`duck` (also Task 3, §9/§3). This section is
+// where §9's own placeholder — "a phrase counts as one radio voice" —
+// finally becomes a real assertion, against `Radio` itself rather than a
+// bare loop of `synth.speak` calls.
+{
+  const { Radio, CADENCES } = await import(join(out, "audio/radio.js"));
+  const { composePhrase } = await import(join(out, "audio/formant.js"));
+
+  // Cadence shape, independent of scheduling: raider reads as several short,
+  // clipped syllables; hammer as few, long, unhurried ones — the two ends of
+  // "clipped and fast" vs "slow and monotone" this module's own header
+  // describes chatter carrying instead of words.
+  let seed = 11;
+  const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const raiderPhrase = composePhrase(CADENCES.raider, rng);
+  ok(
+    "raider's own cadence: several syllables, every one clipped short",
+    raiderPhrase.syllables.length >= 3 && raiderPhrase.syllables.every((s) => s.length < 0.08),
+    `${raiderPhrase.syllables.length} syllables, lengths ${raiderPhrase.syllables.map((s) => s.length.toFixed(3)).join(",")}`,
+  );
+  const hammerPhrase = composePhrase(CADENCES.hammer, rng);
+  ok(
+    "hammer's own cadence: every syllable long and slow",
+    hammerPhrase.syllables.length > 0 && hammerPhrase.syllables.every((s) => s.length >= 0.14),
+    hammerPhrase.syllables.map((s) => s.length.toFixed(3)).join(","),
+  );
+
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const synth = new Synth();
+  synth.start();
+  const radio = new Radio(synth);
+
+  // `commit`: the Shroud's own reveal — no phrase, two squelches only.
+  // `now` is always `ctx.currentTime` itself throughout this section, kept
+  // in lockstep by advancing the mock's own clock rather than a
+  // separately-tracked variable — `Radio`'s busy/queue bookkeeping runs on
+  // whatever `now` it is handed, and letting that drift from the audio
+  // clock `Synth.speak` itself reads is exactly the kind of bug this note
+  // exists to keep out: an earlier draft of this test tracked its own
+  // `busyNow` beside `ctx.currentTime` and let the two fall out of sync,
+  // which read a still-busy channel as free and silently dropped a call the
+  // assertion below needed to have actually spoken.
+  let from = mark();
+  radio.say("theirs", "commit", { doctrine: "raider", now: ctx.currentTime, rng: Math.random });
+  const commitFresh = nodes.slice(from);
+  ok(
+    "commit is squelch-only: exactly two noise bursts",
+    commitFresh.filter((n) => n.kind === "buffersource").length === 2,
+    `${commitFresh.filter((n) => n.kind === "buffersource").length}`,
+  );
+  // The syllable gate specifically, not just any gain node in the call — the
+  // two squelch bursts have their own gains, and *those* ramp on every call,
+  // commit included. Found the way §9 already finds it for its own
+  // zero-syllable check: the one gain every formant bandpass connects into.
+  const commitBandpasses = commitFresh.filter((n) => n.kind === "biquad" && n.type === "bandpass");
+  const commitGate = commitFresh.find(
+    (n) => n.kind === "gain" && commitBandpasses.length > 0 && commitBandpasses.every((bp) => bp.out.includes(n)),
+  );
+  ok(
+    "...and opens no syllable gate",
+    !commitGate || !commitGate.gain.events.some((e) => e[0] === "lin"),
+    "the syllable gate ramped despite zero syllables to voice",
+  );
+  ok(
+    "...and still records as a phrase having spoken",
+    radio.lastPhrase?.party === "theirs" && radio.lastPhrase?.event === "commit",
+    JSON.stringify(radio.lastPhrase),
+  );
+
+  // Priority: a low-priority event arriving while the party is already
+  // speaking is dropped outright — `lastPhrase` does not move.
+  ctx.currentTime += 5; // clear of `commit`'s own tiny span
+  radio.say("theirs", "charge", { doctrine: "raider", now: ctx.currentTime, rng: Math.random });
+  const afterFirstCharge = radio.lastPhrase;
+  ctx.currentTime += 0.01; // still well inside the charge phrase's own span
+  radio.say("theirs", "charge", { doctrine: "raider", now: ctx.currentTime, rng: Math.random });
+  ok(
+    "a low-priority event while the party is already speaking is dropped",
+    radio.lastPhrase === afterFirstCharge,
+    JSON.stringify(radio.lastPhrase),
+  );
+
+  // Parties are independent: `theirs` being busy never holds up `ours`.
+  radio.say("ours", "dispatch", { now: ctx.currentTime, rng: Math.random });
+  ok(
+    "a different party is never dropped for another party's busy line",
+    radio.lastPhrase.party === "ours" && radio.lastPhrase.event === "dispatch",
+    JSON.stringify(radio.lastPhrase),
+  );
+
+  // Every `say` ducks the weapon bus — reading the bus gains structurally,
+  // §3's own duck test's technique: exactly one bus gain picks up fresh
+  // scheduled events (`Synth.speak` itself never writes to a bus gain's own
+  // `.gain` param, only `duck` does), so "one bus touched" is "the duck fired".
+  ctx.currentTime += 5; // clear of every phrase scheduled so far
+  const master = nodes.find((n) => n.kind === "gain" && n.out.some((o) => o.kind === "biquad" && o.type === "highpass"));
+  const busGains = nodes.filter((n) => n.kind === "gain" && n.out.includes(master));
+  const beforeEvents = busGains.map((g) => g.gain.events.length);
+  radio.say("theirs", "wave", { doctrine: "hammer", now: ctx.currentTime, rng: Math.random });
+  const ducked = busGains.filter((g, i) => g.gain.events.length > beforeEvents[i]);
+  ok("every say ducks exactly one bus (the weapon bus)", ducked.length === 1, `${ducked.length} buses touched`);
+
+  // Guard: the commander's guard reads six percent low over the air, the
+  // same offset `sound.hostileFire`'s own guard boost applies to its shot.
+  // Same rng sequence both times (a fresh, identically-seeded generator per
+  // call) isolates the one thing that should differ: `pitchBase` scaled by
+  // `GUARD_PITCH_SCALE`, which the "level" contour only ever *adds* jitter
+  // on top of — so the two carriers' starting pitches should differ by
+  // exactly `pitchBase * (1 - 0.94)`, not by some unrelated jitter draw.
+  ctx.currentTime += 5; // clear of the duck test's own phrase
+  let gseed = 5;
+  const grng = () => (gseed = (gseed * 48271) % 2147483647) / 2147483647;
+  const plainFrom = mark();
+  gseed = 5;
+  radio.say("theirs", "wave", { doctrine: "hammer", now: ctx.currentTime, rng: grng });
+  const plainCarrier = nodes.slice(plainFrom).find((n) => n.kind === "oscillator");
+  const plainPitch = plainCarrier.frequency.events[0][1];
+  ctx.currentTime += 5; // clear of the plain phrase's own span before the guarded one
+  const guardFrom = mark();
+  gseed = 5;
+  radio.say("theirs", "wave", { doctrine: "hammer", guard: true, now: ctx.currentTime, rng: grng });
+  const guardCarrier = nodes.slice(guardFrom).find((n) => n.kind === "oscillator");
+  const guardPitch = guardCarrier.frequency.events[0][1];
+  near(
+    "the commander's guard speaks six percent low",
+    plainPitch - guardPitch,
+    CADENCES.hammer.pitchBase * (1 - 0.94),
+    0.5,
+  );
+
+  // The cap: the radio bus admits exactly 3 cues (one per party, no
+  // groups) and refuses the surplus — §9's own placeholder, made real, and
+  // against a fresh bus so nothing above this line contaminates the count.
+  const capCtx = makeContext();
+  globalThis.AudioContext = function () { return capCtx; };
+  nodes = [];
+  const capSynth = new Synth();
+  capSynth.start();
+  const tiny = { syllables: [{ at: 0, length: 0.05, pitch: 160, f1: 500, f2: 1500, f3: 2500, level: 1 }], duration: 0.05 };
+  const capFrom = mark();
+  for (let i = 0; i < 5; i++) {
+    capSynth.speak({ phrase: tiny, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+  }
+  const capVoices = voicesSince(capFrom);
+  ok(
+    "the radio bus admits exactly 3 phrases and refuses the rest",
+    capVoices.filter((v) => v.kind === "tone").length === 3,
+    `${capVoices.filter((v) => v.kind === "tone").length} tones scheduled`,
   );
 }
 

@@ -217,8 +217,15 @@ function speechDriveCurve(): Float32Array<ArrayBuffer> {
   return driveCurve;
 }
 
-/** Each squelch burst's own length — see `Synth.speak`. */
-const SQUELCH_LEN = 0.04;
+/**
+ * Each squelch burst's own length — see `Synth.speak`. Exported so
+ * `radio.ts` can compute a phrase's real on-air span (two squelches plus the
+ * composed phrase's own duration) without a second, drifting copy of this
+ * number — the mirrored-constant trick the rest of the audio layer uses for
+ * the standalone-build boundary does not apply here, since `radio.ts` is
+ * already audio-side and imports this module directly.
+ */
+export const SQUELCH_LEN = 0.04;
 
 interface Rig {
   readonly ctx: AudioContext;

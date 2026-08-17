@@ -611,6 +611,42 @@ check(
 state = await waitFor((s) => s.wave >= 1 && s.hostiles > 0);
 check("wave spawns", state.wave >= 1 && state.hostiles > 0, JSON.stringify(state));
 
+// ── the radio: three parties, one channel ───────────────────────────────────
+// Task 11. `spawnWave` says `"theirs"`/`"wave"` as its last act, so the wave
+// that just spawned above should already have keyed the enemy's own voice —
+// polled rather than asserted on the instant, the same reasoning `waitFor`
+// itself gives (a real GPU and a SwiftShader container do not buy the same
+// simulated time per wall-clock second, and this is well within wave one's
+// tiny, mostly-swarmer roster, where nothing else on `"theirs"` — a charge,
+// a commit, a flank — has any real chance to fire first).
+let radioTheirs = await page.evaluate(() => window.__sound.radio.lastPhrase?.party ?? null);
+{
+  const deadline = Date.now() + 1500;
+  while (radioTheirs !== "theirs" && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+    radioTheirs = await page.evaluate(() => window.__sound.radio.lastPhrase?.party ?? null);
+  }
+}
+check("theirs speaks within a second of a wave spawning", radioTheirs === "theirs", `lastPhrase.party=${radioTheirs}`);
+
+// `dispatch()`'s own preamble: `ours`, before the flat panel tone that
+// carries the line. Called directly on the bank rather than driven through
+// the whole HQ-arrival mechanism (forced by winding `session.dispatches`'
+// own clock, exercised for real further down this file) — this block's only
+// claim is the wiring inside `Sound.dispatch()` itself, and a direct call is
+// the more targeted way to isolate that from `theirs`' own chatter, which a
+// real wave in flight could otherwise interleave with `lastPhrase` first.
+const radioOurs = await page.evaluate(() => {
+  window.__sound.radio.lastPhrase = null;
+  window.__sound.dispatch();
+  return window.__sound.radio.lastPhrase;
+});
+check(
+  "dispatch's own radio preamble reads as ours",
+  radioOurs?.party === "ours" && radioOurs?.event === "dispatch",
+  JSON.stringify(radioOurs),
+);
+
 // ── the scanner as a second ear ─────────────────────────────────────────────
 // With hostiles up, the arm sweeps across at least one of them within a
 // single revolution (~1.5s at `SCANNER.sweepRate`, `4.2` rad/s) and
