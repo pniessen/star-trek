@@ -1,4 +1,4 @@
-import { Synth, type Bed } from "./Synth.js";
+import { Synth, type Bed, type VoiceSpec } from "./Synth.js";
 import { Radio, type Party, type RadioEvent, type Doctrine } from "./radio.js";
 import { roomFor, type HeroKind } from "./acoustics.js";
 import { makeRng } from "../chart/rng.js";
@@ -137,6 +137,16 @@ type HostileKind = "swarmer" | "sniper" | "brawler" | "miner" | "stalker";
 type ShieldFacing = "fore" | "starboard" | "aft" | "port";
 
 /**
+ * A collidable sphere, world space — the shape `Asteroids.rocks` produces.
+ * Declared structurally rather than imported, the same reason `HostileKind`
+ * and `ShieldFacing` above are: `render/Asteroids.ts` pulls in `three`, and
+ * this file is tsc-emitted standalone for the audiotest (see the class
+ * header). `game/session.ts` declares the identical structural type for the
+ * identical reason — see its own docblock.
+ */
+type Rock = { x: number; y: number; z: number; r: number };
+
+/**
  * The commander's guard, heard rather than only seen: every class's own fire
  * pitched six percent low. Matches the radio signature a later task gives
  * the guard's own voice, so the two land as the same idea in two mediums.
@@ -232,6 +242,33 @@ const APPROACH = {
    *  seconds still overlaps the tail of the last one, so it reads as one
    *  held tone rather than a series of blips. */
   onCourseHold: 0.4,
+} as const;
+
+/**
+ * `echoFrom`'s own game-speed of sound — not the real 343 m/s, a *chosen*
+ * one, the same license `HALF_RANGE` and `PING.errorFar` already spend on
+ * distance turned to time instead: a rock 30 units off answers about 0.18s
+ * later (`2 × 30 / 340`), close enough behind the original report to read as
+ * "that same blast, off something over there" rather than as its own event.
+ */
+const C_GAME = 340;
+
+/**
+ * `echoFrom`'s own tuning — see its own docblock for what each number does.
+ * First-draft, `docs/todo.md`'s tuning list, the same as everything else
+ * in this bank.
+ */
+const ECHO = {
+  /** Only rocks this close to the source answer at all. */
+  range: 120,
+  /** Nearest first, capped — matches `BUS_CAPS.echo` (`Synth.ts`) so one
+   *  echoed event can never ask the bus for more than it could ever grant. */
+  maxRocks: 3,
+  /** An echo is quieter than the thing that made it. */
+  levelMul: 0.35,
+  /** A reflection off rock is duller than the original — the filter/pitch
+   *  ceiling drops with it. */
+  cutoffMul: 0.6,
 } as const;
 
 /**
@@ -392,6 +429,17 @@ export class Sound {
   /** Latched by `insideComet`: true while the room on the convolver is the
    *  comet's own mist rather than the sector's. */
   private inComet = false;
+
+  /**
+   * The hero rocks field the player is currently standing in — `main.ts`
+   * sets this every frame straight off `Asteroids.rocks`, beside
+   * `session.rocks`, empty outside a `"rocks"` sector. `echoFrom` reads it
+   * fresh on every call rather than caching a snapshot: the same reasoning
+   * `game/session.ts`'s own `rocks` field gives — the field tumbles, and a
+   * value captured once at sector entry would drift from what is actually
+   * on screen within a few frames.
+   */
+  echoRocks: readonly Rock[] = [];
 
   get muted(): boolean {
     return this.synth.muted;
@@ -1062,22 +1110,22 @@ export class Sound {
 
   // ── things landing ───────────────────────────────────────────────────────
 
-  /** A torpedo on a hull that survives it. */
+  /** A torpedo on a hull that survives it — the detonation, not the launch
+   *  (`torpedo`, above, has no world position of its own to echo off). */
   impact(x: number, z: number): void {
     const { level, pan } = this.place(x, z);
     const g = this.synth.group();
-    this.synth.play({
-      kind: "noise",
-      group: g,
-      filter: "bandpass",
+    const tail = {
+      kind: "noise" as const,
+      filter: "bandpass" as const,
       q: 1.4,
       freq: 900,
       to: 260,
       level: 0.2 * level,
       attack: 0.002,
       decay: 0.18,
-      pan,
-    });
+    };
+    this.synth.play({ ...tail, group: g, pan });
     this.synth.play({
       group: g,
       wave: "triangle",
@@ -1088,6 +1136,7 @@ export class Sound {
       decay: 0.24,
       pan,
     });
+    this.echoFrom(x, z, tail);
   }
 
   /** Hull on rock. A knock, not a weapon: low, dry, placed at the contact. */
@@ -1133,18 +1182,20 @@ export class Sound {
     // kill burst or a mine chain now stays correctly bounded by how many
     // *kills* the impact bus can carry, not how many oscillators.
     const g = this.synth.group();
-    this.synth.play({
-      kind: "noise",
-      group: g,
-      filter: "lowpass",
+    // The body — the longest layer here, and the one `echoFrom` re-schedules
+    // off the rocks: a low rumble reads as "the same blast, from over there"
+    // in a way the crack's own 70ms decay never would.
+    const tail = {
+      kind: "noise" as const,
+      filter: "lowpass" as const,
       q: 0.8,
       freq: 2200,
       to: 70,
       level: 0.32 * level,
       attack: 0.003,
       decay: 0.42 * size,
-      pan,
-    });
+    };
+    this.synth.play({ ...tail, group: g, pan });
     this.synth.play({
       group: g,
       wave: "sine",
@@ -1166,6 +1217,7 @@ export class Sound {
       decay: 0.07,
       pan,
     });
+    this.echoFrom(x, z, tail);
     if (multiplier !== null) this.deposit(multiplier);
   }
 
@@ -1380,11 +1432,17 @@ export class Sound {
    * different event wearing the same instant: the blow is the hull, the
    * falling figure is the money leaving, and Task 10's shared `MOTIF` needs
    * the second half addressable on its own.
+   *
+   * Has no `x`/`z` of its own — a breach is always at the hull, which is
+   * always where the listener is — so its own echo (the lower, heavier of
+   * the two tones) is placed off `lx`/`lz` rather than a passed-in position.
    */
   breach(): void {
     const g = this.synth.group();
-    this.synth.play({ group: g, wave: "sine", freq: 90, level: 0.4, attack: 0.003, decay: 0.4 });
+    const tail = { wave: "sine" as const, freq: 90, level: 0.4, attack: 0.003, decay: 0.4 };
+    this.synth.play({ ...tail, group: g });
     this.synth.play({ group: g, wave: "sine", freq: 160, level: 0.32, attack: 0.003, decay: 0.4 });
+    this.echoFrom(this.lx, this.lz, tail);
   }
 
   /**
@@ -1415,19 +1473,17 @@ export class Sound {
   mineBlast(x: number, z: number): void {
     const { level, pan } = this.place(x, z);
     const g = this.synth.group();
-    this.synth.play({
-      kind: "noise",
-      bus: "hostile",
-      group: g,
-      filter: "lowpass",
+    const tail = {
+      kind: "noise" as const,
+      filter: "lowpass" as const,
       q: 0.9,
       freq: 1300,
       to: 60,
       level: 0.28 * level,
       attack: 0.002,
       decay: 0.5,
-      pan,
-    });
+    };
+    this.synth.play({ ...tail, bus: "hostile", group: g, pan });
     this.synth.play({
       bus: "hostile",
       group: g,
@@ -1439,6 +1495,7 @@ export class Sound {
       decay: 0.45,
       pan,
     });
+    this.echoFrom(x, z, tail);
   }
 
   /** The Harrow seeding your course. A click, so the field arriving is not silent. */
@@ -2717,6 +2774,55 @@ export class Sound {
   /** The falloff curve every placed sound shares — `ping` reads off it directly, since a paint already carries a range rather than a world position to project. */
   private levelForRange(range: number): number {
     return 1 / (1 + Math.pow(range / HALF_RANGE, 1.7));
+  }
+
+  /**
+   * The rocks answering back. `kill`, `mineBlast`, `impact` (a torpedo
+   * detonating) and `breach` each call this with their own tail voice — the
+   * longest noise/lowpass layer of the cue, the one that reads as the blast's
+   * body rather than its crack — and it re-schedules that same voice, once
+   * per nearby rock, on the `echo` bus.
+   *
+   * `x`/`z` are the *source*'s position, not the listener's: the nearest
+   * `ECHO.maxRocks` rocks to the blast itself, among every rock within
+   * `ECHO.range`, each answer at `delay = 2 × d / C_GAME` — a stylised
+   * there-and-back against the rock, not a true source→rock→listener
+   * path, the same "close enough to read as the idea" trade `C_GAME`'s own
+   * docblock takes — quieter by distance (`ECHO.levelMul × (1 − d/range)`),
+   * duller by reflection (`ECHO.cutoffMul` on `freq`/`to`), and panned by
+   * the *rock's* bearing from the listener (`place`'s own pan math, reused
+   * on the rock's position rather than the source's) — the ear should turn
+   * toward the rock the echo came off, not back toward the blast itself.
+   *
+   * One `group` token for the whole event, not one per rock: the echo bus's
+   * own cap (`BUS_CAPS.echo` = 3) is a budget of *echoed events*, so up to
+   * three explosions can be answering at once, each with up to three rocks'
+   * worth of voices inside its own single slot — never three slots eaten by
+   * one blast's own rock cluster. Silent outright when `echoRocks` is empty,
+   * which is every sector without a hero rocks field.
+   */
+  private echoFrom(x: number, z: number, tail: VoiceSpec): void {
+    if (this.echoRocks.length === 0) return;
+    const nearest = this.echoRocks
+      .map((rock) => ({ rock, d: Math.hypot(rock.x - x, rock.z - z) }))
+      .filter((r) => r.d <= ECHO.range)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, ECHO.maxRocks);
+    if (nearest.length === 0) return;
+    const g = this.synth.group();
+    for (const { rock, d } of nearest) {
+      const { pan } = this.place(rock.x, rock.z);
+      this.synth.play({
+        ...tail,
+        bus: "echo",
+        group: g,
+        level: tail.level * ECHO.levelMul * (1 - d / ECHO.range),
+        delay: (2 * d) / C_GAME,
+        pan,
+        freq: tail.freq * ECHO.cutoffMul,
+        to: tail.to !== undefined ? tail.to * ECHO.cutoffMul : undefined,
+      });
+    }
   }
 }
 

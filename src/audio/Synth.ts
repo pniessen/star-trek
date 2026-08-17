@@ -805,6 +805,20 @@ export class Synth {
     return { ...this.sendTargets };
   }
 
+  /**
+   * @internal the budget gate's own hook (`docs/todo.md` §2's positional-echo
+   * entry) — the live voice count, unreaped, across every bus. `count(bus)`
+   * already answers "how many slots on one bus," which every cue's own
+   * cap check needs; this answers the coarser question a human at a real
+   * machine asks while a wave-eight fight is loud — "how many oscillators
+   * are actually running right now" — without reaping first, so a reading
+   * taken mid-frame is not silently rounded down by voices that are about
+   * to end anyway.
+   */
+  liveVoices(): number {
+    return this.voices.length;
+  }
+
   private applySendLevels(): void {
     const rig = this.rig;
     const sends = rig?.sends;

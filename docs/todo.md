@@ -545,6 +545,58 @@ own "779 of 5000" style, but measured rather than arithmetic this time, per
   because it was checked against six repeated frames of the *same* sector,
   not because rocks sectors are quieter than bare ones.
 
+**Positional echo** — `ECHO`/`C_GAME` in `src/audio/sound.ts`. `range = 120`,
+`maxRocks = 3`, `levelMul = 0.35`, `cutoffMul = 0.6`, `C_GAME = 340` are all
+first-draft, unflown in the same sense as everything else in this section —
+chosen so a 30-unit rock answers about 0.18s later, quiet and dull enough to
+read as a reflection rather than a second explosion, but nobody has heard it
+yet. The question no constant answers: **does a rocks field's own echo read
+as "that place has texture" or as a stutter on top of an already-busy mix**
+— and if it is the second, `levelMul` (quieter) and `cutoffMul` (duller) are
+the two to soften before touching `range`/`maxRocks`, which are the budget
+knobs rather than the character ones.
+
+**Measured, on the machine of the day (2026-08-17)** — the budget gate the
+task plan required before and after wiring the feature in, run against a
+real Chromium tab (not the SwiftShader playtest harness) on the dev server,
+with a genuine `AudioContext` (confirmed running, not merely constructed:
+`baseLatency` 5.33ms, `outputLatency` 16ms, `sampleRate` 48000, unchanged
+across every reading below). A wave-8-equivalent roster (8 hostiles spawned
+via `__fleet.spawn`) stood in a forced `rocks` sector (`sound.room.name ===
+"rocks"`, 36 live rocks, `sound.echoRocks` wired from the same array), and
+the burst was a tight loop of `kill`/`hostileFire`/`phaser`/`torpedo`/
+`impact`/`mineBlast`/`breach`/`shieldHit`/`nearMiss`/`say` calls fired
+synchronously through `window.__sound` — the plan's own recipe, run for
+real rather than only reasoned about:
+
+| reading | live voices | busiest buses | fps | ctx state |
+|---|---|---|---|---|
+| before the burst (pre-echo) | 0 | — | 50–51 | running |
+| during the burst (pre-echo, no `echoRocks`) | 29 | impact 12, weapon 7, hostile 5, radio 3, panel 2 | 50 | running |
+| after (pre-echo, ~2s later) | 0 (fully reaped) | — | 50 | running |
+| before the burst (post-echo) | 0 | — | 47 | running |
+| during the burst (post-echo, `echoRocks` live, 36 rocks) | 36 | impact 10, **echo 9**, weapon 7, hostile 5, radio 3, panel 2 | 47 | running |
+| after (post-echo, ~2s later) | 0 (fully reaped) | — | 47 | running |
+| 5× repeated burst, back to back (post-echo, stress) | 26 | — | 47 | running |
+
+Every bus held its static cap exactly (`echo` topped out at 9 voices — three
+concurrent echoed events × up to three rocks each, `BUS_CAPS.echo`'s own 3
+slots, fully spent and never exceeded); nothing accumulated across five
+repeated bursts; every voice reaped back to 0 within two seconds; fps and
+both latency figures never moved before/during/after in either the pre- or
+post-echo reading; no console errors in either pass. **The ladder the plan
+asked for is decided from these numbers: stay at `ECHO.maxRocks = 3`
+(rung 1) — the numbers show no reason to fall back to nearest-1 or to
+disable the bus outright (`ECHO.enabled`, never built, was not needed).**
+
+This covers only what an agent can measure. **The dropout/listening half of
+this gate — whether a wave-8 fight in a rocks sector actually sounds clean
+on real hardware, mixer maxed, ears on — is UNMEASURED by an agent and is
+the owner's to run.** The numbers above rule out the failure modes a budget
+gate exists to catch (unbounded voice growth, a stuck `AudioContext`, a
+starved frame rate); they cannot rule out an echo that is technically
+bounded and still sounds bad.
+
 ---
 
 ## 3. Design questions — open, and not answerable by a constant
@@ -763,6 +815,28 @@ anything any task here actually changed:
   observed it recur twice regardless, under extra load from a concurrent
   browser tab, and confirmed the same diagnosis on a clean, uncontended
   retry.
+
+Two more, found while gating the positional-echo task (the sound bank's own
+Task 13, `2026-08-16-sound-design/task-13-report.md` — a different report
+from the combat-feel pass's own Task 13 cited above, same number, different
+plan) and confirmed against a clean `git stash` with no other changes in the
+tree, so neither is caused by any in-flight feature work:
+
+- **"Forcing a sector changes the room within a frame"** — `bareRoom`/
+  `rockRoom`, both derived from `forceRoomSector()`'s `page.evaluate(() =>
+  window.__sound.room)`, come back plain JS `undefined` rather than the
+  `null`-or-room-object the poll loop assumes, so `bareRoom !== null &&
+  bareRoom.name…` throws on `.name` of `undefined` and takes the whole
+  harness process down rather than failing the one check. Reproduces
+  identically on an unmodified checkout. Once patched past (`!!bareRoom`
+  instead of `!== null`) the checks still genuinely *fail* rather than pass,
+  so this is two bugs stacked: a harness crash hiding a real assertion
+  failure underneath it.
+- **"`lastPhrase` of undefined"**, a few checks further on — a
+  `page.evaluate` reads `.lastPhrase` off something the page context does
+  not have at that point in the sequence, again reproducing on a clean
+  checkout, again taking the whole process down rather than failing one
+  check.
 
 Worth a maintainer's attention if any starts failing CI intermittently, but
 these are known rather than new defects, and out of scope for a docs pass to

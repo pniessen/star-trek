@@ -1138,6 +1138,11 @@ function frame(now: number): void {
   // The getter itself is a plain reference read — no extra allocation on top
   // of what `update()` already paid for the render.
   session.rocks = asteroids.rocks;
+  // The same field, read by `echoFrom` rather than the collision check —
+  // `Sound` gets its own reference for the identical reason `session` does:
+  // a value captured once at sector entry would drift from what is
+  // actually on screen within a few frames.
+  sound.echoRocks = asteroids.rocks;
 
   trace.begin();
   session.ordnance.draw(trace);

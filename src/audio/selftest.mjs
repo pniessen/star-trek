@@ -2452,6 +2452,63 @@ const { roomFor } = await import(join(out, "audio/acoustics.js"));
   );
 }
 
+// ── 19. positional echo: the rocks answer back ──────────────────────────────
+
+{
+  // `Sound.kill`'s own tail voice, re-scheduled off the nearest rocks —
+  // `echoFrom`'s contract. Two of the three rocks below are in range (20 and
+  // 40 units from the source at the origin); the third, 200 units off, is
+  // outside `ECHO.range` (120) and must not answer.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  s.echoRocks = [
+    { x: 20, z: 0, y: 0, r: 4 },
+    { x: -40, z: 0, y: 0, r: 4 },
+    { x: 0, z: 200, y: 0, r: 4 },
+  ];
+
+  const from = mark();
+  s.kill(0, 0, 1);
+  const now = ctx.currentTime;
+  // The same reconstruction `voicesSince` does, plus the one field it does
+  // not carry: the panner's own value, which is what proves two different
+  // rocks land two different pans rather than one echo voice twice.
+  const fresh = nodes.slice(from);
+  const gains = fresh.filter(
+    (n) => n.kind === "gain" && n.gain.events[0] && n.gain.events[0][0] === "set" && n.gain.events[0][1] === 0.0001,
+  );
+  const voices = gains.map((gain) => {
+    const panner = fresh.find((n) => n.kind === "panner" && gain.out.includes(n));
+    return { at: gain.gain.events[0][2], pan: panner ? panner.pan.value : 0 };
+  });
+  const echoes = voices.filter((v) => v.at > now);
+
+  ok(
+    "the two in-range rocks both answer (the 200-unit one does not)",
+    echoes.length === 2,
+    `${echoes.length} of ${voices.length} total voices`,
+  );
+  ok("every echo is genuinely delayed, not scheduled at now", echoes.every((v) => v.at > now), "");
+  ok(
+    "the two echoes land on different pans — two different rocks, not one twice",
+    new Set(echoes.map((v) => Math.round(v.pan * 100))).size === 2,
+    echoes.map((v) => v.pan).join(","),
+  );
+
+  // Silent when there is nothing to echo off — every non-rocks sector.
+  s.echoRocks = [];
+  const from2 = mark();
+  s.kill(0, 0, 1);
+  const now2 = ctx.currentTime;
+  const laterVoices = voicesSince(from2).filter((v) => v.at > now2);
+  ok("no rocks, no echo", laterVoices.length === 0, `${laterVoices.length}`);
+}
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 console.warn = realWarn;
