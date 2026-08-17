@@ -290,6 +290,12 @@ function everyCue(s) {
   s.torpedo(false);
   s.torpedo(true);
   s.hostileFire(3, 3);
+  s.hostileFire(3, 3, "swarmer");
+  s.hostileFire(3, 3, "sniper");
+  s.hostileFire(3, 3, "brawler", true);
+  s.lanceCharge(3, 3);
+  s.mineArm(3, 3);
+  s.mineTick(3, 3, 0.5);
   s.nearMiss(3, 3);
   s.impact(2, 2);
   s.thud(2, 2);
@@ -1523,6 +1529,105 @@ let chain;
     resolveTone ? resolveTone.frequency.events[0][2] - carrierAt : -1,
     0.45 - 0.03,
     0.01,
+  );
+}
+
+// ── 14. hostile identities, and the mines' tick ─────────────────────────────
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  // Swarmer: bright and thin, the top of the hostile band.
+  let from = mark();
+  s.hostileFire(3, 3, "swarmer");
+  let tones = voicesSince(from).filter((v) => v.kind === "tone");
+  ok(
+    "a swarmer's shot schedules a tone above 700 Hz — the top of the hostile band",
+    tones.some((v) => v.from > 700),
+    tones.map((v) => v.from).join(","),
+  );
+
+  // Sniper: one voice, a narrow fm bite, well under the swarmer's register.
+  ctx.currentTime += 1;
+  from = mark();
+  s.hostileFire(3, 3, "sniper");
+  const sniperVoices = voicesSince(from);
+  ok("a sniper's shot schedules exactly one voice", sniperVoices.length === 1, `${sniperVoices.length}`);
+  near("...starting at 700 Hz", sniperVoices[0]?.from ?? 0, 700, 1e-6);
+
+  // Brawler: the one class allowed two voices for one budget slot, and the
+  // tone dips under 200 Hz — the heavy, low register the noise layer alone
+  // does not reach.
+  ctx.currentTime += 1;
+  from = mark();
+  s.hostileFire(3, 3, "brawler");
+  const brawlerVoices = voicesSince(from);
+  ok("a brawler's shot schedules two voices", brawlerVoices.length === 2, `${brawlerVoices.length}`);
+  ok(
+    "...one of them below 200 Hz",
+    brawlerVoices.some((v) => v.from < 200),
+    brawlerVoices.map((v) => v.from).join(","),
+  );
+
+  // Guard: every class's own fire, pitched six percent low — `GUARD_PITCH`,
+  // the same offset the guard's radio signature will use.
+  ctx.currentTime += 1;
+  from = mark();
+  s.hostileFire(3, 3, "swarmer", false);
+  const plainFrom = voicesSince(from)[0]?.from ?? 0;
+  ctx.currentTime += 1;
+  from = mark();
+  s.hostileFire(3, 3, "swarmer", true);
+  const guardFrom = voicesSince(from)[0]?.from ?? 0;
+  near("a guard's shot lands six percent low of the plain class", guardFrom / plainFrom, 0.94, 0.01);
+
+  // The Lance's own tell: rising, the opposite shape of the bolt it precedes.
+  ctx.currentTime += 1;
+  from = mark();
+  s.lanceCharge(3, 3);
+  const chargeVoices = voicesSince(from);
+  ok(
+    "lanceCharge schedules a rising tone",
+    chargeVoices.length === 1 && chargeVoices[0].to > chargeVoices[0].from,
+    chargeVoices.map((v) => `${v.from}->${v.to}`).join(","),
+  );
+
+  // A mine arming: a short, bandpassed click.
+  ctx.currentTime += 1;
+  from = mark();
+  s.mineArm(3, 3);
+  const armVoices = voicesSince(from).filter((v) => v.kind === "noise");
+  ok(
+    "mineArm schedules a bandpassed noise click",
+    armVoices.length === 1 && armVoices[0].filter === "bandpass",
+    armVoices.map((v) => v.filter).join(","),
+  );
+
+  // The mine tick's own rate limit: `near: 1` sets a 0.15s interval
+  // (`0.9 − 0.75 × 1`), so two calls under 100ms apart schedule once.
+  ctx.currentTime += 1;
+  from = mark();
+  s.mineTick(0, 0, 1);
+  ok("a mine tick at near=1 schedules a voice", voicesSince(from).length === 1, `${voicesSince(from).length}`);
+  ctx.currentTime += 0.05; // well under the 0.15s interval
+  const secondFrom = mark();
+  s.mineTick(0, 0, 1);
+  ok(
+    "a second tick inside 100ms is dropped — the cue's own rate limiter, not the caller's",
+    voicesSince(secondFrom).length === 0,
+    `${voicesSince(secondFrom).length}`,
+  );
+  ctx.currentTime += 0.2; // past the 0.15s interval, measured from the first tick
+  const thirdFrom = mark();
+  s.mineTick(0, 0, 1);
+  ok(
+    "...and ticks again once the interval has passed",
+    voicesSince(thirdFrom).length === 1,
+    `${voicesSince(thirdFrom).length}`,
   );
 }
 

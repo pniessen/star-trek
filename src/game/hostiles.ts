@@ -293,6 +293,16 @@ export class Hostile {
   private reveal = 0;
 
   /**
+   * The Lance's own tell, `sound.lanceCharge` fired once per shot: true the
+   * instant `cooldown` first crosses under 0.35 s with the target in aim,
+   * reset back to false the moment the bolt actually fires. Without this a
+   * cooldown that lingers under the threshold for several frames — it does,
+   * every frame between the crossing and the shot — would replay the charge
+   * cue on each of them, turning one tell into a stutter.
+   */
+  private charged = false;
+
+  /**
    * The vertical wander. One sine per ship, with its own phase and its own
    * period, so a wave arrives at assorted heights instead of rising and falling
    * as a formation — which is what a shared clock would produce and would read
@@ -460,11 +470,27 @@ export class Hostile {
       this.spec.fireRange,
       MathUtils.lerp(this.spec.fireRange, COMET.visualRange, this.interference),
     );
+    // The Lance's own tell: the same aim gate the fire check below uses,
+    // fired once as `cooldown` first crosses under 0.35 s rather than on
+    // every frame it stays there — `charged` is what makes it once.
+    if (
+      this.kind === "sniper" &&
+      !this.charged &&
+      !this.withdrawing &&
+      !this.hidden &&
+      this.cooldown <= 0.35 &&
+      aimError < 0.4
+    ) {
+      this.charged = true;
+      sound.lanceCharge(this.position.x, this.position.z);
+    }
+
     // A withdrawing hostile has stopped fighting, not merely stopped
     // pursuing — the whole point is that it costs the player nothing more to
     // let it go, and a parting shot on the way out would undercut that.
     if (!this.withdrawing && this.cooldown <= 0 && !this.hidden && distance < reach && aimError < 0.4) {
       this.cooldown = this.spec.fireInterval;
+      this.charged = false;
       // Lead the target — a bolt aimed where you are is a bolt you outrun. The
       // solve is a plain vector subtraction and has been three-dimensional all
       // along, so a climbing player is led upward without a line changing here.
@@ -477,7 +503,7 @@ export class Hostile {
       // Placed where the shooter is, so a trigger pulled behind you is heard
       // behind you. The forward view cannot tell you this and the scanner only
       // tells you it exists.
-      sound.hostileFire(this.position.x, this.position.z);
+      sound.hostileFire(this.position.x, this.position.z, this.kind, this.guardName !== null);
     }
 
     this.shape.group.position.copy(this.position);

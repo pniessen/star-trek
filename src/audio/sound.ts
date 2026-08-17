@@ -84,6 +84,27 @@ const PING = {
 const CLOAK_WIND = 0.45;
 
 /**
+ * Mirrors `game/hostiles.ts`'s own `HostileKind` — a structural copy rather
+ * than an `import type`, for the same reason `PING` above is a mirrored
+ * constant and `game/session.ts` declares its own `Rock` locally: the
+ * audiotest tsc-emits `sound.ts` standalone (see this file's own header),
+ * and `hostiles.ts` pulls in `three` and the rest of the game. A type-only
+ * import erases at build time in the browser bundle, but the audiotest's
+ * emit list would still need `hostiles.ts` resolvable to typecheck it, which
+ * is the whole thing this mirror avoids. If the source union ever grows a
+ * class, this drifts silently — the same trade `PING`'s docblock already
+ * accepts, and `docs/todo.md`'s to watch.
+ */
+type HostileKind = "swarmer" | "sniper" | "brawler" | "miner" | "stalker";
+
+/**
+ * The commander's guard, heard rather than only seen: every class's own fire
+ * pitched six percent low. Matches the radio signature a later task gives
+ * the guard's own voice, so the two land as the same idea in two mediums.
+ */
+const GUARD_PITCH = 0.94;
+
+/**
  * The scanner's ping's own pitch. 1650 Hz sits in the gap between the
  * bank's two other high voices rather than inside either: the phaser's own
  * downsweep (`phaser`, below — 1900–2260 Hz falling to a 700 Hz floor)
@@ -204,6 +225,9 @@ export class Sound {
 
   /** Audio-clock time (`ctx.currentTime`) the last ping actually sounded — `ping`'s own rate gate. */
   private lastPingAt = -Infinity;
+
+  /** Audio-clock time the last mine tick actually sounded — `mineTick`'s own rate gate. */
+  private lastMineTickAt = -Infinity;
 
   /**
    * The probe's own hook: when a ping last sounded and how rough it was.
@@ -345,6 +369,7 @@ export class Sound {
     // argument applied to `ping`'s own rate gate.
     this.reactorTickAt = -Infinity;
     this.lastPingAt = -Infinity;
+    this.lastMineTickAt = -Infinity;
   }
 
   // ── weapons ──────────────────────────────────────────────────────────────
@@ -508,21 +533,128 @@ export class Sound {
     });
   }
 
-  /** Somebody else's trigger. Placed, so an ambush from astern says so. */
-  hostileFire(x: number, z: number): void {
+  /**
+   * Somebody else's trigger. Placed, so an ambush from astern says so.
+   *
+   * Each class gets a register of its own, so a firefight can be told apart
+   * by ear before the reticle finds anything — the same "colour is
+   * information" argument the palette makes, spent on band and rhythm
+   * instead of hue. **Swarmer**: bright and thin, the top of the hostile
+   * band, because "comes from anywhere" is the whole brief of the class and
+   * a swarm has to cut through the mix on the first note. **Sniper**: a
+   * narrow, low-index fm bite — a Lance's shot is a single precise thing,
+   * not a burst. **Brawler**: the one class allowed two voices for one
+   * budget slot (`group`), because it fires slowest (0.9s) and can afford
+   * the extra layer — a lowpassed growl plus a tone that dips to 95 Hz,
+   * briefly inside the sub-120 Hz band the alert, torpedo, mines and death
+   * otherwise reserve; a transient graze, not a sustained claimant of it.
+   * **Stalker** (and **miner**, which never actually fires —
+   * `fireRange: 0` keeps the fire check itself from ever passing) fall
+   * through to the original recipe unchanged, because `decloak`'s own
+   * resolving tone matches this note for note — see that cue's docblock.
+   *
+   * @param kind  which class pulled the trigger.
+   * @param guard the commander's own veteran of the class — see `GUARD_PITCH`.
+   */
+  hostileFire(x: number, z: number, kind: HostileKind = "stalker", guard = false): void {
     const { level, pan } = this.place(x, z);
     // Out of earshot is worth checking here rather than in the synth: a wave of
     // eight all firing at the rim would otherwise spend the whole voice pool on
     // sounds nobody can hear.
     if (level < 0.06) return;
+    const mul = guard ? GUARD_PITCH : 1;
+    // One slot regardless of how many layers the class spends it on.
+    const g = this.synth.group();
+    switch (kind) {
+      case "swarmer":
+        this.synth.play({
+          bus: "hostile",
+          group: g,
+          wave: "square",
+          freq: 1400 * mul,
+          to: 900 * mul,
+          level: 0.08 * level,
+          attack: 0.002,
+          decay: 0.07,
+          pan,
+        });
+        break;
+      case "sniper":
+        this.synth.play({
+          kind: "fm",
+          bus: "hostile",
+          group: g,
+          ratio: 2.4,
+          index: 1.2,
+          freq: 700 * mul,
+          to: 520 * mul,
+          level: 0.1 * level,
+          attack: 0.003,
+          decay: 0.15,
+          pan,
+        });
+        break;
+      case "brawler":
+        this.synth.play({
+          kind: "noise",
+          bus: "hostile",
+          group: g,
+          filter: "lowpass",
+          freq: 380 * mul,
+          to: 160 * mul,
+          level: 0.12 * level,
+          attack: 0.004,
+          decay: 0.16,
+          pan,
+        });
+        this.synth.play({
+          bus: "hostile",
+          group: g,
+          wave: "sawtooth",
+          // The floor: a transient dip into the reserved sub-120 Hz band, not
+          // a sustained voice living in it — see the docblock above.
+          freq: 140 * mul,
+          to: 95 * mul,
+          level: 0.09 * level,
+          attack: 0.005,
+          decay: 0.17,
+          pan,
+        });
+        break;
+      default:
+        // stalker, and miner (dead code — it never reaches this call).
+        this.synth.play({
+          bus: "hostile",
+          group: g,
+          wave: "sawtooth",
+          freq: 520 * mul,
+          to: 300 * mul,
+          level: 0.1 * level,
+          attack: 0.003,
+          decay: 0.13,
+          pan,
+        });
+    }
+  }
+
+  /**
+   * The Lance's own tell. `Hostile.update` calls this once, 0.35 s before a
+   * sniper's shot actually lands — a rising resonant tone in the same
+   * register `hostileFire`'s own sniper recipe lives in, run forward and
+   * slower, so the ear hears the shot coming the way `decloak` already lets
+   * it hear the Shroud coming.
+   */
+  lanceCharge(x: number, z: number): void {
+    const { level, pan } = this.place(x, z);
+    if (level < 0.06) return;
     this.synth.play({
       bus: "hostile",
       wave: "sawtooth",
-      freq: 520,
-      to: 300,
-      level: 0.1 * level,
-      attack: 0.003,
-      decay: 0.13,
+      freq: 420,
+      to: 1100,
+      level: 0.09 * level,
+      attack: 0.02,
+      decay: 0.32,
       pan,
     });
   }
@@ -845,6 +977,64 @@ export class Sound {
       level: 0.05 * level,
       attack: 0.001,
       decay: 0.045,
+      pan,
+    });
+  }
+
+  /**
+   * A mine going live. `mineLay`'s own click happens once, on the drop;
+   * this happens once per mine, on the `armed` transition (`Minefield.update`
+   * calls it only then, never every frame) — a field accumulates over a
+   * whole run, so the two have to be told apart the way the eye already
+   * tells them apart on the deck: `mineLay`'s triangle falling versus a
+   * short, dry bandpassed click here.
+   */
+  mineArm(x: number, z: number): void {
+    const { level, pan } = this.place(x, z);
+    if (level < 0.06) return;
+    this.synth.play({
+      kind: "noise",
+      bus: "hostile",
+      filter: "bandpass",
+      q: 8,
+      freq: 3000,
+      level: 0.05 * level,
+      attack: 0.001,
+      decay: 0.012,
+      pan,
+    });
+  }
+
+  /**
+   * The field's own pulse. `Minefield.update` calls this every frame for
+   * whichever armed mine is nearest, inside `MINE.trigger × 4` — the caller
+   * does no gating of its own, because the interval that turns a
+   * once-a-frame call into an actual pulse only makes sense read off the
+   * audio clock, the same reasoning `ping`'s own rate gate and the reactor's
+   * relay tick already give. `near` (0 at the outer edge, 1 at the mine
+   * itself) sets that interval: `0.9 − 0.75 × near` seconds, so a mine at
+   * the edge of the check radius ticks lazily and one you are about to hit
+   * ticks nearly seven times as fast — the wink rate `Minefield.draw`
+   * already uses, given a second channel.
+   *
+   * @param near 0..1, how close the nearest armed mine is within the check radius.
+   */
+  mineTick(x: number, z: number, near: number): void {
+    const now = this.synth.context?.ctx.currentTime;
+    if (now === undefined) return;
+    const interval = 0.9 - 0.75 * clamp(near, 0, 1);
+    if (now - this.lastMineTickAt < interval) return;
+    this.lastMineTickAt = now;
+
+    const { level, pan } = this.place(x, z);
+    if (level < 0.06) return;
+    this.synth.play({
+      bus: "hostile",
+      wave: "sine",
+      freq: 2400,
+      level: 0.04 * level,
+      attack: 0.001,
+      decay: 0.008,
       pan,
     });
   }

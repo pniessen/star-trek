@@ -111,7 +111,11 @@ export class Minefield {
     for (let i = this.mines.length - 1; i >= 0; i--) {
       const mine = this.mines[i];
       mine.age += dt;
+      const wasArmed = mine.armed;
       mine.armed = mine.age >= MINE.arm;
+      // The transition, not every frame it stays armed — a whole field going
+      // live over a run would otherwise be one continuous click.
+      if (mine.armed && !wasArmed) sound.mineArm(mine.position.x, mine.position.z);
       mine.flash = Math.max(0, mine.flash - dt * 4);
 
       if (mine.age >= MINE.life) {
@@ -135,6 +139,24 @@ export class Minefield {
     }
 
     for (const mine of going) this.detonate(mine, player, onHull);
+
+    // The field's own pulse: the nearest armed mine still standing, within
+    // four trigger radii, ticks every frame — `sound.mineTick`'s own rate
+    // gate is what turns that into an actual pulse rather than a buzz, the
+    // same division of labour the reactor's relay tick already uses.
+    const tickReach = MINE.trigger * 4;
+    let nearest: Mine | null = null;
+    let nearestDistance = tickReach;
+    for (const mine of this.mines) {
+      if (!mine.armed) continue;
+      const distance = mine.position.distanceTo(player.position);
+      if (distance >= nearestDistance) continue;
+      nearest = mine;
+      nearestDistance = distance;
+    }
+    if (nearest) {
+      sound.mineTick(nearest.position.x, nearest.position.z, 1 - nearestDistance / tickReach);
+    }
   }
 
   /** Nearest mine within `radius` of a point — projectile resolution. */
