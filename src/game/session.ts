@@ -7,6 +7,7 @@ import {
   HOSTILE_COLORS,
   HOSTILE_SPECS,
   WITHDRAW,
+  radioOptsFor,
   type Hostile,
   type HostileKind,
   type HostileSpec,
@@ -264,18 +265,17 @@ export class Session {
   private flankAnnouncedThisWave = false;
 
   /**
-   * The commander's own doctrine, read fresh each time rather than cached —
-   * `commanderOf` is arithmetic over the campaign seed (see its own
-   * docblock), not a lookup, so there is nothing here worth memoising, and a
-   * cached copy would be one more thing to forget to invalidate on
-   * `restart`. Every `"theirs"` radio call reads this rather than
-   * recomputing `commanderOf` inline, so the enemy's chatter and the
-   * commander choosing its own guard class always agree on which doctrine is
-   * commanding the sector.
+   * The commander's own doctrine, latched at `restart` — `actAtRunStart`'s
+   * own pattern and own reasoning (see that field's docblock), even though
+   * `commanderOf` is pure arithmetic over `campaign.seed` and a live re-read
+   * would always agree with the latched value for the length of one war:
+   * every `"theirs"` radio call reads this rather than recomputing
+   * `commanderOf` once a hostile per frame, and a named field beside
+   * `actAtRunStart` is one obviously-correct place to look, rather than
+   * trusting every call site to independently notice the recomputation is
+   * free. Set once in `restart`, before anything in the run needs it.
    */
-  private get doctrine(): Doctrine {
-    return commanderOf(this.campaign.seed).doctrine;
-  }
+  private doctrineAtRunStart: Doctrine = "raider";
 
   /**
    * Localhost-probe seam, `arrivedByJump`'s pattern: TypeScript keeps it
@@ -483,7 +483,7 @@ export class Session {
       // reads as a stopped program; a circling one reads as being finished off.
       // Nothing they fire can land — hit resolution is below this line.
       for (const hostile of this.fleet.hostiles) {
-        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks, this.doctrine);
+        hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks, this.doctrineAtRunStart);
       }
       // The Warden keeps flying too — `kill()` has already told it to break
       // off, so the last thing a run shows you is your escort turning away.
@@ -567,11 +567,11 @@ export class Session {
     // not any one hostile's own voice.
     if (this.fleet.brawlerEngaged && !this.flankAnnouncedThisWave) {
       this.flankAnnouncedThisWave = true;
-      sound.say("theirs", "flank", { doctrine: this.doctrine });
+      sound.say("theirs", "flank", { doctrine: this.doctrineAtRunStart });
     }
 
     for (const hostile of this.fleet.hostiles) {
-      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks, this.doctrine);
+      hostile.update(dt, player, this.ordnance, this.mines, this.fleet.brawlerEngaged, this.rocks, this.doctrineAtRunStart);
       // The one warning the forward view gives you. Everything before this
       // moment happened on the scanner — and the sound is the half of the
       // warning that works when you are pointed the wrong way.
@@ -580,12 +580,20 @@ export class Session {
         sound.decloak(hostile.position.x, hostile.position.z);
         // The commit — squelch only, no phrase — the Shroud's own strike
         // committing on the same channel the rest of the war talks over.
-        sound.say("theirs", "commit", {
-          x: hostile.position.x,
-          z: hostile.position.z,
-          doctrine: this.doctrine,
-          guard: hostile.guardName !== null,
-        });
+        sound.say("theirs", "commit", radioOptsFor(hostile, this.doctrineAtRunStart));
+      }
+      // The withdrawal roll's own false→true edge — `withdrawAnnounced`'s
+      // whole job, `flankAnnouncedThisWave`'s pattern but per-hostile and
+      // for life rather than per-wave: this is where `Session` first
+      // observes the roll `Hostile.damage()` already made, seconds before
+      // `stepWithdrawals` notices the hostile has actually cleared
+      // `WITHDRAW.exitRange` and plays the departure SFX. A phrase at the
+      // roll reads as "it is breaking off"; one at 130 units out, after
+      // `stepWithdrawals`'s own `sound.withdraw` already said goodbye, would
+      // only ever be a postscript.
+      if (hostile.withdrawing && !hostile.withdrawAnnounced) {
+        hostile.withdrawAnnounced = true;
+        sound.say("theirs", "withdraw", radioOptsFor(hostile, this.doctrineAtRunStart));
       }
     }
     this.stepWithdrawals(player);
@@ -1156,18 +1164,12 @@ export class Session {
         hostile.velocity.clone().normalize(),
         HOSTILE_COLORS[hostile.kind],
       );
+      // The exit SFX only — the radio chatter for this hostile's withdrawal
+      // already fired back on the roll's own false→true edge, in the main
+      // per-frame hostile loop above (`hostile.withdrawAnnounced`). This is
+      // 130 units later and reads as a goodbye, not a tell; the two events
+      // are deliberately not the same moment.
       sound.withdraw(hostile.position.x, hostile.position.z);
-      // The roll that set `withdrawing` happened back in `Hostile.damage()`,
-      // which has no campaign to read a doctrine off; this is where session
-      // next observes the same hostile, so the radio call reuses this
-      // already-existing observation point rather than threading doctrine
-      // into `hostiles.ts` for one more event.
-      sound.say("theirs", "withdraw", {
-        x: hostile.position.x,
-        z: hostile.position.z,
-        doctrine: this.doctrine,
-        guard: hostile.guardName !== null,
-      });
       this.fleet.retire(hostile);
     }
   }
@@ -1763,7 +1765,7 @@ export class Session {
     this.say(`WAVE ${this.wave}`);
     // The enemy's own voice, once a wave, in the commander's own doctrine —
     // no position: a wave arriving is the whole sector, not one hostile.
-    sound.say("theirs", "wave", { doctrine: this.doctrine });
+    sound.say("theirs", "wave", { doctrine: this.doctrineAtRunStart });
 
     // HQ used to speak here, right after `WAVE n`. It does not any more — see
     // the header of `dispatch.ts`: a signal that only ever lands in the gap
@@ -1801,6 +1803,9 @@ export class Session {
     // Latched here and nowhere else, before any of this run's own ground
     // taken can drain the reserve — see `actAtRunStart`'s own docblock.
     this.actAtRunStart = warAct(this.campaign);
+    // Latched the same way, for the same reason a per-call-site recompute
+    // would be one more thing to trust rather than one field to read.
+    this.doctrineAtRunStart = commanderOf(this.campaign.seed).doctrine;
     this.arrivalCard = 0;
     // A jump moves `campaign.current`, and without this a "fresh" run drops
     // you wherever the last one's hyperwarp last left you — including a

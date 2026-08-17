@@ -1992,8 +1992,13 @@ let chain;
   // Cadence shape, independent of scheduling: raider reads as several short,
   // clipped syllables; hammer as few, long, unhurried ones — the two ends of
   // "clipped and fast" vs "slow and monotone" this module's own header
-  // describes chatter carrying instead of words.
-  let seed = 11;
+  // describes chatter carrying instead of words. `CADENCES.raider` is
+  // `syllablesMin: 2, syllablesMax: 4` — the binding numbers, not widened
+  // for this test's convenience — so the seed below is chosen deliberately
+  // (its first draw lands `composePhrase`'s own syllable-count roll on the
+  // top of that range) rather than the cadence being loosened to make an
+  // arbitrary seed pass.
+  let seed = 85183;
   const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const raiderPhrase = composePhrase(CADENCES.raider, rng);
   ok(
@@ -2113,9 +2118,15 @@ let chain;
     0.5,
   );
 
-  // The cap: the radio bus admits exactly 3 cues (one per party, no
-  // groups) and refuses the surplus — §9's own placeholder, made real, and
-  // against a fresh bus so nothing above this line contaminates the count.
+  // The cap itself: the radio bus admits exactly 3 cues and refuses the
+  // surplus, ungrouped — §9's own placeholder, made real. Calls `speak`
+  // directly rather than through `Radio`, on a fresh bus so nothing above
+  // this line contaminates the count: `Radio`'s own per-party bookkeeping
+  // is what keeps ordinary play from ever asking for a 4th voice on one
+  // bus at once (one live phrase per party, three parties, cap 3), but
+  // that guarantee is a *policy* this class enforces on top of `Synth`,
+  // not a limit `Synth` itself is aware of — this section tests the limit
+  // underneath the policy.
   const capCtx = makeContext();
   globalThis.AudioContext = function () { return capCtx; };
   nodes = [];
@@ -2132,6 +2143,44 @@ let chain;
     capVoices.filter((v) => v.kind === "tone").length === 3,
     `${capVoices.filter((v) => v.kind === "tone").length} tones scheduled`,
   );
+
+  // `Sound.say`'s own never-throw contract. Unlike every other cue, this
+  // one runs pure logic (`Radio.say`'s bookkeeping, `composePhrase`)
+  // *before* it ever reaches one of `Synth`'s own guarded methods — and
+  // `dispatch`/`allyHail`/`allyComms`/`allyLost` all call it first now,
+  // ahead of the sound they already make, so a throw in here must retire
+  // the layer the way `Synth`'s own internal failures do, not escape into
+  // the frame loop. `Math.random` is what `Sound.say` hands `Radio.say` as
+  // its `rng` — monkey-patching it to throw is the least invasive way to
+  // make `composePhrase` fail on the real call path, rather than calling
+  // `Radio.say` directly and merely proving *this test's own* try/catch works.
+  const failCtx = makeContext();
+  globalThis.AudioContext = function () { return failCtx; };
+  nodes = [];
+  const failSound = new Sound();
+  failSound.start();
+  failSound.listen(0, 0, 0);
+  const realRandom = Math.random;
+  Math.random = () => {
+    throw new Error("rng exploded");
+  };
+  const warningsBefore = warnings.length;
+  let threw = null;
+  try {
+    failSound.say("theirs", "wave", { doctrine: "raider" });
+  } catch (error) {
+    threw = error;
+  }
+  Math.random = realRandom;
+  ok("a throwing rng inside Radio.say does not escape Sound.say", threw === null, String(threw));
+  ok(
+    "...and the layer retires the way any other internal Synth failure does",
+    warnings.length === warningsBefore + 1 && warnings[warningsBefore].startsWith("audio disabled"),
+    warnings.slice(warningsBefore).join("; "),
+  );
+  const afterFailFrom = mark();
+  failSound.dispatch();
+  ok("...so a cue after the failure no longer schedules anything", voicesSince(afterFailFrom).length === 0, "");
 }
 
 // ── report ─────────────────────────────────────────────────────────────────

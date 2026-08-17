@@ -281,6 +281,16 @@ export class Hostile {
   withdrawing = false;
 
   /**
+   * True once `Session` has said `"theirs"`/`"withdraw"` for this hostile's
+   * own roll — the radio's edge-detect flag for `withdrawing`, `revealed`'s
+   * own pattern (see `flankAnnouncedThisWave`) but per-hostile rather than
+   * per-wave, and persistent rather than reset every frame: the roll fires
+   * once in a hostile's life and so does its chatter. Never read outside
+   * `Session`'s own per-frame hostile pass.
+   */
+  withdrawAnnounced = false;
+
+  /**
    * Set when this hull is the commander's guard — a stat-and-name variant of
    * its class fielded once the war reaches its failing act (Task 15). Null
    * for every ordinary hostile. Public: the HUD reads it to outrank the
@@ -552,12 +562,7 @@ export class Hostile {
       ) {
         this.chargedAt = this.clock;
         sound.lanceCharge(this.position.x, this.position.z);
-        sound.say("theirs", "charge", {
-          x: this.position.x,
-          z: this.position.z,
-          doctrine,
-          guard: this.guardName !== null,
-        });
+        sound.say("theirs", "charge", radioOptsFor(this, doctrine));
       }
     }
 
@@ -760,6 +765,20 @@ export function sternSign(bearingFromPlayer: number, playerHeading: number): num
 
 function turnToward(from: number, to: number, maxStep: number): number {
   return from + MathUtils.clamp(angleDelta(from, to), -maxStep, maxStep);
+}
+
+/**
+ * The one shape every `"theirs"` radio call needs: where the hostile is and
+ * whether it is the commander's own guard, on top of whatever doctrine the
+ * caller already knows. Shared by this file's own `charge` call site and
+ * `Session`'s `commit`/`withdraw` sites — the same three fields, hand-built
+ * three times over, is exactly the copy-paste this exists to end.
+ */
+export function radioOptsFor(
+  hostile: Hostile,
+  doctrine: Doctrine,
+): { x: number; z: number; doctrine: Doctrine; guard: boolean } {
+  return { x: hostile.position.x, z: hostile.position.z, doctrine, guard: hostile.guardName !== null };
 }
 
 /**

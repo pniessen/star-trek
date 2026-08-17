@@ -97,15 +97,14 @@ export const CADENCES: Record<"ours" | "warden" | Doctrine, Cadence> = {
     pitchRange: 24,
     contour: "level",
   },
-  // `syllablesMin: 3` rather than the brief's own prose ("2-4 syllables") —
-  // a deliberate tightening. §17 asserts a raider phrase reads as "several
-  // short syllables" (>=3) outright rather than merely on a favourable rng
-  // draw, and a floor of 2 would make that assertion depend on the seed
-  // rather than on the cadence, which is exactly the kind of flakiness this
-  // bank's own tests elsewhere refuse to accept.
+  // `syllablesMin: 2, syllablesMax: 4` — the brief's own binding numbers.
+  // (An earlier draft widened this to 3-5 to make a §17 assertion pass on
+  // any rng draw rather than seeding the test properly; that traded a real
+  // cadence number for test convenience and was wrong — §17's own raider
+  // check now seeds its rng deliberately instead.)
   raider: {
-    syllablesMin: 3,
-    syllablesMax: 5,
+    syllablesMin: 2,
+    syllablesMax: 4,
     lengthMin: 0.04,
     lengthMax: 0.07,
     gapMin: 0.02,
@@ -189,9 +188,27 @@ function overrideFor(event: RadioEvent, cadence: Cadence): Cadence {
 export interface SayOpts {
   /** Required when `party === "theirs"` — which cadence the enemy speaks in. Falls back to `"raider"` if omitted, never throws. */
   readonly doctrine?: Doctrine;
-  /** The commander's own guard: `pitchBase` scaled by `GUARD_PITCH_SCALE`, matching Task 8's bolt offset — the same veteran reads the same six percent low over the air as it does on the gun. */
+  /**
+   * The commander's own guard: `pitchBase` scaled by `GUARD_PITCH_SCALE`,
+   * matching Task 8's bolt offset — the same veteran reads the same six
+   * percent low over the air as it does on the gun. Inaudible, by
+   * construction, on a `commit` — `overrideFor` strips `commit` to zero
+   * syllables, and a pitch offset with no syllable to carry it changes
+   * nothing about two squelch bursts. Passing `guard: true` there is still
+   * correct (nothing downstream has to know the event is the one case
+   * where it does not matter) — this is a note, not a special case to add.
+   */
   readonly guard?: boolean;
   readonly pan?: number;
+  /**
+   * `Sound.place`'s own 0..1 range falloff — the same figure every other
+   * placed cue in the bank scales its own level by. Omitted (not merely
+   * `1`) for a voice with nowhere to be placed — `ours`, speaking from
+   * inside the ship rather than from a point in the sector — which speaks
+   * at `RADIO_LEVEL`'s own full level unconditionally: distance is a fact
+   * about where a transmitter is, not about the ship's own hardware.
+   */
+  readonly level?: number;
   /** Audio-clock time (`ctx.currentTime`) — the caller's, not this class's own guess, so `Radio` stays testable without a real `AudioContext`. */
   readonly now: number;
   /** Phrases are texture, not state — determinism is not a requirement here the way it is for `composePhrase`'s own unit tests, which pass a seeded rng directly. `sound.ts` passes `Math.random`. */
@@ -234,8 +251,26 @@ export class Radio {
 
   constructor(private readonly synth: Synth) {}
 
+  /**
+   * A restart, a mode change, a death: whatever was ringing stops ringing —
+   * `Sound.silence`'s own line, and this is what keeps it true for the
+   * radio too. Without this, a party's `busyUntil` from one run (or, worse,
+   * from attract mode's throwaway campaign) is still a *future* timestamp on
+   * `Sound`'s own audio clock, since the `Synth`/`Radio` pair is never
+   * rebuilt between runs — a fresh run's first `say` for that party would
+   * read as still-busy against a channel nothing has spoken on in this run
+   * at all, and silently drop or misqueue accordingly.
+   */
+  reset(): void {
+    for (const party of ["ours", "warden", "theirs"] as const) {
+      this.busyUntil[party] = -Infinity;
+      this.queueBoundary[party] = -Infinity;
+    }
+    this.lastPhrase = null;
+  }
+
   say(party: Party, event: RadioEvent, opts: SayOpts): void {
-    const { now, rng, doctrine, guard, pan } = opts;
+    const { now, rng, doctrine, guard, pan, level } = opts;
 
     // A previously-queued phrase promotes to "live" the instant its own
     // start time passes — from here on, anything arriving queues behind
@@ -256,7 +291,11 @@ export class Radio {
     this.synth.speak({
       phrase,
       bus: "radio",
-      level: RADIO_LEVEL,
+      // Distance is the tell: a near Lance's charge chatter louder than a
+      // far one carries the same information the sound itself already
+      // does. `level` is `undefined` for a voice with nowhere to be placed
+      // (`ours`), which is exactly when `?? 1` leaves `RADIO_LEVEL` alone.
+      level: RADIO_LEVEL * (level ?? 1),
       drive: party === "theirs" ? THEIRS_DRIVE : OURS_DRIVE,
       band: party === "theirs" ? THEIRS_BAND : OURS_BAND,
       pan,
@@ -268,7 +307,15 @@ export class Radio {
     this.synth.duck("weapon", DUCK_DB, delay + span);
 
     if (busy) {
-      this.busyUntil[party] = this.queueBoundary[party] + span;
+      // `Math.max`, not a plain overwrite: a *replaced* queued phrase's own
+      // audio voice is still going to sound (see this class's own docblock
+      // on why there is no way to stop it), so `busyUntil` has to cover
+      // whichever of the two queued spans is longer, not just this one. A
+      // plain overwrite let a shorter replacement shrink `busyUntil` back
+      // below the still-playing, displaced voice's own end — which read as
+      // "free" to a low-priority event arriving in that gap, and let it
+      // speak straight over a phrase that had not actually finished.
+      this.busyUntil[party] = Math.max(this.busyUntil[party], this.queueBoundary[party] + span);
     } else {
       this.busyUntil[party] = now + span;
       this.queueBoundary[party] = this.busyUntil[party];

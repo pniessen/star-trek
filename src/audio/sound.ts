@@ -382,16 +382,49 @@ export class Sound {
    * every other placed cue does, through `place`'s own pan; omit them for a
    * voice with nowhere in particular to be placed — HQ, speaking from
    * outside the sector, the way `dispatch`'s own panel cue already does
-   * centred. `now` is read off the audio clock here rather than asked of the
-   * caller, same as every other cue in this file; if there is no rig yet
-   * (no gesture, no device), it falls back to 0 — `Radio`'s own bookkeeping
-   * still runs, harmlessly, since `Synth.speak` itself is the thing that
-   * actually no-ops with nothing to play through.
+   * centred.
+   *
+   * Guarded two ways, deliberately not the same way `play`/`speak`
+   * themselves are guarded (their own no-op-on-no-rig is inside `Synth`,
+   * after their own bookkeeping already ran; `Radio.say`'s bookkeeping runs
+   * *before* it ever calls into `Synth`, so it has to be kept from running
+   * at all when there is nothing to schedule against):
+   *
+   * `!this.synth.live` returns before `Radio.say` is even called — during
+   * attract mode, or before the first gesture, `now` would otherwise fall
+   * back to 0 (no real audio clock to read), and `Radio`'s `busyUntil` would
+   * book a party busy against that fictitious "0" rather than skip the
+   * update — a timestamp that then outlives the moment (the `Synth`/`Radio`
+   * pair is never rebuilt between runs) and can make a fresh run's first
+   * real `say` for that party read as still-busy against a channel nothing
+   * has actually spoken on yet.
+   *
+   * The try/catch is the second guard, for a different failure: unlike
+   * every other cue here, this one calls into `radio.ts` — pure logic
+   * (`composePhrase`, the priority bookkeeping) that runs *before* anything
+   * reaches `Synth`'s own never-throw methods, so it sits outside the
+   * contract `Synth.ts`'s header promises. `dispatch`/`allyHail`/`allyComms`/
+   * `allyLost` now all call this first, ahead of the sound they already made
+   * — a throw here must not also take the rest of the cue, or the frame
+   * loop, down with it. Retires the layer exactly the way `play` and
+   * `speak` themselves would on their own internal failure.
    */
   say(party: Party, event: RadioEvent, opts: { x?: number; z?: number; doctrine?: Doctrine; guard?: boolean } = {}): void {
-    const pan = opts.x !== undefined && opts.z !== undefined ? this.place(opts.x, opts.z).pan : undefined;
-    const now = this.synth.context?.ctx.currentTime ?? 0;
-    this.radio.say(party, event, { doctrine: opts.doctrine, guard: opts.guard, pan, now, rng: Math.random });
+    if (!this.synth.live) return;
+    try {
+      const positioned = opts.x !== undefined && opts.z !== undefined ? this.place(opts.x, opts.z) : null;
+      const now = this.synth.context?.ctx.currentTime ?? 0;
+      this.radio.say(party, event, {
+        doctrine: opts.doctrine,
+        guard: opts.guard,
+        pan: positioned?.pan,
+        level: positioned?.level,
+        now,
+        rng: Math.random,
+      });
+    } catch (error) {
+      this.synth.fail(error);
+    }
   }
 
   /**
@@ -534,6 +567,7 @@ export class Sound {
     this.lastMineTickAt = -Infinity;
     this.lastApproachAt = -Infinity;
     this.deathPowerActive = false;
+    this.radio.reset();
   }
 
   // ── weapons ──────────────────────────────────────────────────────────────
