@@ -50,6 +50,99 @@ export interface RoomDesign {
  * reads and no combination of cutoff and reflection gains can push the
  * convolver's own output past the headroom the rest of the mix assumes.
  */
+/**
+ * Mirrors `render/scenery.ts`'s own `HeroKind` — a structural copy, not an
+ * `import type`, for the reason every other mirrored type in `sound.ts`
+ * gives (see that file's own `HostileKind`/`ShieldFacing`): `scenery.ts`
+ * pulls in `three` transitively (through the rest of `render/`), and this
+ * module is tsc-emitted standalone by the audiotest. If the source union
+ * ever grows a kind, this drifts until someone notices — `docs/todo.md`'s
+ * to watch, the same trade `sound.ts`'s own mirrors accept.
+ */
+export type HeroKind = "giant" | "ringed" | "moon" | "sun" | "rocks" | "bare";
+
+/**
+ * One room per hero, before a shoal or the comet gets to modify it — the
+ * spec's own table (`docs/superpowers/specs/2026-08-16-sound-design-design.md`
+ * §1.2), turned into numbers. `rocks` is the only one with discrete early
+ * reflections: a torpedo detonation *comes back off the field*, which needs
+ * distinct bounces the way a slap-echo does; every other room is a mass
+ * without nearby hard surfaces to bounce off cleanly, so its tail is the
+ * whole story.
+ */
+const ROOMS: Record<HeroKind, RoomDesign> = {
+  rocks: {
+    tailSeconds: 0.5,
+    tailCutoffHz: 4000,
+    earlyReflections: [
+      { at: 0.04, gain: 0.5 },
+      { at: 0.095, gain: 0.35 },
+      { at: 0.14, gain: 0.25 },
+      { at: 0.18, gain: 0.15 },
+    ],
+    wet: 0.3,
+  },
+  giant: { tailSeconds: 2, tailCutoffHz: 600, earlyReflections: [], wet: 0.25 },
+  ringed: { tailSeconds: 0.35, tailCutoffHz: 3000, earlyReflections: [], wet: 0.18 },
+  moon: { tailSeconds: 0.35, tailCutoffHz: 3000, earlyReflections: [], wet: 0.18 },
+  sun: { tailSeconds: 0.12, tailCutoffHz: 6000, earlyReflections: [], wet: 0.08 },
+  // Bone dry — silence is a reading, not an omission. The cutoff is never
+  // heard (`wet: 0` means the send never opens) but still has to be a real
+  // number for `renderImpulse` to run against.
+  bare: { tailSeconds: 0.05, tailCutoffHz: 5000, earlyReflections: [], wet: 0 },
+};
+
+/** The shoal's own modifiers — muffled: lengthened, darkened, wetter. */
+const SHOAL_TAIL_MULTIPLIER = 1.6;
+/** A ceiling on the cutoff, not a flat override — a shoal never brightens a
+ *  room that was already darker than this (the giant's 600 Hz stays 600 Hz),
+ *  it only ever muffles a brighter one down toward it. */
+const SHOAL_CUTOFF_CEILING_HZ = 1200;
+const SHOAL_WET_BONUS = 0.1;
+
+/**
+ * The comet's own tail, not a room at all: `noiseOnly` drops the decay
+ * envelope and the early reflections (`renderImpulse`'s own doc explains
+ * why), so what is left is a flat wash of band-limited hiss the send opens
+ * almost all the way into — instruments do not work in there, and neither
+ * does the ear.
+ */
+const COMET_ROOM: RoomDesign = {
+  tailSeconds: 1,
+  tailCutoffHz: 1000,
+  earlyReflections: [],
+  wet: 0.6,
+  noiseOnly: true,
+};
+
+/**
+ * The room a sector's mix should sit in, derived from exactly the facts the
+ * renderer already drew — `planHero`'s own cast, whether `Shoals.plan` is
+ * non-null, and whether the player's own comet interference has crossed
+ * `stripAt`. Pure, and deliberately so: `sound.enterSector`/`insideComet`
+ * own the WebAudio side (a seeded render, a convolver, a threat duck), this
+ * only picks the numbers, which is what keeps it testable in bare node the
+ * way `renderImpulse` already is.
+ *
+ * `insideComet` overrides everything else outright rather than blending with
+ * it — the tail's own suppression is total (`game/comet.ts`'s "no instrument
+ * works" is real as a place), so a rocks field's slap-echo has no business
+ * surviving inside it. `shoal` only ever modifies whatever `hero` already
+ * produced; there is no `shoal`-only room, because a shoal is a curtain in
+ * front of whatever body was already cast, not a body of its own.
+ */
+export function roomFor(hero: HeroKind, shoal: boolean, insideComet: boolean): RoomDesign {
+  if (insideComet) return COMET_ROOM;
+  const base = ROOMS[hero];
+  if (!shoal) return base;
+  return {
+    ...base,
+    tailSeconds: base.tailSeconds * SHOAL_TAIL_MULTIPLIER,
+    tailCutoffHz: Math.min(base.tailCutoffHz, SHOAL_CUTOFF_CEILING_HZ),
+    wet: base.wet + SHOAL_WET_BONUS,
+  };
+}
+
 export function renderImpulse(design: RoomDesign, sampleRate: number, rng: () => number): Float32Array {
   const length = Math.max(1, Math.round(design.tailSeconds * sampleRate));
   const ir = new Float32Array(length);

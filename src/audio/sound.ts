@@ -1,5 +1,7 @@
 import { Synth, type Bed } from "./Synth.js";
 import { Radio, type Party, type RadioEvent, type Doctrine } from "./radio.js";
+import { roomFor, type HeroKind } from "./acoustics.js";
+import { makeRng } from "../chart/rng.js";
 
 /**
  * Every sound the game makes, in one bank.
@@ -28,6 +30,14 @@ import { Radio, type Party, type RadioEvent, type Doctrine } from "./radio.js";
  * from one listener updated once a frame. That is not atmosphere — it is the
  * scanner's job done by ear, and it is why the decloak is survivable: it tells
  * you which way to turn before the burst lands.
+ *
+ * **The space never carries information the eye lacks.** `enterSector`
+ * derives the sector's room from exactly the facts the renderer already
+ * drew — `planHero`'s own cast, whether a gas shoal is showing, whether the
+ * player's comet interference has crossed the strip threshold — through
+ * `acoustics.ts`'s pure `roomFor`, never from a second, independent roll.
+ * A rocks field sounds like a rocks field because it *is* one; the room is
+ * an echo of what is already on screen, not a fact told only by ear.
  *
  * Imported directly rather than threaded through constructors. There is one
  * pair of speakers the way there is one screen, and a callback per event would
@@ -337,6 +347,32 @@ export class Sound {
    */
   lastLanceCharge: { at: number } | null = null;
 
+  /**
+   * The sector's own room, for the probe: `null` before the first
+   * `enterSector` call (matching every other "nothing has happened yet"
+   * field here), then the name `enterSector` was called with (`"rocks"`,
+   * `"rocks+shoal"`, or `"comet"` while inside one) and the design's own
+   * `wet`, read straight off whichever `RoomDesign` is actually on the
+   * convolver right now.
+   */
+  room: { name: string; wet: number } | null = null;
+
+  /** The last sector `enterSector` actually applied — `hero`/`shoal` are
+   *  cached rather than re-derived so `insideComet` can restore exactly the
+   *  room that was showing before the tail swallowed it, and `seed`/`sector`
+   *  are cached so that restore re-seeds the same IR rather than a fresh
+   *  one. `null` before the first `enterSector` call. */
+  private sector: { hero: HeroKind; shoal: boolean; seed: number; sector: number } | null = null;
+
+  /** `enterSector`'s own key cache — `${seed}:${sector}:${shoal}` — the same
+   *  idiom `Shoals.show`'s own `key` field uses, so `main.ts` can call this
+   *  unconditionally every frame the way it already calls `shoals.show`. */
+  private sectorKey = "";
+
+  /** Latched by `insideComet`: true while the room on the convolver is the
+   *  comet's own mist rather than the sector's. */
+  private inComet = false;
+
   get muted(): boolean {
     return this.synth.muted;
   }
@@ -374,6 +410,87 @@ export class Sound {
     this.lx = x;
     this.lz = z;
     this.lh = heading;
+  }
+
+  /**
+   * A sector's own room, taking hold. `hero` and `shoal` are exactly what
+   * the renderer already decided (`planHero`, `Shoals.plan !== null`) — see
+   * the class header's own rule — and `seed`/`sector` seed the IR's noise so
+   * the room is deterministic the way every other seeded sector feature is:
+   * the same sector sounds the same on a reload, not a fresh roll.
+   *
+   * Keyed on `${seed}:${sector}:${shoal}` the same idiom `Shoals.show`'s own
+   * `key` field uses, so `main.ts` can call this unconditionally every frame
+   * beside `shoals.show` rather than only from the sector-change block —
+   * which is what closes the same boot-sector gap that idiom was already
+   * written to close: the sector-change block is keyed on `sectorLightKey`,
+   * pre-seeded to the boot sector before the first frame runs, so it never
+   * fires on a fresh load and a room called only from it would leave the
+   * boot sector silent until the first jump.
+   *
+   * While `insideComet` has the room latched to the comet's own mist, this
+   * still records the new sector (so the eventual restore has the right one
+   * to restore) but does not touch the convolver — the tail's own
+   * suppression is total, and a rocks field's slap-echo has no business
+   * fading back in until the tail actually lets go.
+   */
+  enterSector(hero: HeroKind, shoal: boolean, seed: number, sector: number): void {
+    const key = `${seed}:${sector}:${shoal}`;
+    if (key === this.sectorKey) return;
+    this.sectorKey = key;
+    this.sector = { hero, shoal, seed, sector };
+    if (!this.inComet) this.applySectorRoom();
+  }
+
+  /**
+   * The comet's own override, read every frame off the player's own
+   * interference (`Session`/`game/comet.ts` compute it; this file only
+   * reads it) rather than a one-shot event, because the tail has no edge
+   * the game announces — you are in it or you are not, continuously, the
+   * same way the drain and the scanner's own degradation already work.
+   *
+   * `0.5` mirrors `COMET.stripAt` (`game/comet.ts`) — the threshold past
+   * which a Shroud loses its cloak and the scanner gives up on a contact
+   * entirely — rather than importing it, for the reason every other
+   * mirrored constant in this file gives (see `PING`'s own docblock):
+   * `comet.ts` pulls in `three`, and this file is tsc-emitted standalone.
+   *
+   * Edge-triggered: only acts when the inside/outside reading actually
+   * flips, so a player sitting still just inside the strip threshold does
+   * not re-render the same room's IR sixty times a second.
+   */
+  insideComet(interference: number): void {
+    const inside = interference > 0.5;
+    if (inside === this.inComet) return;
+    this.inComet = inside;
+    if (inside) {
+      // `hero`/`shoal` are irrelevant once `insideComet` is true — `roomFor`
+      // overrides outright rather than blending — so `"bare"`/`false` here
+      // are placeholders, not a claim about what is actually out there.
+      const design = roomFor("bare", false, true);
+      this.synth.setSpace(design);
+      this.room = { name: "comet", wet: design.wet };
+    } else {
+      this.applySectorRoom();
+    }
+  }
+
+  /**
+   * Renders and applies `this.sector`'s own room. The one place that calls
+   * `roomFor`/`Synth.setSpace` for a sector (as opposed to the comet's own
+   * override in `insideComet`), so `enterSector` and `insideComet`'s restore
+   * path can never disagree about what a sector's room actually is.
+   */
+  private applySectorRoom(): void {
+    const sector = this.sector;
+    if (!sector) return;
+    const design = roomFor(sector.hero, sector.shoal, false);
+    // A hash mix of its own, distinct from every other sector feature's —
+    // see `render/scenery.ts`'s own docblock for the roster this joins and
+    // why reusing one would correlate two unrelated rolls.
+    const rng = makeRng((sector.seed * 913119313 + sector.sector * 452930477 + 1274162719) >>> 0);
+    this.synth.setSpace(design, () => rng.next());
+    this.room = { name: sector.hero + (sector.shoal ? "+shoal" : ""), wet: design.wet };
   }
 
   /**
@@ -439,6 +556,18 @@ export class Sound {
     // be trusted to decide these two beds' level while a death is dimming
     // them on purpose.
     const dying = this.deathPowerActive;
+
+    // Duck the world as threat rises — Alien: Isolation's own rule
+    // (`docs/audio-prior-art.md`): reverb is atmosphere, and atmosphere
+    // gives way to information exactly when there is the most of it to
+    // read. Never below 0.3, so a wave-six fight thins the room rather than
+    // switching it off outright — a total cut would itself be a discontinuity
+    // worth noticing, and the point is that attention narrows, not that the
+    // sector stops existing. Called every frame, the same idiom `duck`
+    // itself and every bed's `set` already use: `setTargetAtTime` is cheap
+    // to re-schedule, and the alternative (only calling this on a threat
+    // *change*) would need a second piece of state to detect one.
+    this.synth.spaceLevel(1 - 0.7 * pressure);
 
     // The alert used to be a sustained bed riding threat. It is now a pulse —
     // see `alertBeat`, and `AlertPulse` for why — so this bed is held at
@@ -568,6 +697,13 @@ export class Sound {
     this.lastApproachAt = -Infinity;
     this.deathPowerActive = false;
     this.radio.reset();
+    // The threat duck, released: a run that just ended should not leave the
+    // next one's room pre-ducked from the last one's own fight. The room
+    // itself is not touched — `Synth.silence()` never clears `spaceDesign`,
+    // and a restart does not change what sector the ship is in — only the
+    // level `update`'s own duck was riding.
+    this.synth.spaceLevel(1);
+    this.inComet = false;
   }
 
   // ── weapons ──────────────────────────────────────────────────────────────

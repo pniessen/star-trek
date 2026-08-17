@@ -286,6 +286,9 @@ function everyCue(s) {
   s.synth.setSpace({ tailSeconds: 0.3, tailCutoffHz: 3500, earlyReflections: [{ at: 0.02, gain: 0.4 }], wet: 0.25 });
   s.synth.spaceLevel(0.5);
   s.synth.setSpace(null);
+  s.enterSector("rocks", true, 7, 3);
+  s.insideComet(0.8);
+  s.insideComet(0.1);
   s.phaser(true, 1);
   s.phaser(false, 0);
   s.torpedo(false);
@@ -2181,6 +2184,191 @@ let chain;
   const afterFailFrom = mark();
   failSound.dispatch();
   ok("...so a cue after the failure no longer schedules anything", voicesSince(afterFailFrom).length === 0, "");
+}
+
+// ── 18. sectors have a body: a room per sector, ducked under threat ────────
+
+const { roomFor } = await import(join(out, "audio/acoustics.js"));
+
+{
+  // `roomFor` itself: pure, no WebAudio, the spec's own table turned into
+  // numbers.
+  const rocks = roomFor("rocks", false, false);
+  ok(
+    "rocks: four discrete early reflections — a torpedo comes back off the field",
+    rocks.earlyReflections.length === 4,
+    `${rocks.earlyReflections.length}`,
+  );
+
+  const bare = roomFor("bare", false, false);
+  ok("bare: bone dry", bare.wet === 0, `${bare.wet}`);
+
+  const giant = roomFor("giant", false, false);
+  ok("giant: a long dark tail, ~2s", giant.tailSeconds >= 1.8, `${giant.tailSeconds}`);
+
+  const shoaledGiant = roomFor("giant", true, false);
+  ok("shoal: cutoff drops under 1500 Hz even on an already-dark room", shoaledGiant.tailCutoffHz < 1500, `${shoaledGiant.tailCutoffHz}`);
+  const shoaledRocks = roomFor("rocks", true, false);
+  ok("shoal: cutoff drops under 1500 Hz on a bright room too", shoaledRocks.tailCutoffHz < 1500, `${shoaledRocks.tailCutoffHz}`);
+  ok(
+    "shoal: a ceiling, never a brightener — the giant's own 600 Hz is untouched by a 1200 Hz cap",
+    shoaledGiant.tailCutoffHz === giant.tailCutoffHz,
+    `${shoaledGiant.tailCutoffHz} vs ${giant.tailCutoffHz}`,
+  );
+  ok("shoal: the tail lengthens", shoaledRocks.tailSeconds > rocks.tailSeconds, `${shoaledRocks.tailSeconds} vs ${rocks.tailSeconds}`);
+  ok("shoal: the mix wets further", shoaledRocks.wet > rocks.wet, `${shoaledRocks.wet} vs ${rocks.wet}`);
+
+  const mist = roomFor("rocks", true, true);
+  ok("inside the comet: noise, not a room — overrides hero and shoal alike", mist.noiseOnly === true, "");
+  ok("...the loudest send in the bank", mist.wet > rocks.wet && mist.wet > shoaledRocks.wet, `${mist.wet}`);
+}
+
+{
+  // `Sound.enterSector`: builds the convolver, and the probe agrees with
+  // what `roomFor` itself would say.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+  ok("no room on the probe before a sector is entered", s.room === null, "");
+
+  s.enterSector("rocks", false, 11, 4);
+  const conv = nodes.find((n) => n.kind === "convolver");
+  ok("enterSector builds a convolver with a buffer", conv && conv.buffer !== null, "");
+  ok(
+    "the probe reports the room's name and wet",
+    s.room && s.room.name === "rocks" && s.room.wet === roomFor("rocks", false, false).wet,
+    JSON.stringify(s.room),
+  );
+
+  s.enterSector("rocks", false, 11, 4); // same key: a no-op
+  ok(
+    "re-entering the same sector does not rebuild the convolver",
+    nodes.filter((n) => n.kind === "convolver").length === 1,
+    "",
+  );
+
+  s.enterSector("rocks", true, 11, 4); // shoal flag differs: a real change
+  ok(
+    "a shoal appearing over the same sector is a different key",
+    s.room && s.room.name === "rocks+shoal",
+    JSON.stringify(s.room),
+  );
+
+  s.enterSector("bare", false, 11, 5);
+  ok("a bare sector reads wet 0 on the probe too", s.room && s.room.wet === 0, JSON.stringify(s.room));
+}
+
+{
+  // Determinism: the same (seed, sector) renders the same IR bytes, on two
+  // entirely separate `Sound` instances — a reload must not re-roll the
+  // room the way a reload never re-rolls `planHero` itself.
+  const ctxA = makeContext();
+  globalThis.AudioContext = function () { return ctxA; };
+  nodes = [];
+  const a = new Sound();
+  a.start();
+  a.enterSector("rocks", false, 42, 9);
+  const bufA = Array.from(nodes.find((n) => n.kind === "convolver").buffer.getChannelData(0));
+
+  const ctxB = makeContext();
+  globalThis.AudioContext = function () { return ctxB; };
+  nodes = [];
+  const b = new Sound();
+  b.start();
+  b.enterSector("rocks", false, 42, 9);
+  const bufB = Array.from(nodes.find((n) => n.kind === "convolver").buffer.getChannelData(0));
+  ok(
+    "the same (seed, sector) renders the same room, byte for byte",
+    bufA.length === bufB.length && bufA.every((v, i) => v === bufB[i]),
+    "",
+  );
+
+  nodes = [];
+  const c = new Sound();
+  c.start();
+  c.enterSector("rocks", false, 42, 10); // a different sector, same seed
+  const bufC = Array.from(nodes.find((n) => n.kind === "convolver").buffer.getChannelData(0));
+  ok("a different sector renders a different room", !bufA.every((v, i) => v === bufC[i]), "");
+}
+
+{
+  // `insideComet`: overrides the sector's room while latched, and restores
+  // whichever sector is actually current — not necessarily the one that was
+  // showing when the tail closed over the ship — once it lets go.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+  s.enterSector("giant", false, 5, 2);
+  const sectorWet = s.room.wet;
+
+  s.insideComet(0.2); // below the 0.5 strip threshold: no change
+  ok("below the strip threshold, the sector's room stays", s.room.name === "giant", JSON.stringify(s.room));
+
+  s.insideComet(0.9); // above it: the tail takes over
+  ok("above the strip threshold, the room becomes the comet's own mist", s.room.name === "comet", JSON.stringify(s.room));
+  ok("...at a wetter level than the sector it replaced", s.room.wet > sectorWet, `${s.room.wet} vs ${sectorWet}`);
+
+  // A sector change while inside the tail is recorded but not applied — the
+  // suppression is total, so a rocks field's slap-echo has no business
+  // fading back in until the tail actually lets go.
+  s.enterSector("bare", false, 5, 3);
+  ok("a sector change while inside the comet does not touch the room yet", s.room.name === "comet", JSON.stringify(s.room));
+
+  s.insideComet(0.1); // dropping back out
+  ok(
+    "dropping back out restores the sector actually current, not the one before the tail closed",
+    s.room && s.room.name === "bare" && s.room.wet === 0,
+    JSON.stringify(s.room),
+  );
+}
+
+{
+  // The threat duck: `update` scales every open send down as threat rises,
+  // and `silence` lets go of the duck immediately rather than waiting for
+  // threat to fall back to zero.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+  s.enterSector("rocks", false, 3, 1); // wet 0.3, so the sends are actually open
+  const conv = nodes.find((n) => n.kind === "convolver");
+  const sends = nodes.filter((n) => n.kind === "gain" && n.out.includes(conv));
+  const eventsBefore = sends.map((g) => g.gain.events.length);
+  const before = s.synth.sendLevels();
+  ok("sends are open before any threat", before.weapon > 0, `${before.weapon}`);
+
+  const scene = (threat) => ({ threat, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 1, starved: false });
+  s.update(scene(1100)); // FULL_THREAT — full-volume alarm
+  ok(
+    "full threat schedules a fresh gain event on every open send",
+    sends.every((g, i) => g.gain.events.length > eventsBefore[i]),
+    "",
+  );
+  const ducked = s.synth.sendLevels();
+  near("full threat ducks the space to 0.3× (1 − 0.7×1)", ducked.weapon / before.weapon, 0.3, 1e-9);
+  ok("bed and radio stay pinned dry regardless", ducked.bed === 0 && ducked.radio === 0, "");
+
+  s.update(scene(0)); // threat clears
+  const restored = s.synth.sendLevels();
+  near("threat clearing restores the sends", restored.weapon, before.weapon, 1e-9);
+
+  s.update(scene(1100)); // duck it again
+  s.silence();
+  const afterSilence = s.synth.sendLevels();
+  near(
+    "silence() releases the duck immediately, without waiting for threat to clear",
+    afterSilence.weapon,
+    before.weapon,
+    1e-9,
+  );
 }
 
 // ── report ─────────────────────────────────────────────────────────────────

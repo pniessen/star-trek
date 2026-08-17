@@ -399,6 +399,58 @@ if (!shoalWiring.skip) {
   }, shoalWiring.sectorBefore);
 }
 
+// ── forcing a sector changes the room within a frame ────────────────────────
+// Same shortcut, same reasoning as the shoal block just above: `__sound.room`
+// is already non-null by the time this runs (the boot sector's own room, or
+// whatever the rock-collision/shoal blocks above last forced), so the poll
+// waits for the *name* to agree with the sector just forced rather than for
+// mere non-nullness — otherwise a stale room from an earlier block would
+// pass this check by accident before the real one ever landed.
+const roomSectors = await page.evaluate(async () => {
+  const { planHero } = await import("/src/render/scenery.ts");
+  const seed = window.__campaign.seed;
+  const sectorBefore = window.__campaign.current;
+  let bareSector = -1;
+  let rockSector = -1;
+  for (let s = 0; s < 64 && (bareSector < 0 || rockSector < 0); s++) {
+    const kind = planHero(seed, s);
+    if (bareSector < 0 && kind === "bare") bareSector = s;
+    if (rockSector < 0 && kind === "rocks") rockSector = s;
+  }
+  return { sectorBefore, bareSector, rockSector };
+});
+async function forceRoomSector(sector, expectedKind) {
+  await page.evaluate((s) => {
+    window.__campaign.current = s;
+  }, sector);
+  const deadline = Date.now() + 5000;
+  let room = await page.evaluate(() => window.__sound.room);
+  while ((!room || !room.name.startsWith(expectedKind)) && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+    room = await page.evaluate(() => window.__sound.room);
+  }
+  return room;
+}
+if (roomSectors.bareSector >= 0) {
+  const bareRoom = await forceRoomSector(roomSectors.bareSector, "bare");
+  check(
+    "forcing a bare sector leaves the room bone dry within a frame",
+    bareRoom !== null && bareRoom.name.startsWith("bare") && bareRoom.wet === 0,
+    JSON.stringify(bareRoom),
+  );
+}
+if (roomSectors.rockSector >= 0) {
+  const rockRoom = await forceRoomSector(roomSectors.rockSector, "rocks");
+  check(
+    "forcing a rocks sector gives the room something to answer back with",
+    rockRoom !== null && rockRoom.name.startsWith("rocks") && rockRoom.wet > 0,
+    JSON.stringify(rockRoom),
+  );
+}
+await page.evaluate((sectorBefore) => {
+  window.__campaign.current = sectorBefore;
+}, roomSectors.sectorBefore);
+
 // ── the compass ─────────────────────────────────────────────────────────────
 // A bearing readout must never show 360, and the naive spelling does: taking
 // the modulo before rounding displays `360` for every bearing from 359.5 up.

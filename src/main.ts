@@ -1037,6 +1037,13 @@ function frame(now: number): void {
   }
   pressed.clear();
 
+  // The comet's own override on the room. `player.interference` is written
+  // by `session.update` just above, which only runs during a live run (the
+  // `else` branch a few lines up) — outside one, this simply reads whatever
+  // the last run last wrote, the same "stale until the next real value"
+  // tolerance every other continuous readout here already accepts.
+  sound.insideComet(player.interference);
+
   // The two continuous voices: the alert drone rides the threat on the tube,
   // the engine rides the throttle. Levels, not events — the same contract the
   // gauges work under.
@@ -1200,6 +1207,13 @@ function frame(now: number): void {
   // away and back would then reveal it, which is a visible inconsistency in a
   // seeded world. One source of truth, called the way its sibling already is.
   shoals.show(campaign.seed, campaign.current);
+  // The sector's own room, called the same unconditional-every-frame way and
+  // for the same reason `shoals.show` just above is: `enterSector`'s own
+  // internal key cache (`Sound.sectorKey`) makes every frame but a real
+  // sector change a cheap string comparison, and calling it only from the
+  // sector-change block above would leave the boot sector's own room silent
+  // until the first jump — the same trap that comment's own history records.
+  sound.enterSector(sectorHero, shoals.plan !== null, campaign.seed, campaign.current);
   // World-space, so it is told the sector and then left alone apart from the
   // leash that stops the player flying into it. Only shows when it is the
   // sector's hero — see the giant's own version of this comment above.
