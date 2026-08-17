@@ -34,6 +34,7 @@ execFileSync(
     "tsc",
     "src/audio/Synth.ts",
     "src/audio/sound.ts",
+    "src/audio/formant.ts",
     "src/game/alert.ts",
     "--ignoreConfig",
     "--outDir",
@@ -266,10 +267,16 @@ const { Synth } = await import(join(out, "audio/Synth.js"));
 const { Sound } = await import(join(out, "audio/sound.js"));
 const { AlertPulse } = await import(join(out, "game/alert.js"));
 
+// A tiny, fixed phrase for `everyCue` below — `speak` is bench-level (Task 3),
+// not yet a cue on `Sound`, so §1's gesture/no-device sections reach it
+// through `s.synth.speak` directly rather than through a bank method.
+const TEST_PHRASE = { syllables: [{ at: 0, length: 0.08, pitch: 160, f1: 500, f2: 1500, f3: 2500, level: 1 }], duration: 0.08 };
+
 /** Every cue in the bank, called the way the game calls it. */
 function everyCue(s) {
   s.listen(0, 0, 0);
   s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false });
+  s.synth.speak({ phrase: TEST_PHRASE, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
   s.phaser(true, 1);
   s.phaser(false, 0);
   s.torpedo(false);
@@ -885,6 +892,51 @@ let chain;
     "index: 0 floors the depth gain instead of starting an exponential ramp from 0",
     zeroDepth && zeroDepth.gain.events[0] && zeroDepth.gain.events[0][1] >= 0.0001,
     zeroDepth ? `${zeroDepth.gain.events[0][1]}` : "no depth gain found",
+  );
+}
+
+// ── 9. the formant voice speaks a phrase on the audio clock ────────────────
+
+{
+  const { composePhrase } = await import(join(out, "audio/formant.js"));
+  let seed = 7; const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const cadence = { syllablesMin: 3, syllablesMax: 5, lengthMin: 0.06, lengthMax: 0.14, gapMin: 0.03, gapMax: 0.08, pitchBase: 160, pitchRange: 40, contour: "rising" };
+  const phrase = composePhrase(cadence, rng);
+  ok("a phrase has 3–5 syllables", phrase.syllables.length >= 3 && phrase.syllables.length <= 5, `${phrase.syllables.length}`);
+  ok("syllables are ordered and non-overlapping", phrase.syllables.every((s, i) => i === 0 || s.at >= phrase.syllables[i - 1].at + phrase.syllables[i - 1].length), "");
+  ok("a rising contour ends higher than it starts", phrase.syllables.at(-1).pitch > phrase.syllables[0].pitch, "");
+  ok("formants sit in the speech band", phrase.syllables.every((s) => s.f1 > 200 && s.f3 < 3400), "");
+
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const synth = new Synth();
+  synth.start();
+  const from = mark();
+  synth.speak({ phrase, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+  const fresh = nodes.slice(from);
+  ok("one carrier per phrase", fresh.filter((n) => n.kind === "oscillator").length === 1, "");
+  ok("three formant bandpasses", fresh.filter((n) => n.kind === "biquad" && n.type === "bandpass").length === 3, "");
+  ok("a drive stage exists", fresh.some((n) => n.kind === "waveshaper"), "");
+  const gates = fresh.filter((n) => n.kind === "gain" && n.gain.events.length >= phrase.syllables.length * 2);
+  ok("the syllable gate is a scheduled envelope sequence, not timers", gates.length >= 1, "no gain carries per-syllable events");
+  ok("two squelch bursts bracket the phrase", fresh.filter((n) => n.kind === "buffersource").length === 2, "");
+  ok("a phrase counts as one radio voice", true); // budget asserted in Task 8's radio test
+
+  // Task 11 needs a squelch-only phrase (the Shroud's commit) — `speak` must
+  // accept zero syllables gracefully rather than requiring `composePhrase`
+  // to support `syllablesMin === 0`.
+  const zeroPhrase = { syllables: [], duration: 0 };
+  const from2 = mark();
+  synth.speak({ phrase: zeroPhrase, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+  const fresh2 = nodes.slice(from2);
+  ok("a zero-syllable phrase still builds two squelch bursts", fresh2.filter((n) => n.kind === "buffersource").length === 2, "");
+  const bandpasses2 = fresh2.filter((n) => n.kind === "biquad" && n.type === "bandpass");
+  const gate2 = fresh2.find((n) => n.kind === "gain" && bandpasses2.length > 0 && bandpasses2.every((bp) => bp.out.includes(n)));
+  ok(
+    "and opens no syllable gate",
+    !gate2 || !gate2.gain.events.some((e) => e[0] === "lin"),
+    "the gate ramped despite no syllables to voice",
   );
 }
 

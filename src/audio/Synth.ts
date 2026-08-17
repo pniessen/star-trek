@@ -27,6 +27,8 @@
  *    and never end.
  */
 
+import type { Phrase } from "./formant.js";
+
 /**
  * Nine buses, so the mix is a handful of constants in one place rather than a
  * level on every cue. Weapons are their own bus because phasers fire every
@@ -96,6 +98,24 @@ export interface VoiceSpec {
    * phrase, squelch included, as one voice — uses the same mechanism.
    */
   readonly group?: number;
+}
+
+/**
+ * `Synth.speak`'s cue: a whole `Phrase` (see `formant.ts`), not a note. Built
+ * for the radio — `speak` is what the three parties (Task 11: ours, the
+ * Warden's, theirs) all talk through.
+ */
+export interface PhraseSpec {
+  readonly phrase: Phrase;
+  readonly bus: Bus;
+  /** Peak level within the phrase — a syllable's own `level` scales this, same as `VoiceSpec.level`. */
+  readonly level: number;
+  /** Drive into the soft-clip stage; higher reads as a hotter, more distorted radio. */
+  readonly drive: number;
+  /** Telephone band [highpass, lowpass], Hz. 300–3400 is the classic telephone band. */
+  readonly band: readonly [number, number];
+  readonly pan?: number;
+  readonly delay?: number;
 }
 
 export interface BedSpec {
@@ -170,6 +190,32 @@ function limiterCurve(): Float32Array<ArrayBuffer> {
   }
   return curve;
 }
+
+/** Cached lazily — `speak` may build many phrases and the curve never changes. */
+let driveCurve: Float32Array<ArrayBuffer> | null = null;
+
+/**
+ * `speak`'s own soft-clip stage, distinct from `limiterCurve` above: the
+ * limiter exists to protect the destination from pile-up and stays
+ * transparent below -15 dBFS, but the radio's drive stage is meant to be
+ * heard — a hotter, brighter clip that reads as a transmitted voice rather
+ * than a clean one. `spec.drive` scales the signal into this fixed curve via
+ * a trim gain ahead of it, the same shape as `LIMIT_CEILING`'s trim.
+ */
+function speechDriveCurve(): Float32Array<ArrayBuffer> {
+  if (!driveCurve) {
+    const points = 2049;
+    const curve = new Float32Array(new ArrayBuffer(points * 4));
+    for (let i = 0; i < points; i++) {
+      curve[i] = Math.tanh(((i / (points - 1)) * 2 - 1) * 3);
+    }
+    driveCurve = curve;
+  }
+  return driveCurve;
+}
+
+/** Each squelch burst's own length — see `Synth.speak`. */
+const SQUELCH_LEN = 0.04;
 
 interface Rig {
   readonly ctx: AudioContext;
@@ -388,6 +434,188 @@ export class Synth {
     } catch (error) {
       this.fail(error);
     }
+  }
+
+  /**
+   * The formant voice: a phrase, not a note — the radio's voice, and the
+   * only one of the three (Task 11: ours, the Warden's, theirs) that
+   * `Synth` builds a whole node graph for rather than a single envelope.
+   * One sawtooth carrier drives a soft-clip stage (`speechDriveCurve`,
+   * `spec.drive`-scaled), into three parallel bandpass formants (Q ~8,
+   * stepped per syllable via `setTargetAtTime`) summed into a gate that
+   * opens and closes on the audio clock for each `Syllable`, through a
+   * highpass/lowpass pair at `spec.band` (the telephone band), bracketed by
+   * two 40 ms squelch bursts built into this same graph. The whole thing —
+   * carrier, formants, both squelches — is **one voice** on `spec.bus`, so
+   * it goes through the same cap check `play` does and needs no `group`.
+   * Mirrors `play`'s never-throw contract exactly: guarded the same way,
+   * failed the same way.
+   */
+  speak(spec: PhraseSpec): void {
+    const rig = this.rig;
+    if (!rig || this.failed || this.silenced || rig.ctx.state !== "running") return;
+
+    try {
+      const ctx = rig.ctx;
+      const now = ctx.currentTime;
+      const at = now + (spec.delay ?? 0);
+      const phrase = spec.phrase;
+
+      this.reap(now);
+      const busName = spec.bus;
+      if (this.count(busName) >= BUS_CAPS[busName]) return;
+
+      const chain: AudioNode[] = [];
+
+      // The carrier. Sawtooth for a harmonic-rich source the formants have
+      // something to shape; pitch starts at the first syllable's (or a
+      // neutral default if the phrase is squelch-only) and steps per
+      // syllable below.
+      const carrier = ctx.createOscillator();
+      carrier.type = "sawtooth";
+      const firstPitch = phrase.syllables[0]?.pitch ?? 150;
+      carrier.frequency.setValueAtTime(clamp(firstPitch, 20, 18000), at);
+
+      // Drive: a trim scales the input by `spec.drive`, then a fixed
+      // soft-clip curve — same shape as the master limiter's trim/curve
+      // pair, different curve, different purpose.
+      const driveTrim = ctx.createGain();
+      driveTrim.gain.value = Math.max(spec.drive, 0.0001);
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = speechDriveCurve();
+      shaper.oversample = "none";
+      carrier.connect(driveTrim).connect(shaper);
+      chain.push(driveTrim, shaper);
+
+      // Three parallel formant bandpasses, summed straight into the gate
+      // below — the sum and the syllable gate are the same node.
+      const firstFormants = phrase.syllables[0] ?? { f1: 500, f2: 1500, f3: 2500 };
+      const formants = [firstFormants.f1, firstFormants.f2, firstFormants.f3].map((freq) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.Q.value = 8;
+        filter.frequency.setValueAtTime(clamp(freq, 20, 18000), at);
+        shaper.connect(filter);
+        chain.push(filter);
+        return filter;
+      });
+
+      const gate = ctx.createGain();
+      gate.gain.setValueAtTime(0.0001, at);
+      for (const filter of formants) filter.connect(gate);
+      chain.push(gate);
+
+      // One scheduled envelope sequence per syllable, all on the same gate —
+      // this is the "not timers" half of the contract. Formant centres and
+      // the carrier's own pitch step alongside it via `setTargetAtTime`, a
+      // glide rather than a snap, which is what keeps the voice sounding
+      // like one continuous phrase instead of a string of blips.
+      for (const syllable of phrase.syllables) {
+        const sylAt = at + SQUELCH_LEN + syllable.at;
+        formants[0].frequency.setTargetAtTime(clamp(syllable.f1, 20, 18000), sylAt, 0.02);
+        formants[1].frequency.setTargetAtTime(clamp(syllable.f2, 20, 18000), sylAt, 0.02);
+        formants[2].frequency.setTargetAtTime(clamp(syllable.f3, 20, 18000), sylAt, 0.02);
+        carrier.frequency.setTargetAtTime(clamp(syllable.pitch, 20, 18000), sylAt, 0.03);
+
+        const attack = Math.min(0.015, syllable.length * 0.25);
+        const release = Math.min(0.02, syllable.length * 0.25);
+        const hold = Math.max(0, syllable.length - attack - release);
+        const peak = Math.max(spec.level * syllable.level, 0.0002);
+        gate.gain.setValueAtTime(0.0001, sylAt);
+        gate.gain.linearRampToValueAtTime(peak, sylAt + attack);
+        if (hold > 0) gate.gain.setValueAtTime(peak, sylAt + attack + hold);
+        gate.gain.exponentialRampToValueAtTime(0.0001, sylAt + syllable.length);
+      }
+
+      // The telephone band.
+      const highpass = ctx.createBiquadFilter();
+      highpass.type = "highpass";
+      highpass.frequency.setValueAtTime(clamp(spec.band[0], 20, 18000), at);
+      const lowpass = ctx.createBiquadFilter();
+      lowpass.type = "lowpass";
+      lowpass.frequency.setValueAtTime(clamp(spec.band[1], 20, 18000), at);
+      gate.connect(highpass).connect(lowpass);
+      chain.push(highpass, lowpass);
+
+      // The phrase's own output gain — everything downstream of the voice,
+      // squelches included, is one sound leaving through one pan/bus
+      // connection, which is what makes `voice.gain` here silence the
+      // whole phrase in one ramp if `silence()` cuts it early.
+      const output = ctx.createGain();
+      lowpass.connect(output);
+      chain.push(output);
+
+      const phraseStart = at + SQUELCH_LEN;
+      const trailStart = phraseStart + phrase.duration;
+      const squelchLevel = spec.level * 0.6;
+      const leadSource = this.squelch(ctx, rig.noise, at, squelchLevel, output, chain);
+      const trailSource = this.squelch(ctx, rig.noise, trailStart, squelchLevel, output, chain);
+      const overallEnd = trailStart + SQUELCH_LEN;
+
+      const busGain = rig.buses[busName];
+      if (spec.pan !== undefined && typeof ctx.createStereoPanner === "function") {
+        const panner = ctx.createStereoPanner();
+        panner.pan.value = clamp(spec.pan, -1, 1);
+        output.connect(panner).connect(busGain);
+        chain.push(panner);
+      } else {
+        output.connect(busGain);
+      }
+
+      carrier.start(at);
+      carrier.stop(overallEnd + 0.02);
+      const voice: Voice = { end: overallEnd, gain: output, source: carrier, bus: busName, group: undefined };
+      carrier.onended = () => {
+        try {
+          carrier.disconnect();
+          leadSource.disconnect();
+          trailSource.disconnect();
+          for (const node of chain) node.disconnect();
+        } catch {
+          // Already gone. Nothing to do, and nothing worth saying about it.
+        }
+        const index = this.voices.indexOf(voice);
+        if (index >= 0) this.voices.splice(index, 1);
+      };
+      this.voices.push(voice);
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * One 40 ms squelch burst — a resonant highpass ~2.2 kHz over noise —
+   * connected straight into `target` (the phrase's own output gain), so it
+   * lives inside `speak`'s node graph rather than as a separate `play` call.
+   * That is what keeps a whole phrase, squelches included, one `Voice`.
+   */
+  private squelch(
+    ctx: AudioContext,
+    noise: AudioBuffer,
+    atTime: number,
+    level: number,
+    target: AudioNode,
+    chain: AudioNode[],
+  ): AudioScheduledSourceNode {
+    const source = ctx.createBufferSource();
+    source.buffer = noise;
+    source.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "highpass";
+    filter.Q.value = 6;
+    filter.frequency.setValueAtTime(2200, atTime);
+    const gain = ctx.createGain();
+    const attack = 0.006;
+    const peak = Math.max(level, 0.0002);
+    gain.gain.setValueAtTime(0.0001, atTime);
+    gain.gain.linearRampToValueAtTime(peak, atTime + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, atTime + SQUELCH_LEN);
+    source.connect(filter).connect(gain).connect(target);
+    source.playbackRate.value = 0.9 + Math.random() * 0.2;
+    source.start(atTime, Math.random() * (noise.duration - 0.5));
+    source.stop(atTime + SQUELCH_LEN + 0.02);
+    chain.push(filter, gain);
+    return source;
   }
 
   /** A sustained voice under player control — the alert drone and the engine. */
