@@ -1595,6 +1595,11 @@ let chain;
     chargeVoices.length === 1 && chargeVoices[0].to > chargeVoices[0].from,
     chargeVoices.map((v) => `${v.from}->${v.to}`).join(","),
   );
+  ok(
+    "lastLanceCharge records the audio-clock time it sounded, for the probe",
+    s.lastLanceCharge !== null && s.lastLanceCharge.at === ctx.currentTime,
+    JSON.stringify(s.lastLanceCharge),
+  );
 
   // A mine arming: a short, bandpassed click.
   ctx.currentTime += 1;

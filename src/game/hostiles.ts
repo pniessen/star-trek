@@ -211,6 +211,20 @@ export const HOSTILE_SPECS: Record<HostileKind, HostileSpec> = {
 const HIDDEN_AT = 0.4;
 
 /**
+ * The Lance's charge-to-shot gate. `LANCE_CHARGE_AT` is when the tell fires
+ * (`cooldown` counting down through this crosses it) — unchanged from the
+ * original, un-gated version. `LANCE_LEAD` is new: the minimum seconds that
+ * tell must have been audibly playing before the fire condition is allowed
+ * to pass at all, which is what turns "the charge happens to fire first"
+ * into "the charge is the reason the shot is allowed to fire" — see
+ * `Hostile.chargedAt`'s own docblock for why the difference matters.
+ */
+// Exported (like `WITHDRAW` below) so a playtest can assert the fire gate
+// against the real numbers rather than a second, driftable copy of them.
+export const LANCE_CHARGE_AT = 0.35;
+export const LANCE_LEAD = 0.32;
+
+/**
  * The one-shot roll a hostile makes as its hull crosses `threshold` on the
  * way down. A crippled hull that keeps fighting reads as suicidal rather than
  * as an opponent, so below a fifth of hull the fight can end without a kill:
@@ -293,14 +307,32 @@ export class Hostile {
   private reveal = 0;
 
   /**
-   * The Lance's own tell, `sound.lanceCharge` fired once per shot: true the
-   * instant `cooldown` first crosses under 0.35 s with the target in aim,
-   * reset back to false the moment the bolt actually fires. Without this a
-   * cooldown that lingers under the threshold for several frames — it does,
-   * every frame between the crossing and the shot — would replay the charge
-   * cue on each of them, turning one tell into a stutter.
+   * The Lance's own tell. `null` between shots; set to `slabTime` (below) —
+   * reused as a general per-hostile clock rather than a dedicated one,
+   * since `updateAltitude` already accumulates it unconditionally, every
+   * frame, regardless of aim, cloak or withdrawal state, which is exactly
+   * the property a charge timestamp needs — the instant `sound.lanceCharge`
+   * fires.
+   *
+   * This is not merely a "fired once" flag; it is the gate the fire
+   * condition itself now reads (`slabTime - chargedAt >= LANCE_LEAD`).
+   * A flag alone was the original, un-gated version's bug: the sniper's own
+   * strafing (`orbit`) makes `aimError < 0.4` intermittent by design, so
+   * `cooldown` could cross `LANCE_CHARGE_AT` while aim was bad (no charge),
+   * keep falling through zero unfired, and only pass the fire check's own
+   * aim gate later, on the very same frame the charge check *also* first
+   * passes — tell and shot landing together, zero warning. Gating the shot
+   * on elapsed time since the charge closes that: a shot can only ever
+   * follow its own tell by at least `LANCE_LEAD` seconds, however long
+   * `cooldown` sat waiting first.
+   *
+   * If aim breaks (or the hostile starts withdrawing) while charged and
+   * before the lead has elapsed, this is discarded back to `null` rather
+   * than left standing — the tell was for a shot that is not coming, and
+   * the next attempt earns its own fresh, audible lead rather than firing
+   * off a stale one. Reset to `null` on the actual shot, same as before.
    */
-  private charged = false;
+  private chargedAt: number | null = null;
 
   /**
    * The vertical wander. One sine per ship, with its own phase and its own
@@ -320,6 +352,13 @@ export class Hostile {
     this.hull = spec.hull;
     // Stagger the opening volley so a wave does not fire in unison.
     this.cooldown = Math.random() * spec.fireInterval;
+    // A Lance's own tell needs `LANCE_CHARGE_AT + LANCE_LEAD` seconds to run
+    // its full course before a shot is allowed — without this floor, a
+    // freshly spawned sniper's random stagger could already land under that
+    // sum and fire its very first shot with less than a full lead, the same
+    // defect the mid-run gate above exists to close, just at spawn instead
+    // of at a cooldown crossing.
+    if (kind === "sniper") this.cooldown = Math.max(this.cooldown, LANCE_CHARGE_AT + LANCE_LEAD);
     this.layTimer = Math.random() * (spec.lays?.interval ?? 1);
     if (spec.cloak) {
       this.cloak = 1;
@@ -470,27 +509,54 @@ export class Hostile {
       this.spec.fireRange,
       MathUtils.lerp(this.spec.fireRange, COMET.visualRange, this.interference),
     );
-    // The Lance's own tell: the same aim gate the fire check below uses,
-    // fired once as `cooldown` first crosses under 0.35 s rather than on
-    // every frame it stays there — `charged` is what makes it once.
-    if (
-      this.kind === "sniper" &&
-      !this.charged &&
-      !this.withdrawing &&
-      !this.hidden &&
-      this.cooldown <= 0.35 &&
-      aimError < 0.4
-    ) {
-      this.charged = true;
-      sound.lanceCharge(this.position.x, this.position.z);
+    // The Lance's own tell. Charge and discard are the two directions of one
+    // state machine rather than two independent checks: whichever direction
+    // applies this frame, only one of them can (see `chargedAt`'s own
+    // docblock for why the shot has to wait on this rather than merely
+    // follow it).
+    if (this.kind === "sniper") {
+      if (this.chargedAt !== null && (aimError >= 0.4 || this.withdrawing || this.hidden)) {
+        // The tell was for a shot that is not coming — aim broke, or the
+        // hostile stopped fighting entirely. Discard rather than leave it
+        // standing, so the next attempt earns a fresh, audible lead instead
+        // of firing off a stale one the player never actually heard.
+        this.chargedAt = null;
+      } else if (
+        this.chargedAt === null &&
+        !this.withdrawing &&
+        !this.hidden &&
+        this.cooldown <= LANCE_CHARGE_AT &&
+        aimError < 0.4
+      ) {
+        this.chargedAt = this.slabTime;
+        sound.lanceCharge(this.position.x, this.position.z);
+      }
     }
+
+    // A sniper may only fire once its own charge has been running for at
+    // least `LANCE_LEAD` — the charge *gates* the shot rather than merely
+    // preceding it, which is the fix for the un-gated version's bug:
+    // `cooldown` keeps counting down below zero, uncapped, for as long as
+    // aim stays bad, so the instant aim recovers, both this and the charge
+    // check above could otherwise pass on the very same frame — the tell
+    // and the shot landing together, zero warning. Every other class has no
+    // charge tell and this is trivially true for them.
+    const sniperReady =
+      this.kind !== "sniper" || (this.chargedAt !== null && this.slabTime - this.chargedAt >= LANCE_LEAD);
 
     // A withdrawing hostile has stopped fighting, not merely stopped
     // pursuing — the whole point is that it costs the player nothing more to
     // let it go, and a parting shot on the way out would undercut that.
-    if (!this.withdrawing && this.cooldown <= 0 && !this.hidden && distance < reach && aimError < 0.4) {
+    if (
+      !this.withdrawing &&
+      this.cooldown <= 0 &&
+      !this.hidden &&
+      distance < reach &&
+      aimError < 0.4 &&
+      sniperReady
+    ) {
       this.cooldown = this.spec.fireInterval;
-      this.charged = false;
+      this.chargedAt = null;
       // Lead the target — a bolt aimed where you are is a bolt you outrun. The
       // solve is a plain vector subtraction and has been three-dimensional all
       // along, so a climbing player is led upward without a line changing here.

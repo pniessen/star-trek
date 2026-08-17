@@ -1501,6 +1501,82 @@ check(
   `state=${withdrawTest.state}`,
 );
 
+// ── the Lance's tell gates the shot, not merely precedes it ────────────────
+// The un-gated version had a real hole: `cooldown` counts down below zero
+// uncapped while aim is bad (the sniper's own strafing makes
+// `aimError < 0.4` intermittent by design), so the instant aim recovered,
+// both the charge check and the fire check could pass on the very same
+// frame — the tell and the shot landing together, zero warning. The fix
+// (`Hostile.chargedAt`, `LANCE_LEAD` in `game/hostiles.ts`) makes the fire
+// condition wait on the charge having actually run for `LANCE_LEAD` seconds
+// first. This drives the real game loop rather than trusting the maths in
+// isolation: force a sniper into perfect, permanent aim — removing the AI's
+// own aim-acquisition timing as a variable, the same shortcut the Warden and
+// rock tests take — and watch for the moment its `cooldown` jumps back up to
+// `fireInterval` (the shot firing), recording what `chargedAt` and the
+// per-hostile clock (`slabTime`, reused as one — see that field's own
+// docblock) showed on the frame immediately before it.
+await page.evaluate(() => {
+  window.__pin = setInterval(() => { window.__player.hull = 1; }, 80);
+  window.__fleet.clear();
+  window.__session.breakTimer = Infinity; // no wave spawn contaminating this fleet
+});
+const lanceGate = await page.evaluate(async () => {
+  const { LANCE_LEAD } = await import("/src/game/hostiles.ts");
+  const player = window.__player;
+  player.velocity.set(0, 0, 0);
+  const target = window.__fleet.spawn("sniper", player.position.clone(), 0);
+  // Just above the charge threshold, so the charge trips within a couple of
+  // frames via the normal `cooldown -= dt` crossing rather than starting
+  // already charged — the spawn floor is covered separately by construction.
+  target.cooldown = 0.5;
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let before = null;
+  let fired = false;
+  for (let i = 0; i < 400 && !fired; i++) {
+    // Perfect, permanent aim at a fixed in-range standoff, recomputed every
+    // frame off the player's own live position.
+    target.position.set(player.position.x, 0, player.position.z - 40);
+    target.velocity.set(0, 0, 0);
+    target.heading = Math.atan2(
+      player.position.x - target.position.x,
+      player.position.z - target.position.z,
+    );
+    before = { cooldown: target.cooldown, chargedAt: target.chargedAt, clock: target.slabTime };
+    await wait(16);
+    // The shot firing is `this.cooldown = this.spec.fireInterval` inside the
+    // class's own fire block — a jump back up near 2.6s from whatever low or
+    // negative value it was counting through.
+    fired = target.cooldown > before.cooldown + 1;
+  }
+
+  window.__fleet.clear();
+  return {
+    fired,
+    chargedBeforeFire: before?.chargedAt ?? null,
+    lead: before?.chargedAt != null ? target.slabTime - before.chargedAt : null,
+    lastLanceCharge: window.__sound.lastLanceCharge,
+    lanceLead: LANCE_LEAD,
+  };
+});
+await page.evaluate(() => {
+  clearInterval(window.__pin);
+  delete window.__pin;
+  window.__session.breakTimer = 0;
+});
+check("a Lance's shot is observed within the test window", lanceGate.fired, JSON.stringify(lanceGate));
+check(
+  "...and it was charged at least LANCE_LEAD seconds before it fired, on the game's own clock — the tell always has time to be heard",
+  lanceGate.fired && lanceGate.chargedBeforeFire !== null && lanceGate.lead >= lanceGate.lanceLead - 0.05,
+  JSON.stringify(lanceGate),
+);
+check(
+  "...and the charge cue itself actually sounded during the test",
+  lanceGate.lastLanceCharge !== null,
+  JSON.stringify(lanceGate.lastLanceCharge),
+);
+
 // ── rock collision ────────────────────────────────────────────────────────────
 // Task 4 built the hero rocks field; this is what happens when the player
 // actually reaches one. Rather than wait out the odds of a "rocks" sector

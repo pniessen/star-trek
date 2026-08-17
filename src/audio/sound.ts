@@ -236,6 +236,16 @@ export class Sound {
    */
   lastPing: { at: number; spread: number } | null = null;
 
+  /**
+   * The probe's own hook onto `lanceCharge`, mirroring `lastPing`: the
+   * audio-clock time the Lance's charge tell last actually sounded (past
+   * the out-of-earshot floor, so this only fires when the cue really did).
+   * `null` until the first one. What a playtest checks the fire-gate fix
+   * against — `game/hostiles.ts`'s own `chargedAt` is the source of truth
+   * for *why* the gate holds, this is only proof the cue itself sounded.
+   */
+  lastLanceCharge: { at: number } | null = null;
+
   get muted(): boolean {
     return this.synth.muted;
   }
@@ -638,15 +648,21 @@ export class Sound {
   }
 
   /**
-   * The Lance's own tell. `Hostile.update` calls this once, 0.35 s before a
-   * sniper's shot actually lands — a rising resonant tone in the same
-   * register `hostileFire`'s own sniper recipe lives in, run forward and
-   * slower, so the ear hears the shot coming the way `decloak` already lets
-   * it hear the Shroud coming.
+   * The Lance's own tell. `Hostile.update` calls this once per shot — a
+   * rising resonant tone in the same register `hostileFire`'s own sniper
+   * recipe lives in, run forward and slower, so the ear hears the shot
+   * coming the way `decloak` already lets it hear the Shroud coming. The
+   * shot itself is now gated on this having sounded at least `LANCE_LEAD`
+   * (`game/hostiles.ts`) seconds ago — see `Hostile.chargedAt`'s own
+   * docblock — so "0.35 s before" is only the *trigger* point, not a
+   * guarantee this file can make on its own; the actual lead is the
+   * caller's contract to keep.
    */
   lanceCharge(x: number, z: number): void {
     const { level, pan } = this.place(x, z);
     if (level < 0.06) return;
+    const at = this.synth.context?.ctx.currentTime;
+    if (at !== undefined) this.lastLanceCharge = { at };
     this.synth.play({
       bus: "hostile",
       wave: "sawtooth",
