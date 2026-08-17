@@ -400,12 +400,21 @@ if (!shoalWiring.skip) {
 }
 
 // ── forcing a sector changes the room within a frame ────────────────────────
-// Same shortcut, same reasoning as the shoal block just above: `__sound.room`
-// is already non-null by the time this runs (the boot sector's own room, or
-// whatever the rock-collision/shoal blocks above last forced), so the poll
-// waits for the *name* to agree with the sector just forced rather than for
-// mere non-nullness — otherwise a stale room from an earlier block would
-// pass this check by accident before the real one ever landed.
+// Unlike the shoal block just above (pure rendering, no gesture needed),
+// `__sound.room` is legitimately `null` until the first real gesture:
+// `enterSector` no longer applies (or caches) a room while
+// `Sound`/`Synth` has no rig to build a convolver in — the fix for the
+// review's "boot sector never reaches the convolver" finding, which is
+// exactly what this comment used to assume away ("already non-null by the
+// time this runs") back when that assumption was only true *because* of the
+// bug. `h` is a harmless, side-effect-free gesture: it is in `DISPLAY_KEYS`
+// (so it neither launches a run nor touches the deck log the way `l` would)
+// and toggles `settings.diagnostics`, which nothing here asserts.
+// Once the gesture has happened, the poll waits for the *name* to agree
+// with the sector just forced rather than for mere non-nullness — a stale
+// room from an earlier block would otherwise pass this check by accident
+// before the real one ever landed.
+await page.keyboard.press("h");
 const roomSectors = await page.evaluate(async () => {
   const { planHero } = await import("/src/render/scenery.ts");
   const seed = window.__campaign.seed;
