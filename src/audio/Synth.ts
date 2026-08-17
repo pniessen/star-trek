@@ -669,7 +669,12 @@ export class Synth {
   /** Everything stops: a restart, a mode change, a death. */
   silence(): void {
     const rig = this.rig;
-    for (const bed of this.beds) bed.set(0, 0, 0, 0, 0);
+    for (const bed of this.beds) {
+      bed.set(0, 0, 0, 0, 0);
+      // A new run's beds must not inherit a previous run's death dimming —
+      // see `Bed.resetPower`'s own docblock.
+      bed.resetPower();
+    }
     if (!rig || this.failed) return;
     try {
       const now = rig.ctx.currentTime;
@@ -953,6 +958,20 @@ export class Bed {
    */
   private lastCutoff = 0;
   private lastPitches: number[] = [];
+  /** The level `set` last asked for, before `powerScale` — what `power()` re-scales when it fires on its own, between two `set` calls. */
+  private lastLevel = 0;
+
+  /**
+   * The death sequence's own multiplier on this bed, 0..1 — see `power()`.
+   * Applied on top of every target `set` writes (`lastLevel × powerScale` for
+   * gain, `lastCutoff × (0.3 + 0.7 × powerScale)` for cutoff) rather than
+   * replacing them, so the two compose regardless of which is called later in
+   * a frame: `set()` reads the current `powerScale`, and `power()` reads the
+   * last targets `set()` recorded. Reset to 1 by `resetPower()` — never
+   * decayed on its own — so a bed silenced mid-death and rebuilt for a fresh
+   * run starts at full strength rather than wherever the last run's hull left it.
+   */
+  private powerScale = 1;
 
   /**
    * Audio-clock time (`ctx.currentTime`) until which `dip` owns the filter
@@ -996,10 +1015,12 @@ export class Bed {
       const now = rig.ctx.currentTime;
       const glide = 0.12;
       const dipping = now < this.dipUntil;
-      nodes.gain.gain.setTargetAtTime(Math.max(0, level), now, glide);
+      const levelTarget = Math.max(0, level);
+      this.lastLevel = levelTarget;
+      nodes.gain.gain.setTargetAtTime(levelTarget * this.powerScale, now, glide);
       const cutoffTarget = clamp(cutoff, 30, 16000);
-      if (!dipping) nodes.filter.frequency.setTargetAtTime(cutoffTarget, now, glide);
       this.lastCutoff = cutoffTarget;
+      if (!dipping) nodes.filter.frequency.setTargetAtTime(cutoffTarget * this.powerFactor(), now, glide);
       nodes.lfo.frequency.setTargetAtTime(clamp(rate, 0.05, 24), now, glide);
       nodes.depth.gain.setTargetAtTime(clamp(depth, 0, 0.5), now, glide);
       nodes.tremolo.gain.setTargetAtTime(1 - clamp(depth, 0, 0.5), now, glide);
@@ -1052,6 +1073,49 @@ export class Bed {
     } catch (error) {
       this.synth.fail(error);
     }
+  }
+
+  /**
+   * The death sequence's own reach into a bed, called every frame with
+   * `DeathSequence.power` (0..1) so the reactor dies on the panel's own
+   * flicker rather than being cut separately. Gain scales directly
+   * (`lastLevel × x`); cutoff is floored at 0.3 rather than scaled to zero
+   * (`lastCutoff × (0.3 + 0.7x)`) because a filter fully closed reads as a
+   * fault, not as power failing — the bed should thin toward a dull hum, not
+   * vanish. Written against the *last* targets `set` recorded, the same
+   * convention `dip`'s own recovery uses, and stored in `powerScale` so
+   * `set()` itself keeps applying it on every subsequent frame — see that
+   * field's own docblock for why the two compose regardless of call order.
+   * Respects an active `dip` window on the cutoff for the same reason `set`
+   * does: `dip` owns that param until its own recovery is due.
+   */
+  power(x: number): void {
+    this.powerScale = clamp(x, 0, 1);
+    const rig = this.synth.context;
+    if (!rig) return;
+    const nodes = this.nodes;
+    if (!nodes) return;
+
+    try {
+      const now = rig.ctx.currentTime;
+      const glide = 0.12;
+      nodes.gain.gain.setTargetAtTime(this.lastLevel * this.powerScale, now, glide);
+      if (now >= this.dipUntil) {
+        nodes.filter.frequency.setTargetAtTime(this.lastCutoff * this.powerFactor(), now, glide);
+      }
+    } catch (error) {
+      this.synth.fail(error);
+    }
+  }
+
+  /** A new run's beds must not inherit a previous run's death dimming — the
+   *  one place `powerScale` is allowed to jump back to 1 rather than glide. */
+  resetPower(): void {
+    this.powerScale = 1;
+  }
+
+  private powerFactor(): number {
+    return 0.3 + 0.7 * this.powerScale;
   }
 
   private build(ctx: AudioContext, bus: GainNode, noise: AudioBuffer): BedNodes {

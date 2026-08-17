@@ -300,8 +300,9 @@ function everyCue(s) {
   s.impact(2, 2);
   s.thud(2, 2);
   s.kill(4, 4, 1.4);
-  s.shieldHit(1, 1);
+  s.shieldHit(1, 1, "port", 0.6);
   s.breach();
+  s.multiplierHalved();
   s.mineBlast(5, 5);
   s.mineLay(6, 6);
   s.decloak(7, 7);
@@ -330,6 +331,8 @@ function everyCue(s) {
   s.tally(1, 0);
   s.depart();
   s.death();
+  s.deathPower(0.4);
+  s.relayTick();
   s.panelRestore();
   s.silence();
   s.setPaused(true);
@@ -1633,6 +1636,150 @@ let chain;
     "...and ticks again once the interval has passed",
     voicesSince(thirdFrom).length === 1,
     `${voicesSince(thirdFrom).length}`,
+  );
+}
+
+// ── 15. damage by facing, breach's cost, and the death near-silence ────────
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  // Pan says which facing took it, not where the bolt started — see
+  // `shieldHit`'s own docblock.
+  let from = mark();
+  s.shieldHit(1, 1, "port", 1);
+  const portPan = nodes.slice(from).find((n) => n.kind === "panner");
+  ok("a port hit pans left", portPan && portPan.pan.value < 0, portPan ? `${portPan.pan.value}` : "no panner");
+
+  // `remaining` scales the fm ring's own index — read the modulator depth
+  // gain's initial value the way §8 and §13 both do: the one gain fed by an
+  // oscillator whose own output reaches another oscillator's frequency param.
+  const depthAt = (fresh) => {
+    const oscs = fresh.filter((n) => n.kind === "oscillator");
+    const depthGain = fresh.find(
+      (g) =>
+        g.kind === "gain" &&
+        oscs.some((o) => o.out.includes(g)) &&
+        oscs.some((c) => g.out.includes(c.frequency)),
+    );
+    return depthGain ? depthGain.gain.events[0][1] : -1;
+  };
+  ctx.currentTime += 1;
+  from = mark();
+  s.shieldHit(1, 1, "port", 1);
+  const fullDepth = depthAt(nodes.slice(from));
+  ctx.currentTime += 1;
+  from = mark();
+  s.shieldHit(1, 1, "port", 0.05);
+  const thinDepth = depthAt(nodes.slice(from));
+  ok(
+    "a nearly spent facing rings with a lower index than a fresh one",
+    fullDepth > 0 && thinDepth > 0 && thinDepth < fullDepth,
+    `${thinDepth} vs ${fullDepth}`,
+  );
+
+  // breach: two tones a 70 Hz beat apart — the roughest sound in the bank.
+  ctx.currentTime += 1;
+  from = mark();
+  s.breach();
+  const breachTones = voicesSince(from).filter((v) => v.kind === "tone");
+  ok("breach schedules two tones", breachTones.length === 2, `${breachTones.length}`);
+  const [lo, hi] = breachTones.map((v) => v.from).sort((a, b) => a - b);
+  near("...a 70 Hz beat apart (90 and 160 Hz)", hi - lo, 70, 3);
+
+  // multiplierHalved: the falling figure, on the panel bus, split from breach.
+  ctx.currentTime += 1;
+  from = mark();
+  s.multiplierHalved();
+  const lossVoices = voicesSince(from);
+  ok("multiplierHalved schedules a two-note falling figure", lossVoices.length === 2, `${lossVoices.length}`);
+  ok(
+    "...falling, not rising",
+    lossVoices[0].from > lossVoices[1].from,
+    `${lossVoices.map((v) => v.from).join(" then ")}`,
+  );
+
+  // death: exactly four voices, one group, none reaching into the drift.
+  ctx.currentTime += 1;
+  from = mark();
+  s.death();
+  const deathVoices = voicesSince(from);
+  ok("death schedules exactly four voices", deathVoices.length === 4, `${deathVoices.length}`);
+  ok(
+    "none of them delay past 1.2s — the drift stays silent by design",
+    deathVoices.every((v) => v.at - ctx.currentTime <= 1.2),
+    deathVoices.map((v) => (v.at - ctx.currentTime).toFixed(2)).join(","),
+  );
+}
+
+// ── deathPower drives every bed's own filter and gain ──────────────────────
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false, energy: 0.7, starved: false });
+
+  // Structural, the same way §11/§12 pick the two live beds apart: the
+  // engine is noise-kind (fed by a buffer source), the reactor is tone-kind
+  // (fed by two oscillators) — both build a lowpass filter.
+  const lowpassFilters = nodes.filter((n) => n.kind === "biquad" && n.type === "lowpass");
+  const engineFilter = lowpassFilters.find((f) => nodes.some((n) => n.kind === "buffersource" && n.out.includes(f)));
+  const reactorFilter = lowpassFilters.find((f) => f !== engineFilter);
+  // `Bed.build`'s own chain: filter → tremolo (a gain) → the bed's own gain → bus.
+  const bedGain = (filter) => {
+    const tremolo = nodes.find((n) => n.kind === "gain" && filter.out.includes(n));
+    return tremolo && nodes.find((n) => n.kind === "gain" && tremolo.out.includes(n));
+  };
+  const engineGain = bedGain(engineFilter);
+  const reactorGain = bedGain(reactorFilter);
+  ok(
+    "both live beds are found, filter and gain",
+    !!engineFilter && !!reactorFilter && !!engineGain && !!reactorGain,
+    "",
+  );
+
+  const before = [engineFilter, reactorFilter, engineGain, reactorGain].map(
+    (n) => n.kind === "gain" ? n.gain.events.length : n.frequency.events.length,
+  );
+
+  s.deathPower(0.2);
+
+  const after = [engineFilter, reactorFilter, engineGain, reactorGain].map(
+    (n) => n.kind === "gain" ? n.gain.events.length : n.frequency.events.length,
+  );
+  ok("deathPower writes to the engine's filter", after[0] > before[0], `${before[0]} -> ${after[0]}`);
+  ok("deathPower writes to the reactor's filter", after[1] > before[1], `${before[1]} -> ${after[1]}`);
+  ok("deathPower writes to the engine's gain", after[2] > before[2], `${before[2]} -> ${after[2]}`);
+  ok("deathPower writes to the reactor's gain", after[3] > before[3], `${before[3]} -> ${after[3]}`);
+
+  // The silent, never-built alert bed rides along in the same call without
+  // throwing — `power`'s own guarded-no-op contract, same as `set` and `dip`.
+  let threw = null;
+  try {
+    s.deathPower(0);
+  } catch (error) {
+    threw = error;
+  }
+  ok("deathPower with a never-built bed in the mix does not throw", threw === null, String(threw));
+
+  // silence() resets a bed's own power scale — a fresh run must not inherit
+  // the previous run's death dimming. The engine's idle level at rest is a
+  // fixed constant (0.028, `Sound.update`'s own formula) — still scaled by
+  // 0.2 if `powerScale` survived `silence()`, exactly 0.028 if it was reset.
+  s.silence();
+  s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 1, starved: false });
+  const lastGainEvent = engineGain.gain.events[engineGain.gain.events.length - 1];
+  near(
+    "after silence(), a bed's gain target is no longer scaled down by the last run's death",
+    lastGainEvent[1],
+    0.028,
+    0.002,
   );
 }
 

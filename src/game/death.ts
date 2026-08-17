@@ -47,6 +47,17 @@ export class DeathSequence {
   withdraw = 0;
   /** Decays after the blast; drives the camera shake. */
   shock = 0;
+  /**
+   * Whether the drift's own scripted blip — `power` briefly touching 0.3
+   * again, about 1.15s in, as if emergency power tried the bus once and
+   * failed — has already happened this death. A one-shot flag rather than a
+   * timer of its own: `update` sets it the first frame the blip window is
+   * open and leaves it set for the rest of the drift, so the caller (session)
+   * can fire `sound.relayTick()` exactly once by comparing this value before
+   * and after a call to `update`, the same before/after convention it
+   * already uses for the `phase` transition into `"tally"`.
+   */
+  blipped = false;
 
   /** Where it happened. The camera orbits this, not the ship. */
   readonly wreck = new Vector3();
@@ -68,6 +79,7 @@ export class DeathSequence {
     this.power = 1;
     this.withdraw = 0;
     this.shock = 1;
+    this.blipped = false;
     this.wreck.copy(player.position);
     this.viewAngle = player.heading + Math.PI * 0.75;
 
@@ -109,7 +121,9 @@ export class DeathSequence {
       this.phase = "drift";
       const since = this.time - TIMING.breakup;
       // Dark, but not dead — one blip as the reserve tries the bus and fails.
-      this.power = since > 1.15 && since < 1.24 ? 0.3 : 0;
+      const blipping = since > 1.15 && since < 1.24;
+      this.power = blipping ? 0.3 : 0;
+      if (blipping) this.blipped = true;
       this.withdraw = easeInOut(
         MathUtils.clamp(since / (TIMING.drift - TIMING.breakup), 0, 1),
       );
@@ -127,6 +141,7 @@ export class DeathSequence {
     this.power = 1;
     this.withdraw = 0;
     this.shock = 0;
+    this.blipped = false;
   }
 
   /**

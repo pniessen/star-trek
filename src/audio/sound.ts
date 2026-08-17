@@ -98,6 +98,14 @@ const CLOAK_WIND = 0.45;
 type HostileKind = "swarmer" | "sniper" | "brawler" | "miner" | "stalker";
 
 /**
+ * Mirrors `game/Ship.ts`'s own `ShieldFacing` — a structural copy rather than
+ * an `import type`, for the same reason `HostileKind` above is: the
+ * audiotest tsc-emits `sound.ts` standalone, and `Ship.ts` pulls in `three`
+ * and the rest of the game.
+ */
+type ShieldFacing = "fore" | "starboard" | "aft" | "port";
+
+/**
  * The commander's guard, heard rather than only seen: every class's own fire
  * pitched six percent low. Matches the radio signature a later task gives
  * the guard's own voice, so the two land as the same idea in two mediums.
@@ -340,22 +348,45 @@ export class Sound {
       const now = this.synth.context?.ctx.currentTime;
       if (now !== undefined && now - this.reactorTickAt >= REACTOR_TICK_INTERVAL) {
         this.reactorTickAt = now;
-        // On `panel`, not `bed`: the bed bus's cap of 2 is already spent on
-        // the engine and the reactor themselves, so a third bed-bus voice
-        // would be refused outright. This is a relay click on the panel, the
-        // same instrument `dispatch` and `service` speak through.
-        this.synth.play({
-          kind: "noise",
-          bus: "panel",
-          filter: "highpass",
-          freq: 3200,
-          q: 4,
-          level: 0.08,
-          attack: 0.001,
-          decay: 0.03,
-        });
+        this.relayClick();
       }
     }
+  }
+
+  /**
+   * A relay clicking against a dead or starved bus — a short, dry bandpassed
+   * click on the panel bus, not `bed`: the bed bus's cap of 2 is already
+   * spent on the engine and the reactor themselves, and this is a click *on
+   * the panel*, the same instrument `dispatch` and `service` speak through,
+   * not a third sustained voice. Two callers share the exact same recipe
+   * rather than two similar ones: the reserve's own starved tick above, and
+   * `relayTick` below — the drift's scripted blip, where emergency power
+   * tries the bus once and fails the same way.
+   */
+  private relayClick(): void {
+    this.synth.play({
+      kind: "noise",
+      bus: "panel",
+      filter: "highpass",
+      freq: 3200,
+      q: 4,
+      level: 0.08,
+      attack: 0.001,
+      decay: 0.03,
+    });
+  }
+
+  /**
+   * The drift's own scripted blip: `DeathSequence` briefly touches its power
+   * back up to 0.3 once, about 1.15s into the drift, as if emergency power
+   * tried the bus and failed. The session calls this exactly once, on the
+   * transition into that window (`DeathSequence.blipped` going false→true) —
+   * this method itself does no gating, since a one-shot instant is the
+   * caller's own thing to detect, the same division `panelRestore`'s own
+   * phase-transition call already keeps.
+   */
+  relayTick(): void {
+    this.relayClick();
   }
 
   /**
@@ -368,6 +399,16 @@ export class Sound {
    */
   hitStop(seconds: number): void {
     for (const bed of [this.alert, this.engine, this.reactor]) bed?.dip(seconds);
+  }
+
+  /**
+   * The death sequence's own reach into the beds, called every frame with
+   * `DeathSequence.power` (0..1) so the reactor dies exactly on the panel's
+   * own flicker rather than as a separate cut. Every bed I own, the same
+   * list `hitStop` already walks.
+   */
+  deathPower(power: number): void {
+    for (const bed of [this.alert, this.engine, this.reactor]) bed?.power(power);
   }
 
   /** A restart, a mode change, a death: whatever was ringing stops ringing. */
@@ -813,20 +854,47 @@ export class Sound {
     });
   }
 
-  /** Absorbed by a facing: metallic and ringing, and deliberately not alarming. */
-  shieldHit(x: number, z: number): void {
-    const { level, pan } = this.place(x, z, 0.35);
+  /**
+   * Absorbed by a facing: metallic and ringing, and deliberately not
+   * alarming.
+   *
+   * Pan says which facing took it, not where the bolt came from: fore and
+   * aft are both centred (the ring has no left/right along the player's own
+   * axis), starboard and port pan hard to their own side. `place`'s own pan
+   * is deliberately not used — only its level, for the falloff — because a
+   * bolt from dead astern that struck the aft facing would otherwise pan
+   * centre by fact of range, agreeing with the facing by coincidence rather
+   * than by construction. The facing is the information the player needs
+   * (which quarter to turn), not the bolt's incidental world position.
+   * Pitch drops astern the same way: fore rings brightest (640 Hz), the two
+   * sides sit a third down (560), aft is the lowest (480) — the register a
+   * hit already reads as "behind you" through even before the pan lands.
+   *
+   * `remaining` — the facing's own strength *after* this hit, 0..1 — scales
+   * the `fm` ring's own index: a facing still near full rings clean (index
+   * up to 4, the original recipe's own decay), a nearly spent one is mostly
+   * transient (index down to 0.8, and a shorter decay) — thinner, more
+   * click, so the ear can tell "that quarter is nearly gone" before the HUD
+   * dial says so.
+   */
+  shieldHit(x: number, z: number, facing: ShieldFacing, remaining: number): void {
+    const { level } = this.place(x, z, 0.35);
+    const pan = (facing === "starboard" ? 1 : facing === "port" ? -1 : 0) * 0.6;
+    const freq = facing === "fore" ? 640 : facing === "aft" ? 480 : 560;
+    const r = clamp(remaining, 0, 1);
+    const index = 0.8 + r * 3.2;
+    const decay = 0.06 + r * 0.07;
     const g = this.synth.group();
     this.synth.play({
       kind: "fm",
       group: g,
       ratio: 2.01,
-      index: 4,
-      freq: 640,
-      to: 430,
+      index,
+      freq,
+      to: freq * 0.672,
       level: 0.1 * level,
       attack: 0.002,
-      decay: 0.13,
+      decay,
       pan,
     });
     this.synth.play({
@@ -837,7 +905,7 @@ export class Sound {
       freq: 1500,
       level: 0.09 * level,
       attack: 0.002,
-      decay: 0.18,
+      decay: 0.1 + r * 0.08,
       pan,
     });
   }
@@ -927,29 +995,33 @@ export class Sound {
   }
 
   /**
-   * Something reached the hull, which in this game means the multiplier just
-   * halved. So it is two sounds: the blow, and then a falling interval that is
-   * the money leaving.
+   * Something reached the hull — the roughest sound in the bank. Two plain
+   * tones a 70 Hz beat apart (90 and 160 Hz), on the impact bus, at high
+   * level: not a swept noise burst but two things fighting each other in the
+   * same breath, which is what a hull actually taking a hit sounds like
+   * against every other cue here's single falling sweep. `multiplierHalved`
+   * is the second half of the old single cue, split out because it is a
+   * different event wearing the same instant: the blow is the hull, the
+   * falling figure is the money leaving, and Task 10's shared `MOTIF` needs
+   * the second half addressable on its own.
    */
   breach(): void {
-    // Four layers across two buses, one slot on each — a group token is safe
-    // to share across buses since `count` filters by bus before it looks at
-    // group, so the impact half and the panel half are budgeted separately.
     const g = this.synth.group();
-    this.synth.play({
-      kind: "noise",
-      group: g,
-      filter: "lowpass",
-      q: 0.7,
-      freq: 700,
-      to: 90,
-      level: 0.32,
-      attack: 0.002,
-      decay: 0.45,
-    });
-    this.synth.play({ group: g, wave: "sine", freq: 120, to: 48, level: 0.28, attack: 0.004, decay: 0.5 });
-    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 466, level: 0.07, decay: 0.16 });
-    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 349, level: 0.07, decay: 0.2, delay: 0.17 });
+    this.synth.play({ group: g, wave: "sine", freq: 90, level: 0.4, attack: 0.003, decay: 0.4 });
+    this.synth.play({ group: g, wave: "sine", freq: 160, level: 0.32, attack: 0.003, decay: 0.4 });
+  }
+
+  /**
+   * The money leaving. A falling two-note figure — 660→440 Hz, a descending
+   * fourth — on the panel bus: the multiplier family's own "loss" register.
+   * Hardcoded for now; Task 10's `MOTIF` re-roots this into the shared
+   * multiplier family once it exists, the same way `alertBeat`'s partials
+   * were hardcoded before `AlertPulse` existed to drive them.
+   */
+  multiplierHalved(): void {
+    const g = this.synth.group();
+    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 660, level: 0.07, decay: 0.16 });
+    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 440, level: 0.07, decay: 0.2, delay: 0.15 });
   }
 
   mineBlast(x: number, z: number): void {
@@ -2037,22 +2109,45 @@ export class Sound {
 
   // ── the end of a run ─────────────────────────────────────────────────────
 
-  /** Everything falls at once, and takes longer to do it than anything else. */
+  /**
+   * Everything falls at once — four layers, all in the same instant, and
+   * then **nothing**, by design, until `panelRestore` finds the bus again
+   * (and `relayTick`'s own one-shot blip in between): `docs/audio-prior-art.md`
+   * argues that two and a half seconds of near-silence after the loudest
+   * event in the game is the most powerful thing available here, and a tail
+   * scheduled into that drift would spend the one silence the bank has never
+   * had to sell. The sub is the weight of the hull letting go; the body is
+   * the structure itself tearing, a long lowpass sweep closing down to
+   * almost nothing; the crack is the front edge of that same instant, high
+   * and brief; the shock ring is the blast's own decay, falling through the
+   * register `breach`'s own low tone occupies. All four start together —
+   * one group — because a death is one event, not a sequence of them.
+   */
   death(): void {
     const g = this.synth.group();
+    this.synth.play({ group: g, wave: "sine", freq: 55, level: 0.34, attack: 0.01, decay: 2 });
     this.synth.play({
       kind: "noise",
       group: g,
       filter: "lowpass",
       q: 0.7,
-      freq: 2400,
-      to: 40,
-      level: 0.42,
+      freq: 3000,
+      to: 150,
+      level: 0.4,
       attack: 0.004,
-      decay: 1.4,
+      decay: 1.8,
     });
-    this.synth.play({ group: g, wave: "sine", freq: 300, to: 30, level: 0.3, attack: 0.01, decay: 1.5 });
-    this.synth.play({ group: g, wave: "sawtooth", freq: 220, to: 28, level: 0.15, attack: 0.02, decay: 1.2 });
+    this.synth.play({
+      kind: "noise",
+      group: g,
+      filter: "highpass",
+      freq: 6000,
+      to: 900,
+      level: 0.22,
+      attack: 0.001,
+      decay: 0.3,
+    });
+    this.synth.play({ group: g, wave: "sawtooth", freq: 180, to: 40, level: 0.2, attack: 0.005, decay: 0.95 });
   }
 
   /** Emergency power finding the bus, under the epitaph. */

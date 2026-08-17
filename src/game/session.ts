@@ -482,8 +482,16 @@ export class Session {
       this.debris.update(dt);
 
       const before = this.death.phase;
+      const blippedBefore = this.death.blipped;
       this.death.update(dt);
       if (before !== "tally" && this.death.phase === "tally") sound.panelRestore();
+      // The drift's scripted blip — emergency power trying the bus once and
+      // failing — fires the relay click exactly once, on the transition into
+      // it, the same before/after convention just used for `panelRestore`.
+      if (!blippedBefore && this.death.blipped) sound.relayTick();
+      // Every frame of the sequence: the beds die on the panel's own power
+      // curve rather than being cut separately from it.
+      sound.deathPower(this.death.power);
       // Once the panel comes back up for the readout the screen belongs to it.
       // The pack circling the wreck is the right thing to watch during the
       // drift and pure noise across four lines of numbers.
@@ -940,8 +948,12 @@ export class Session {
           // A facing eating a bolt and a bolt reaching the hull are different
           // events and have to sound like it — that distinction is the whole
           // reason four shields exist.
-          if (player.takeHit(projectile.damage, projectile.position)) this.breach();
-          else sound.shieldHit(projectile.position.x, projectile.position.z);
+          if (player.takeHit(projectile.damage, projectile.position)) {
+            this.breach();
+          } else {
+            const facing = player.struckFacing!;
+            sound.shieldHit(projectile.position.x, projectile.position.z, facing, player.shields[facing]);
+          }
         } else {
           // A shot that passed close but not close enough to hit — the dodge
           // made audible and visible instead of just expiring quietly. Once
@@ -1039,6 +1051,7 @@ export class Session {
     this.multiplier = Math.max(1, this.multiplier * 0.5);
     this.hitStop.strike(HIT_STOP.breach);
     sound.breach();
+    sound.multiplierHalved();
     this.say("HULL BREACH");
   }
 
