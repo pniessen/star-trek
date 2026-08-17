@@ -566,7 +566,15 @@ measured *whether the bus behaves*, not whether any of this *sounds right*.
   ever live — but it now has to hold up to four partials sharing that one
   slot via `Synth.group()` (the owner's ruling that a cap counts *cues*, not
   voices). Whether four partials crammed into one cue's worth of headroom
-  reads as urgency or as mush at the top tier is unflown.
+  reads as urgency or as mush at the top tier is unflown. **Worth trying
+  `panel: 3` at the same sitting** — the panel bus already carries the
+  relay tick, `dispatch`'s own three-layer group, and every multiplier/
+  salvage cue, and it is the one this section's own §5 addition (the
+  dispatch preamble, once it actually holds the line back ~0.3s rather than
+  firing under it) would put the most pressure on: a staggered preamble and
+  line are two panel-bus events close together instead of one simultaneous
+  one, and 2 is not much headroom against a relay tick or a multiplier tick
+  landing in the same window.
 - **The reactor bed** (`REACTOR_BASE = 58`, `REACTOR_RATIO = 1.0069`,
   `REACTOR_LFO_RATE = 0.08`, `REACTOR_LFO_DEPTH = 0.08` rising to
   `REACTOR_HURT_DEPTH = 0.22` as hull damage climbs, `REACTOR_TICK_INTERVAL
@@ -857,6 +865,18 @@ them; one remains.
 - **Territorial control *during* a run** — only if the between-runs version
   earns it.
 - **The exploration encounters from concept D**, seeded into empty sectors.
+- **The dispatch preamble does not precede the line — it plays under it.**
+  `Sound.dispatch()` (`audio/sound.ts`) fires `this.say("ours", "dispatch")`
+  (the radio preamble syllable) and the flat-tone cue that carries the line
+  itself in the same synchronous call, so the two start together rather than
+  the syllable landing first the way "syllable, then line" describes it.
+  Unlike the rest of this section, this one is not a deliberate omission —
+  it is a gap the review pass found and is recording rather than silently
+  accepting. Delivering the staggered order needs `game/dispatch.ts`'s own
+  caller to hold the line back roughly 0.3s after the preamble, not a change
+  inside `Sound.dispatch()` alone (the method has no notion of "wait for the
+  radio phrase to finish" — `Radio.say`'s own span is private to `radio.ts`).
+  Not built.
 
 ---
 

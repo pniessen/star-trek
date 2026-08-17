@@ -1316,10 +1316,12 @@ let chain;
   const baseStarved = reactorOscillators[0].frequency.events.at(-1)[1];
   near("starved halves the reactor's pitch target", baseStarved, 29, 0.5);
 
-  // The relay tick: a sparse click on the panel bus — the bed bus's cap of 2
-  // is already spent on the engine and the reactor themselves — while
-  // starved. Advance the mock's audio clock, not real time, since the tick
-  // is scheduled off `ctx.currentTime` for the same reason `Bed.dip` is.
+  // The relay tick: a sparse click on the panel bus while starved — panel
+  // because it IS a panel relay (`relayClick`'s own docblock), not because
+  // the bed bus's cap is spent; `Bed`s never pass through `play`/`speak`, so
+  // `BUS_CAPS.bed` never counts them at all. Advance the mock's audio clock,
+  // not real time, since the tick is scheduled off `ctx.currentTime` for the
+  // same reason `Bed.dip` is.
   const panelBus = s.synth.context.buses.panel;
   const from = mark();
   for (let i = 0; i < 6; i++) {

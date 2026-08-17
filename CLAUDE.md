@@ -497,8 +497,9 @@ because they came from asking what would make the game's own sound
   `DOCTRINE_WEIGHTS` already applies to what the enemy *does*. High-priority
   events (`commit`, `withdraw`, `dispatch`, `lost`) queue one deep behind a
   live phrase; texture (`wave`, `charge`, `hail`, `comms`, `flank`) is simply
-  dropped when the party is already talking. Every phrase ducks the weapon
-  bus for however long it is on air.
+  dropped when the party is already talking. Every phrase opens with a quick
+  dip on the weapon bus that recovers on its own over roughly a third of the
+  phrase's own on-air span, rather than holding it down for the whole phrase.
 - **The acoustics** (`audio/acoustics.ts`) — a per-sector room, computed
   rather than sampled: `renderImpulse` builds a filtered-noise impulse
   response from a `RoomDesign` (a decay tail, plus — for a rocks field
@@ -518,13 +519,8 @@ Hz, two oscillators near it, reserve energy driving cutoff and pitch, a
 starved reserve dropping an octave and ticking a relay on the panel bus at a
 1.4s minimum gap), a scanner ping voiced on every sweep paint (1650 Hz,
 detuned by the ghost's own drawn error so an unresolved return beats and a
-resolving one clears toward a unison), the alert rebuilt as a pulse
-(`game/alert.ts`'s `AlertPulse`) rather than the sustained bed
-`docs/audio-prior-art.md` argued against — urgency is spent entirely in
-spectral content (`components`: 1, 2 or 4 partials), the level pinned in
-either direction, which is the CHI 2024 finding (n=1,699 — amplification
-alone hurt perceived competence) made literal — and every hostile class
-given its own band and rhythm rather than a shared timbre. Damage and death
+resolving one clears toward a unison), and every hostile class given its own
+band and rhythm rather than a shared timbre. Damage and death
 read off the same bench: shield hits pan and pitch by facing, a breach is
 the roughest sound in the bank, and the death sequence dims every voice off
 `DeathSequence.power` rather than cutting them outright. And one family
@@ -566,19 +562,22 @@ sits at one fixed world position however the chart is drawn).
    positional echo bus already has its own machine-measured budget gate
    there — what remains for all of it, echo included, is the listening pass
    itself. Needs a human at the keyboard with the speakers on.
-2. ~~Revise the audio against the research.~~ **Closed, 2026-08-17.** The
-   sound-design pass
-   (`docs/superpowers/specs/2026-08-16-sound-design-design.md`) answered all
-   three disagreements `docs/audio-prior-art.md` named: the alert is now
-   `game/alert.ts`'s `AlertPulse`, a pulse rather than a bed; escalation is
-   spent entirely in `components` — spectral content, never level (CHI 2024,
-   n=1,699 — amplification alone hurt perceived competence), which
-   `audio/selftest.mjs`'s "the fundamental's level never moves" assertion
-   checks directly; and the compressor is gone, replaced by the zero-latency
-   `tanh` shaper `audio/Synth.ts` builds instead. What is left is not a
-   research disagreement — it is the same listening pass every other block
-   in `docs/todo.md` §2 is waiting on, item 1 above included, and nobody has
-   run it yet.
+2. ~~Revise the audio against the research.~~ **Two of three closed; one
+   remains — `docs/todo.md` §4 has the full account, this is the short
+   version.** The alert's own escalation was never this pass's to close: the
+   pulse rewrite (`game/alert.ts`'s `AlertPulse`, spending urgency entirely
+   in `components` — spectral content, never level, the CHI 2024 finding
+   n=1,699's amplification-hurts-competence result made literal) predates
+   this branch outright, so `docs/audio-prior-art.md`'s "add partials, not
+   raise level" disagreement was already answered before the sound-design
+   pass began; `audio/selftest.mjs`'s "the fundamental's level never moves"
+   assertion checks it regardless of when it landed. This pass's own
+   contribution closed the second: the compressor's 6ms lookahead is gone,
+   replaced by the zero-latency `tanh` shaper `audio/Synth.ts` builds
+   instead. **Still open: verifying the autoplay-gesture path against a
+   machine with no audio device** — the one disagreement `docs/todo.md` §4
+   has not marked resolved, and the same listening pass every other block in
+   `docs/todo.md` §2 is waiting on, item 1 above included.
 
 ## Gotchas
 

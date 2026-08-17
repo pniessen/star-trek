@@ -914,7 +914,16 @@ Mapped onto the events that actually exist in `session.ts`, `docking.ts`,
 4. **Colour is information; so is band.** We already refuse decorative colours.
    Refuse decorative frequencies the same way. Reserve **below 120 Hz** for the
    alert pulse, torpedoes, mines and death. Phasers live **above 700 Hz** and may
-   therefore be frequent. Nothing sustained sits in 2–5 kHz.
+   therefore be frequent. Nothing sustained sits in 2–5 kHz. **As built, this
+   list is short two entries and the rule still holds against the actual code**:
+   `breach` (`audio/sound.ts`) carries a 90 Hz tail on the roughest sound in the
+   bank, and `hardDock`/`depart`/the Loom's own opening (`loomOpen`) were
+   already sitting down there — a 600→70 Hz sweep, a 70→132 Hz sine, and a pair
+   of 62/93 Hz sawtooths respectively — before this rule was ever checked
+   against them. None of the four is decorative: each marks an event this
+   principle would itself reserve the band for (a hull actually taking a hit,
+   the clamps engaging, the ship shoving off them, a piece of machinery
+   starting up), so the list was incomplete, not the rule wrong.
 5. **Differentiate outcomes; never merely amplify.** The CHI 2024 result (§3) is
    unambiguous: variability and success-dependence drive enjoyment and playtime,
    and raw amplification *hurts* perceived competence. Every element should be

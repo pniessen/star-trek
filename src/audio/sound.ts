@@ -238,10 +238,18 @@ const APPROACH = {
   dot: 0.09,
   dash: 0.24,
   gap: 0.04,
-  /** Longer than `rate`: retriggering the on-course note every `rate`
-   *  seconds still overlaps the tail of the last one, so it reads as one
-   *  held tone rather than a series of blips. */
-  onCourseHold: 0.4,
+  /**
+   * `rate` minus the on-course voice's own 0.02s attack — the note's own
+   * envelope (attack, then this hold, then a 0.06s decay) is timed so the
+   * *next* retrigger's attack begins right where this one's hold ends, a
+   * crossfade rather than a stack. An earlier value (0.4, longer than
+   * `rate` outright) meant two identical 700 Hz sines were briefly live at
+   * once on every retrigger — two copies of the same frequency, started a
+   * fraction of a second apart, beat against each other rather than
+   * reinforcing, which read as a warble instead of the one held tone the
+   * retrigger was meant to sound like.
+   */
+  onCourseHold: 0.33,
 } as const;
 
 /**
@@ -390,11 +398,11 @@ export class Sound {
   /**
    * `approach`'s own budget token on the `radio` bus — one persistent
    * `Synth.group()` id for the whole aligning session, not a fresh one per
-   * call. `APPROACH.rate` (0.35s) is *shorter* than the voices it schedules
-   * (`onCourseHold` alone is 0.4s, before its own decay), so consecutive
-   * calls legitimately overlap in time — that overlap is the point, it is
-   * what makes retriggering read as one held tone rather than a series of
-   * blips. A fresh `group()` per call used to mean two overlapping calls
+   * call. `APPROACH.rate` (0.35s) still ends up slightly shorter than the
+   * voice's own full envelope even with `onCourseHold` tuned as a crossfade
+   * (`onCourseHold`'s own docblock) — its 0.06s decay tail is still ringing
+   * when the next retrigger's attack begins — so consecutive calls still
+   * overlap briefly. A fresh `group()` per call used to mean two overlapping calls
    * counted as two separate slots on `radio`'s own cap of 3 (one per party),
    * so roughly a third of the time the approach range was quietly spending
    * two of the channel's three slots on itself, competing with the Warden's
@@ -733,13 +741,16 @@ export class Sound {
 
   /**
    * A relay clicking against a dead or starved bus — a short, dry bandpassed
-   * click on the panel bus, not `bed`: the bed bus's cap of 2 is already
-   * spent on the engine and the reactor themselves, and this is a click *on
-   * the panel*, the same instrument `dispatch` and `service` speak through,
-   * not a third sustained voice. Two callers share the exact same recipe
-   * rather than two similar ones: the reserve's own starved tick above, and
-   * `relayTick` below — the drift's scripted blip, where emergency power
-   * tries the bus once and fails the same way.
+   * click on the panel bus, not `bed`. Not because the bed bus's own cap is
+   * spent — `Bed`s never pass through `play`/`speak` at all (they hold their
+   * own persistent nodes, set directly via `Bed.set`/`dip`/`power`), so
+   * `BUS_CAPS.bed` never actually counts them and has nothing to say about
+   * whether a fourth sustained voice would fit. This lands on `panel`
+   * because it *is* a panel relay — the same instrument `dispatch` and
+   * `service` speak through — not a fourth bed. Two callers share the exact
+   * same recipe rather than two similar ones: the reserve's own starved tick
+   * above, and `relayTick` below — the drift's scripted blip, where
+   * emergency power tries the bus once and fails the same way.
    */
   private relayClick(): void {
     this.synth.play({
