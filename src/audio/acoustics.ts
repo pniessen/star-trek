@@ -46,9 +46,23 @@ export interface RoomDesign {
  * makes the render reproducible, and a later task hangs one per sector off
  * the campaign seed the same way `composePhrase` already does).
  *
- * Peak-normalised to at most 0.9 so `wet` alone controls how loud the space
- * reads and no combination of cutoff and reflection gains can push the
- * convolver's own output past the headroom the rest of the mix assumes.
+ * Normalised to unit **energy** — `Σh² = 1`, the impulse's own L2 norm — not
+ * to a peak sample. A `ConvolverNode`'s own gain on a broadband signal tracks
+ * the impulse response's *energy* (`√Σh²`), not its peak: two IRs sharing one
+ * peak but differing in length or decay shape reach very different loudness
+ * once actually convolved, because a longer, denser tail sums far more
+ * energy into the output while never exceeding the same single sample a
+ * peak-normalised render was tuned against. Measured on this bank's own
+ * rooms under the old peak-normalise: the rocks room ran +23 dB over what its
+ * own `wet: 0.3` implied, the giant's +29 dB, the comet's +34 dB — `wet` was
+ * nowhere near the wet/dry ratio its name claimed. Normalising energy to 1
+ * instead makes `wet` that ratio for real, independent of a design's own
+ * `tailSeconds`/`tailCutoffHz`/`earlyReflections`: a room whose `wet` is 0.3
+ * now actually sits 0.3× (≈ −10.5 dB) under the dry signal at the convolver,
+ * whatever its tail looks like. `Synth.setSpace` still sets
+ * `convolver.normalize = false` — the node's own auto-normalise is a
+ * *different*, length-tied rescale than either of these, and would undo
+ * whichever one this file does on purpose.
  */
 /**
  * Mirrors `render/scenery.ts`'s own `HeroKind` — a structural copy, not an
@@ -203,10 +217,11 @@ export function renderImpulse(design: RoomDesign, sampleRate: number, rng: () =>
     }
   }
 
-  let peak = 0;
-  for (let n = 0; n < length; n++) peak = Math.max(peak, Math.abs(ir[n]));
-  if (peak > 0) {
-    const scale = 0.9 / peak;
+  let energy = 0;
+  for (let n = 0; n < length; n++) energy += ir[n] * ir[n];
+  const rms = Math.sqrt(energy);
+  if (rms > 0) {
+    const scale = 1 / rms;
     for (let n = 0; n < length; n++) ir[n] *= scale;
   }
 

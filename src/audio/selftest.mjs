@@ -996,12 +996,59 @@ let chain;
 // ── 10. the space: a computed impulse on a send ────────────────────────────
 
 {
-  const { renderImpulse } = await import(join(out, "audio/acoustics.js"));
+  const { renderImpulse, roomFor: roomForSpace } = await import(join(out, "audio/acoustics.js"));
   let seed = 3; const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const rocks = renderImpulse({ tailSeconds: 0.5, tailCutoffHz: 4000, earlyReflections: [{ at: 0.05, gain: 0.5 }, { at: 0.12, gain: 0.3 }], wet: 0.3 }, 48000, rng);
   ok("the impulse has the tail's length", rocks.length === 24000, `${rocks.length}`);
-  ok("early reflections are discrete peaks", Math.abs(rocks[Math.round(0.05 * 48000)]) > 0.3, "");
-  ok("peak is normalised under 0.9", Math.max(...rocks.map(Math.abs)) <= 0.9, "");
+  // "Discrete peak" now means "well above its own local surroundings", not
+  // "above some absolute number" — energy normalisation (Critical #1) scales
+  // the whole tail by how long and dense it is, so an absolute threshold
+  // tuned against the old peak-normalise no longer means anything. A 400-tap
+  // window either side of the reflection is the tail's own ordinary level;
+  // the reflection has to clear it by a healthy margin to still read as a
+  // bounce rather than noise.
+  {
+    const idx = Math.round(0.05 * 48000);
+    let windowSum = 0, windowCount = 0;
+    for (let i = idx - 200; i < idx + 200; i++) {
+      if (i === idx || i < 0 || i >= rocks.length) continue;
+      windowSum += Math.abs(rocks[i]);
+      windowCount++;
+    }
+    const localMean = windowSum / windowCount;
+    ok(
+      "early reflections are discrete peaks",
+      Math.abs(rocks[idx]) > localMean * 3,
+      `${Math.abs(rocks[idx])} vs local mean ${localMean}`,
+    );
+  }
+  // Critical #1's own fix: energy, not peak. `Σh² = 1` is the contract
+  // `renderImpulse`'s own docblock now describes — this is what lets `wet`
+  // alone control how loud a room reads, whatever its tail's own shape.
+  {
+    let energy = 0;
+    for (const v of rocks) energy += v * v;
+    ok("the impulse is normalised to unit energy: Σh² ≈ 1", Math.abs(energy - 1) < 0.01, `${energy}`);
+  }
+  // The measurement `gain.mjs` took before this fix, repeated after it: the
+  // rocks room's own wet-over-dry gain at the convolver should now sit at or
+  // under `wet` itself (0 dB or quieter) — a genuine ratio, not the +23 dB it
+  // ran hot under the old peak-normalise.
+  {
+    const rocksRoom = roomForSpace("rocks", false, false);
+    let roomSeed = 7;
+    const roomRng = () => (roomSeed = (roomSeed * 16807) % 2147483647) / 2147483647;
+    const rocksRoomIr = renderImpulse(rocksRoom, 48000, roomRng);
+    let roomEnergy = 0;
+    for (const v of rocksRoomIr) roomEnergy += v * v;
+    const roomGain = Math.sqrt(roomEnergy);
+    const wetOverDryDb = 20 * Math.log10(roomGain * rocksRoom.wet);
+    ok(
+      "the rocks room's wet-over-dry gain is a genuine ratio: at or under 0 dB",
+      wetOverDryDb <= 0.01,
+      `${wetOverDryDb.toFixed(1)} dB`,
+    );
+  }
   const bare = renderImpulse({ tailSeconds: 0.05, tailCutoffHz: 8000, earlyReflections: [], wet: 0 }, 48000, rng);
   ok("a bare room is nearly nothing", bare.length <= 2400, "");
 

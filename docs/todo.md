@@ -618,7 +618,14 @@ measured *whether the bus behaves*, not whether any of this *sounds right*.
   paper, and none of it has been checked against a speaker: does a `giant`
   sector actually sound larger than a `bare` one under combat, or is 0.25
   wet against 0 too subtle a difference to notice with everything else the
-  mix has going on?
+  mix has going on? **The table's own `wet` values are now true wet/dry
+  ratios**, not merely first-draft numbers against an accidentally-hot
+  convolver — `renderImpulse` normalises to unit energy rather than peak
+  now (`docs/superpowers/specs/2026-08-16-sound-design-design.md`'s review
+  fix; `renderImpulse`'s own docblock has the before/after measurement), so
+  a room's `wet` finally means what its name says. That does not answer the
+  question above; it only means the ear is now judging the number that was
+  actually intended, not one still running 23–34 dB hot.
 
 **Positional echo** — `ECHO`/`C_GAME` in `src/audio/sound.ts`. `range = 120`,
 `maxRocks = 3`, `levelMul = 0.35`, `cutoffMul = 0.6`, `C_GAME = 340` are all
