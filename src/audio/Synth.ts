@@ -954,6 +954,16 @@ export class Bed {
   private lastCutoff = 0;
   private lastPitches: number[] = [];
 
+  /**
+   * Audio-clock time (`ctx.currentTime`) until which `dip` owns the filter
+   * cutoff and pitch params. `set` is called every frame — `sound.update`
+   * runs in the same synchronous frame as the `hitStop.strike` that just
+   * called `dip`, at essentially the same `ctx.currentTime` — so without this
+   * window `set`'s own `setTargetAtTime` back to the live scene's cutoff
+   * would re-arm over the dip's before it ever has time to be heard.
+   */
+  private dipUntil = 0;
+
   constructor(
     private readonly synth: Synth,
     private readonly spec: BedSpec,
@@ -965,6 +975,14 @@ export class Bed {
    * @param cutoff  filter frequency — the "how urgent" axis
    * @param rate    tremolo speed in Hz; a pulse is what makes a drone an alarm
    * @param depth   0 steady … 0.5 fully gated
+   *
+   * While a `dip` is active (`ctx.currentTime < dipUntil`), the filter cutoff
+   * and pitch params are *held* rather than written — `dip` owns them for its
+   * window, since this is called every frame and would otherwise re-arm the
+   * un-dipped values over the dip before it ever sounds. `lastCutoff`/
+   * `lastPitches` still update underneath, so the moment the window ends the
+   * next `set()` (or `dip`'s own scheduled recovery) converges on wherever
+   * the live scene actually is, not a stale value from before the dip.
    */
   set(level: number, freq: number, cutoff: number, rate: number, depth: number): void {
     const rig = this.synth.context;
@@ -977,9 +995,10 @@ export class Bed {
 
       const now = rig.ctx.currentTime;
       const glide = 0.12;
+      const dipping = now < this.dipUntil;
       nodes.gain.gain.setTargetAtTime(Math.max(0, level), now, glide);
       const cutoffTarget = clamp(cutoff, 30, 16000);
-      nodes.filter.frequency.setTargetAtTime(cutoffTarget, now, glide);
+      if (!dipping) nodes.filter.frequency.setTargetAtTime(cutoffTarget, now, glide);
       this.lastCutoff = cutoffTarget;
       nodes.lfo.frequency.setTargetAtTime(clamp(rate, 0.05, 24), now, glide);
       nodes.depth.gain.setTargetAtTime(clamp(depth, 0, 0.5), now, glide);
@@ -987,7 +1006,7 @@ export class Bed {
       for (let i = 0; i < nodes.pitches.length; i++) {
         const ratio = i === 0 ? 1 : (this.spec.ratio ?? 1.5);
         const pitchTarget = clamp(freq * ratio, 20, 16000);
-        nodes.pitches[i].setTargetAtTime(pitchTarget, now, glide);
+        if (!dipping) nodes.pitches[i].setTargetAtTime(pitchTarget, now, glide);
         this.lastPitches[i] = pitchTarget;
       }
     } catch (error) {
@@ -1016,6 +1035,9 @@ export class Bed {
     try {
       const now = rig.ctx.currentTime;
       const attack = 0.008;
+      // Owns the two dipped params against `set`'s own every-frame writes
+      // until the window closes — see `set`'s docblock.
+      this.dipUntil = now + seconds;
       nodes.filter.frequency.setTargetAtTime(this.lastCutoff * 0.55, now, attack);
       for (let i = 0; i < nodes.pitches.length; i++) {
         nodes.pitches[i].setTargetAtTime((this.lastPitches[i] ?? 0) * 0.94, now, attack);

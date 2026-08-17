@@ -1140,6 +1140,56 @@ let chain;
   ok("hitStop with a never-built bed in the mix does not throw", true);
 }
 
+{
+  // The regression this whole section exists to catch: `main.ts` calls
+  // `session.update` (which reaches `hitStop.strike` → `sound.hitStop` →
+  // `dip`) and then `sound.update` (→ `bed.set`) in the same synchronous
+  // frame, at the same `ctx.currentTime` — no audio time passes between
+  // them. Without a dip window, `set`'s own every-frame `setTargetAtTime`
+  // back to the live scene's cutoff/pitch would silently re-arm over the
+  // dip's before either event ever had a chance to be heard.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const synth = new Synth();
+  synth.start();
+
+  const from = mark();
+  const bed = synth.bed({ kind: "tone", wave: "sawtooth", filter: "lowpass", q: 4, ratio: 1.5 });
+  bed.set(0.4, 220, 900, 0, 0);
+  const fresh = nodes.slice(from);
+  const filterNode = fresh.find((n) => n.kind === "biquad");
+
+  bed.dip(0.12);
+  const afterDip = filterNode.frequency.events.length;
+  const dipsLastEvent = filterNode.frequency.events[afterDip - 1];
+
+  // Production order: the very next call, at the very same `ctx.currentTime`
+  // — no `ctx.currentTime` advance, exactly like the same-frame collision.
+  bed.set(0.4, 220, 900, 0, 0);
+
+  ok(
+    "set() immediately after dip, same instant, writes no new filter event",
+    filterNode.frequency.events.length === afterDip,
+    `${filterNode.frequency.events.length} vs ${afterDip}`,
+  );
+  ok(
+    "...the dip's own last scheduled event still stands, untouched",
+    filterNode.frequency.events[filterNode.frequency.events.length - 1] === dipsLastEvent,
+  );
+
+  // Once the window has actually closed, `set` is free to write again — the
+  // ordinary glide-to-current-target path, not `dip`'s.
+  ctx.currentTime += 1;
+  const beforeReopen = filterNode.frequency.events.length;
+  bed.set(0.4, 220, 900, 0, 0);
+  ok(
+    "...and once the dip window closes, set() writes normally again",
+    filterNode.frequency.events.length > beforeReopen,
+    `${filterNode.frequency.events.length} vs ${beforeReopen}`,
+  );
+}
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 console.warn = realWarn;
