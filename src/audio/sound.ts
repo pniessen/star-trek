@@ -511,6 +511,7 @@ export class Sound {
     this.reactorTickAt = -Infinity;
     this.lastPingAt = -Infinity;
     this.lastMineTickAt = -Infinity;
+    this.lastApproachAt = -Infinity;
     this.deathPowerActive = false;
   }
 
@@ -961,10 +962,15 @@ export class Sound {
    * (panel's cap is 2) rather than riding along inside the blast's one.
    *
    * The degree climbs with the multiplier itself, capped at `MOTIF`'s own
-   * top degree — a kill banked at 1x and one banked at 4x land on
-   * recognisably different notes, the same "a bigger bank is audibly
-   * bigger" idea `tally` already carries, told here at the scale of a
-   * single kill instead of a whole run.
+   * top degree — a kill at 1x and one at 3x land on recognisably different
+   * notes, the same "a bigger bank is audibly bigger" idea `tally` already
+   * carries, told here at the scale of a single kill instead of a whole
+   * run. `MOTIF` only has four degrees against a multiplier that runs to
+   * 9.9, so every kill from 4x on plays the family's own top note — a
+   * ceiling, not a bug: `deposit` only has to say "this kill just moved the
+   * needle," not stand in for the HUD's own exact reading, and the run's
+   * own top-heavy tail is already the range `tally`'s note count keeps
+   * climbing through.
    */
   private deposit(multiplier: number): void {
     const degree = Math.min(3, Math.floor(multiplier));
@@ -2320,11 +2326,16 @@ export class Sound {
    * caught: an arbitrary semitone shift puts most of the run's own tallies
    * on pitches `deposit`, `multiplierTick` and `salvageTransfer` never
    * land on, so the same multiplier changing the same currency would have
-   * sounded like four unrelated instruments rather than one. The size-reads-
-   * as-size argument the old climb was serving still holds — it just now
-   * lives entirely in note count and the sub note's own octave, both of
-   * which `ARPEGGIO`'s existing shape already carries without help from a
-   * moving root.
+   * sounded like four unrelated instruments rather than one. The
+   * size-reads-as-size argument the old climb was serving still holds, but
+   * it now lives entirely in note count: past four notes, `ARPEGGIO` itself
+   * reaches into the octave-up degrees (16, 19, 24 — `MOTIF`'s own 4, 7, 12
+   * plus twelve semitones), so a bigger bank still climbs an octave, just
+   * as extra top notes rather than a moving root. The sub note underneath
+   * (`root / 2`, 110 Hz) is fixed now rather than climbing with the
+   * multiplier the way it used to — it marks "this is the tally" the same
+   * way at every bank size, and note count is left to carry "how big" on
+   * its own.
    */
   tally(multiplier: number, total: number): void {
     if (total <= 0) {

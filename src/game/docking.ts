@@ -281,10 +281,16 @@ export class Docking {
     // same instant.
     if (this.phase === "aligning") {
       const lateral = MathUtils.clamp(g.lateral / DOCK_GEOMETRY.captureRadius, -1, 1);
-      // "On the beam" mirrors `draw()`'s own `locked` read — centred and
-      // pointed down the corridor — narrowed to `courseBand` rather than
-      // `inGate`'s own wider radius, since `inGate` is a distance-to-gate
-      // check and this is a claim about being centred on the corridor.
+      // "On the beam" is deliberately a tighter claim than `draw()`'s own
+      // `locked` (heading and speed only, no lateral check at all — see
+      // that read, below): this adds `courseBand`, a narrow band around the
+      // centreline, because the range's whole point is telling you when you
+      // are *centred*, not merely pointed the right way at the right
+      // speed. The rails can read "locked" a beat before the ear agrees —
+      // that gap is real and correct, not a bug to reconcile: the eye is
+      // reading readiness to capture, the ear is reading position on the
+      // beam, and those are different questions with different answers
+      // right up until the ship is actually centred.
       const onCourse = g.headingOk && Math.abs(lateral) < DOCK_GEOMETRY.courseBand;
       sound.approach(lateral, onCourse);
     }
