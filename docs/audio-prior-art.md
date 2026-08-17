@@ -1597,3 +1597,147 @@ sequencer-authored levels; "generative" appears to be loose secondary usage).
 
 It independently encountered the same TCRF prompt-injection attempt recorded at
 the end of §7, and independently refused it.
+
+---
+
+## 9. Addendum, 2026-08-17: the sound-design pass
+
+Months after this document was written, `docs/superpowers/specs/2026-08-16-sound-design-design.md`
+(approved in conversation, then implemented) built most of §6's palette. This
+records what shipped, what changed on the way and why, and the two ideas the
+pass is actually built around, which are not in this document's palette at
+all.
+
+### What of §6 was built
+
+- **§6.1, the bed.** The reactor (`audio/sound.ts`) is close to a literal
+  read of this section: two oscillators ~0.4 Hz apart near 58 Hz, a lowpass
+  with a 0.08 Hz LFO, present from run start, energy driving cutoff and
+  pitch. **Not built**: the optional turn-rate gyro whine — this section's
+  own hedge ("test whether it reads as a ship or as a dentist's drill") was
+  never resolved because the layer itself was never written. **Changed**:
+  the thrust layer became its own bed (`engine`) rather than a second
+  parameter folded into the reactor's own cutoff — two sustained voices
+  instead of one, which the nine-bus split (see below) made affordable in a
+  way the original four-channel budget might not have.
+- **§6.2, phasers.** Five of seven built close to the letter: total length
+  under the repeat period, two pitches a minor third apart
+  (`EOR #$14`, lifted), the range rule mapped to the downsweep floor, a
+  separate return transient on a hit, hard band-limiting above 700 Hz. **Not
+  built**: item 5, the three-stage held-buzz structure for a sustained
+  trigger. Every shot is still a discrete one-shot at every fire rate,
+  unmodified from what this document called "not a solvable mixing problem"
+  for six-plus shots a second — §7's open question 3 is accordingly still
+  open. Torpedoes: the four-layer report (punch/crack/body/tail) is close
+  to §5's own explosion-stack recipe; the in-flight Doppler streak and the
+  empty-chamber click were both proposed and neither was built —
+  `player.torpedoes > 0` gates the whole call, so firing on empty is
+  silence, not the dry mechanical click asked for.
+- **§6.3, the alert.** Built essentially as specified, and it is the one
+  place this document's own recommendation and the shipped code now agree
+  outright on the central move: `game/alert.ts`'s `AlertPulse` is the
+  Asteroids shape (fixed tone, shrinking gap) plus Patterson's decay (a
+  held condition backs off after ~8s) plus the CHI 2024 constraint taken
+  literally — urgency is spent entirely as added partials (`components`:
+  1/2/4), and the level never moves. **Changed**: this section asked for
+  the fatigue clock to reset "at each wave spawn"; the shipped `held` timer
+  instead resets on any *condition* change (green/yellow/red) and is
+  otherwise only cleared by `Session.restart` — a wave that arrives without
+  changing the player's own condition does not refresh it. That is a
+  narrower trigger than proposed, and it is not yet listed as its own
+  question in `docs/todo.md` §2's alert-pulse entry. The Shepard glissando
+  this section also proposed for the wave-escalation moment was not built;
+  `wave()` still uses two detuned sawtooths and a noise swell instead.
+- **§6.4, hostiles.** Each class has its own band and rhythm
+  (`hostileFire`'s switch on `HostileKind`), and the Harrow's own
+  reassignment from "never fires" to "the one you hear laying" shipped
+  exactly as asked: `mineLay` (the drop) and `mineArm` (the arming click)
+  are two distinct events, plus a proximity-scaled `mineTick`. Chain
+  detonations inherit their existing stagger for free, since each mine's
+  own `mineBlast` call already fires at the field's own scheduled time.
+- **§6.5, the Shroud.** Built, and re-voiced once already on its own terms:
+  the detuned-oscillator "roughness as uncertainty" device this section
+  proposed for the decloak moved to the scanner ping instead
+  (`audio/sound.ts`'s own file header explains why), and `decloak` itself
+  became the `fm` voice's bell shape — an index that settles from
+  inharmonic to plain across the whole wind-up, so the sound's own arc *is*
+  the tell rather than a fixed texture standing in for one. The resolve
+  still lands `CLOAK_WIND - 0.03` before the real bolt, as asked.
+- **§6.6, docking.** All five stages are built and wired to the timings
+  this section already cited as existing (`docking.ts` predates this pass).
+  The A-N range (`approach`) is close to a literal read: off-course reads as
+  interlocked dot/dash pulses, on-course collapses to one held tone.
+  **Changed**: `hardDock` is not the two temporally offset strikes (a
+  metallic latch, then a dull seat 30 ms later) §5's modal-ratio table
+  proposed — it is a lowpass thud and an `fm`-voice bell arriving together,
+  plus a bandpassed ring 20 ms behind, which reads as one dense impact
+  rather than two distinguishable materials. `service`'s own four stages
+  are one uniform rising figure (`SERVICE_NOTES`) rather than the four
+  different resonators (bright ringing / duller tap / low surge / rack
+  clatter) this section asked for — the one clear simplification, not yet
+  recorded as an open question anywhere. The tally's arpeggio-by-multiplier
+  shipped as proposed, including this document's own warning that it is
+  speculative and unattested in the canon — that warning still stands.
+- **§6.7, damage.** Built as specified: `shieldHit` pans and pitches by
+  facing rather than by bolt origin (the facing is the information, not the
+  incidental world position — a small, deliberate divergence this section
+  did not anticipate but is consistent with its own "differentiate
+  outcomes" rule), `breach` is the roughest sound in the bank, and
+  `Bed.dip` marks hit-stop on the beds only, never on the transient that
+  caused it.
+- **§6.8, death.** Built close to the letter: a four-layer instant, driven
+  by `DeathSequence.power` rather than a separate cut, and the drift is
+  genuinely near-silent apart from the one scripted relay-tick blip.
+- **§6.9, the multiplier through-line and the scanner's second ear.** Both
+  built. `MOTIF` (`[0, 4, 7, 12]` over a 220 Hz root) is the "one family in
+  four registers" this section asked for, realised as `deposit`/
+  `multiplierTick`/`salvageTransfer`/`tally` — `salvageTransfer` is a fifth
+  register this section did not itemise by name, added because `docking.ts`
+  already has its own "SALVAGE TRANSFER" stage the through-line would
+  otherwise skip. The scanner's ping gives it the second listening position
+  this section asked for; §7's open question about the chart needing its
+  own voice the same way is not yet answered — the chart was not part of
+  this pass.
+- **§6.10, silence.** Built: green is silent by construction
+  (`AlertPulse.reset()`), the death drift is near-silent, and nothing makes
+  a sound before the first keypress (unchanged from before this pass —
+  `CLAUDE.md`'s own gotcha).
+
+### What changed, in general, and why
+
+Every deviation above is a simplification in the same direction: fewer
+distinct materials per cue than the research recipe called for, in favour
+of getting every cue built across five hostile classes, four service
+stages, and a whole docking sequence rather than perfecting a smaller set.
+`docs/todo.md` §2 does not yet carry the `hardDock`/`service` simplification
+as its own tuning question; it should, the next time that section is
+revisited, alongside the phaser's still-unbuilt held-buzz structure (§6.2's
+item 5) and §7's open question 3, which the omission leaves genuinely open
+rather than answered either way.
+
+### The two additions the research did not propose
+
+**The radio** (`audio/radio.ts`) and **the acoustics** (`audio/acoustics.ts`)
+are both new relative to this whole document — nothing above proposed a
+comms channel three parties speak through, or a computed per-sector room.
+Both came from a different question than the one this document answers.
+Everything above was found by asking *what worked, historically, and why* —
+the canon's own answers to problems this game also has. The radio and the
+room were found by asking a different question: **what would make this
+game's own sound recognisably itself**, rather than a competent assembly of
+borrowed answers. The war already had a voice in text — HQ dispatches, the
+commander's name, the Warden's hails, the deck log — and giving it one in
+sound, in an idiom that is speech-shaped but contains no words, is not a
+move any of the sources above make; the closest relative is Star Wars'
+TMS5220 (§1), which is content this project is barred from touching, not a
+mechanism to imitate. The room is the same kind of move on the other axis:
+nothing in §4's Duskers/Alien: Isolation material proposes computing a
+convolution impulse response from the same seed that already decides a
+sector's planet, moon or rock field, so that a `giant` sector and a `bare`
+one are audibly different spaces before a single weapon fires. Both ideas
+are downstream of this project's own locked decisions — synthesised audio,
+no samples; a deck log built from the board it describes; a scanner that is
+never wrong — rather than downstream of anything in this document's
+research. That is the intended relationship: the canon supplies the
+craft, the game's own rules supply the two ideas that make the result
+recognisably *this* game's sound and not simply a well-built one.

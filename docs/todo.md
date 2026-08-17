@@ -545,6 +545,81 @@ own "779 of 5000" style, but measured rather than arithmetic this time, per
   because it was checked against six repeated frames of the *same* sector,
   not because rocks sectors are quieter than bare ones.
 
+**The sound-design pass** — the bench, the ship's own voice, the radio and
+the room, from
+`docs/superpowers/specs/2026-08-16-sound-design-design.md`, on the same
+footing as everything else in this section: reasoned about, none of it
+heard on real hardware except the positional-echo budget gate below, which
+measured *whether the bus behaves*, not whether any of this *sounds right*.
+
+- **`BUS_LEVELS`** (`audio/Synth.ts`) — nine peak-gain numbers, one per bus:
+  weapon 0.5, impact 0.85, hostile 0.7, mechanism 0.7, panel 0.7, bed 0.6,
+  alert 0.7, radio 0.75, echo 0.55. The original three-way weapon/impact/
+  panel split became nine specifically so a wave of hostiles firing has its
+  own budget a mine field or a hard dock cannot steal from. The question no
+  constant answers: splitting the bus fixed the *starvation* problem —
+  does it also mean the *balance* between the nine is right, or did the
+  split just multiply the places the original guesswork could be wrong?
+- **`BUS_CAPS`** (`audio/Synth.ts`) — the per-bus voice ceiling: weapon 3,
+  impact 4, hostile 4, mechanism 2, panel 2, bed 2, alert 1, radio 3 (one
+  per party), echo 3. Alert's cap of 1 is deliberate — only one condition is
+  ever live — but it now has to hold up to four partials sharing that one
+  slot via `Synth.group()` (the owner's ruling that a cap counts *cues*, not
+  voices). Whether four partials crammed into one cue's worth of headroom
+  reads as urgency or as mush at the top tier is unflown.
+- **The reactor bed** (`REACTOR_BASE = 58`, `REACTOR_RATIO = 1.0069`,
+  `REACTOR_LFO_RATE = 0.08`, `REACTOR_LFO_DEPTH = 0.08` rising to
+  `REACTOR_HURT_DEPTH = 0.22` as hull damage climbs, `REACTOR_TICK_INTERVAL
+  = 1.4`; all `audio/sound.ts`) — two oscillators ~0.4 Hz apart near 58 Hz,
+  breathing at 0.08 Hz, roughening with hull damage. This is Battlezone's
+  engine, the one bed meant to run under everything else for the whole run.
+  The question no constant answers: does ten minutes of a 58 Hz drone read
+  as "the ship," or does it fade into inaudibility the way Resogun's own
+  score reportedly did at high skill — great on its own terms, unheard
+  where it was supposed to be doing work (`docs/audio-prior-art.md` §3)?
+- **The scanner ping** (`PING_FREQ = 1650`, `PING.rate = 0.09`,
+  `PING.duckDb`/`duckSeconds = 3/0.12`, detune scale `spread /
+  PING.errorFar × 0.03`; `audio/sound.ts`) — a pip on every sweep paint,
+  roughness standing in for the ghost's own drawn positional error. The
+  detune-by-error mapping has no precedent to check against —
+  `docs/audio-prior-art.md` documents the *visual* uncertainty ring but
+  nobody has built the audio version of it before this pass — so whether a
+  3% beat at maximum error actually reads as "getting cleaner" as a contact
+  resolves, rather than just as warbly, is a first for this project as well
+  as unflown.
+- **The alert pulse** (`ALERT_LEVEL = 0.075` fixed, `ALERT_SECOND = 1.06`,
+  `ALERT_AM_RATE`/`DEPTH = 40/0.35`, `ALERT_RISE = 0.02` in
+  `audio/sound.ts`; `ROUGHEN = 0.5`, `SIDEBANDS = 0.8` in `game/alert.ts`) —
+  see §4 above for what this closed. What is still unflown is where
+  `ROUGHEN`/`SIDEBANDS` sit on the drive curve: too low and every yellow
+  condition roughens into the top tier immediately, too high and a red
+  condition never reaches four partials until the wave is nearly at full
+  strength — the same "too rare to teach, too common to mean anything"
+  question every threshold-driven cue in this section answers by ear alone.
+- **`CADENCES`** (`audio/radio.ts`) — five voices on one shared channel,
+  each a `syllablesMin`/`Max`, length, gap, `pitchBase`/`Range` and
+  `contour`: `ours` level and measured, `warden` the same register shifted
+  up, `raider` clipped and fast, `hammer` slow and monotone, `anvil` sparse
+  and even (plus `DUCK_DB = 3` on the weapon bus per phrase). The question
+  no constant answers, and the one the whole radio idea rises or falls on:
+  does a doctrine's own chatter actually read as raiding, hammering or
+  anvil-ing by ear alone — the deck log's own three words, heard rather than
+  read — or does it take the HUD's own name to tell the three apart?
+- **`roomFor`'s table** (`audio/acoustics.ts`) — one `RoomDesign` per
+  `HeroKind`: `rocks` the only one with discrete early reflections (four
+  bounces across 0.04–0.18s, `wet: 0.3`), `giant` the longest tail (2s,
+  600 Hz, `wet: 0.25`), `ringed`/`moon` matched at 0.35s/3000 Hz/`wet: 0.18`,
+  `sun` the driest sector room (0.12s, 6000 Hz, `wet: 0.08`), `bare`
+  genuinely dry (`wet: 0`) — plus the shoal's own modifiers
+  (`SHOAL_TAIL_MULTIPLIER = 1.6`, `SHOAL_CUTOFF_CEILING_HZ = 1200`,
+  `SHOAL_WET_BONUS = 0.1`) and the comet's own total override (`COMET_ROOM`:
+  1s, 1000 Hz, `wet: 0.6`, `noiseOnly`). Every number here was chosen by
+  matching a body's own visual density to a plausible acoustic one, on
+  paper, and none of it has been checked against a speaker: does a `giant`
+  sector actually sound larger than a `bare` one under combat, or is 0.25
+  wet against 0 too subtle a difference to notice with everything else the
+  mix has going on?
+
 **Positional echo** — `ECHO`/`C_GAME` in `src/audio/sound.ts`. `range = 120`,
 `maxRocks = 3`, `levelMul = 0.35`, `cutoffMul = 0.6`, `C_GAME = 340` are all
 first-draft, unflown in the same sense as everything else in this section —
@@ -736,11 +811,20 @@ oversight with a name.
 ## 4. Audio revision against the research
 
 `docs/audio-prior-art.md` landed *after* the audio layer was built and
-disagrees with it in three places. The alert pulse was partially reworked
-already; these remain:
+disagreed with it in three places. The sound-design pass
+(`docs/superpowers/specs/2026-08-16-sound-design-design.md`) closed two of
+them; one remains.
 
-- **Escalation should add partials, not raise level.** CHI 2024, n=1,699 —
-  amplification alone measurably hurt perceived competence.
+- ~~**Escalation should add partials, not raise level.**~~ **Resolved.** The
+  alert is no longer a sustained bed at all — `game/alert.ts`'s `AlertPulse`
+  replaced it with discrete beats, and `components` (1, 2 or 4 partials) is
+  the entire urgency axis; `ALERT_LEVEL` in `audio/sound.ts` is one fixed
+  number nothing scales in either direction. `audio/selftest.mjs`'s "the
+  fundamental's level never moves" assertion checks exactly the CHI 2024
+  claim (n=1,699 — amplification alone measurably hurt perceived competence)
+  across all three tiers, not just at the top one. What is still open is not
+  the research question but a tuning one — see §2's new alert-pulse entry
+  below for `ROUGHEN`/`SIDEBANDS`.
 - ~~**The compressor's 6 ms lookahead costs impact sync** in a game built
   around hit-stop. Either shorten it or accept the smear deliberately.~~
   **Resolved, 2026-08-16.** Already done, and done before this bullet was

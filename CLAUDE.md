@@ -181,8 +181,13 @@ src/game/     Ship, altitude (the slab, its constants and its switch), session
 src/chart/    campaign state, the enemy turn, the economy and the four
               decisions, persistence, and the chart renderer (both modes)
 src/hud/      Hud (stroke buffer), draw.ts (layout), strokeFont.ts
-src/audio/    Synth (two voices, four buses, a capped pool), sound.ts (the
-              bank of cues, and the `sound` singleton everything calls)
+src/audio/    Synth (three voice kinds — tone, noise, fm — plus the formant
+              `speak()` voice, nine buses each with its own static per-cue
+              budget, and a per-sector space send), acoustics.ts (the room a
+              sector's mix sits in, computed rather than sampled), radio.ts
+              (the three-party comms channel), formant.ts (the phrase
+              composer under `speak()`), sound.ts (the bank of cues, and the
+              `sound` singleton everything calls)
 ```
 
 Post chain order matters: `scene → bloom → phosphor → CRT → output encode`.
@@ -463,6 +468,72 @@ faster rather than harder (`GUARD.cadence` divides `fireInterval`, because
 pipeline reads it — and wiring a dead field live for one class would be a
 game-wide balance change dressed up as a small one).
 
+Also built: **the sound of the place**
+(`docs/superpowers/specs/2026-08-16-sound-design-design.md`), the answer to
+`docs/audio-prior-art.md`'s own §6 palette, which had sat unbuilt since the
+research landed after the original audio layer. The bench gained a third
+voice kind, `fm` (`audio/Synth.ts`'s `VoiceSpec.kind` — a carrier rung by a
+modulator whose own index decays on its own envelope, a struck bell rather
+than a held tone) and a fourth shape, `speak()`, built for one job: a whole
+formant `Phrase` (`audio/formant.ts`'s `composePhrase` — three swept
+bandpass formants over a driven sawtooth carrier, bracketed by two 40 ms
+squelch bursts) scheduled as **one** voice regardless of how many syllables
+it carries. Nine buses replaced the original three-way weapon/impact/panel
+split, each with its own peak level (`BUS_LEVELS`) and voice ceiling
+(`BUS_CAPS`) — and the owner's ruling that a cap counts *cues*, not
+oscillators, is what lets a torpedo's four layers or an alert beat's four
+partials share one slot via `Synth.group()` rather than muting each other.
+Two structural additions the research never proposed, on record as such
+because they came from asking what would make the game's own sound
+*singular* rather than merely research-compliant — see
+`docs/audio-prior-art.md`'s own dated addendum:
+
+- **The radio** (`audio/radio.ts`) — three parties on one shared channel,
+  `ours`/`warden`/`theirs`, each with its own `Cadence` (`CADENCES`):
+  syllable count, length, gap, pitch and contour, never words. `theirs` has
+  no cadence of its own — the sector's commander's doctrine (raider/hammer/
+  anvil) picks one, so the enemy's chatter sounds like the war's own
+  commander rather than a generic hostile line, the same idea
+  `DOCTRINE_WEIGHTS` already applies to what the enemy *does*. High-priority
+  events (`commit`, `withdraw`, `dispatch`, `lost`) queue one deep behind a
+  live phrase; texture (`wave`, `charge`, `hail`, `comms`, `flank`) is simply
+  dropped when the party is already talking. Every phrase ducks the weapon
+  bus for however long it is on air.
+- **The acoustics** (`audio/acoustics.ts`) — a per-sector room, computed
+  rather than sampled: `renderImpulse` builds a filtered-noise impulse
+  response from a `RoomDesign` (a decay tail, plus — for a rocks field
+  alone — discrete early reflections), and `roomFor(hero, shoal,
+  insideComet)` picks the design from exactly what the renderer already
+  drew — `planHero`'s own cast, whether a shoal is showing, whether the
+  player's own comet interference has crossed `stripAt` — never from a
+  second, independent roll. The comet overrides everything outright
+  (`noiseOnly`, no decay, no reflections) rather than blending, matching the
+  locked "no instrument works" rule. Positional too: `echoFrom`
+  (`audio/sound.ts`, `ECHO`/`C_GAME = 340`) answers an impact off up to
+  three nearby rocks at their own true delay from a chosen game-speed of
+  sound, not the real one.
+
+Ship cues followed off the same bench: a reactor bed (`REACTOR_BASE = 58`
+Hz, two oscillators near it, reserve energy driving cutoff and pitch, a
+starved reserve dropping an octave and ticking a relay on the panel bus at a
+1.4s minimum gap), a scanner ping voiced on every sweep paint (1650 Hz,
+detuned by the ghost's own drawn error so an unresolved return beats and a
+resolving one clears toward a unison), the alert rebuilt as a pulse
+(`game/alert.ts`'s `AlertPulse`) rather than the sustained bed
+`docs/audio-prior-art.md` argued against — urgency is spent entirely in
+spectral content (`components`: 1, 2 or 4 partials), the level pinned in
+either direction, which is the CHI 2024 finding (n=1,699 — amplification
+alone hurt perceived competence) made literal — and every hostile class
+given its own band and rhythm rather than a shared timbre. Damage and death
+read off the same bench: shield hits pan and pitch by facing, a breach is
+the roughest sound in the bank, and the death sequence dims every voice off
+`DeathSequence.power` rather than cutting them outright. And one family
+threads through all of it: `deposit`/`multiplierTick`/`salvageTransfer`/
+`tally` all read pitches off the same `MOTIF` (`[0, 4, 7, 12]` over a 220 Hz
+root), so a kill landing, the HUD's multiplier ticking, salvage crossing at
+the dock and the tally's own arpeggio are audibly one idea told in four
+registers.
+
 Not built: mouse aim, leaderboards, and per-sector docking (the starbase still
 sits at one fixed world position however the chart is drawn).
 
@@ -487,13 +558,27 @@ sits at one fixed world position however the chart is drawn).
    **The combat-feel pass joins the list now too** — `DOCTRINE_WEIGHTS`,
    `GUARD`, `WITHDRAW`, `NEAR_MISS` and the shield arc's `RADIUS` are
    first-draft guesses in exactly the same way; `docs/todo.md` §2 has the
-   per-constant question for each. Needs a human at the keyboard with the
-   speakers on.
-2. **Revise the audio against the research.** `docs/audio-prior-art.md` landed
-   after the audio layer was built and disagrees with it: the alert should be a
-   pulse rather than a bed, escalation should add partials rather than raise
-   level (CHI 2024, n=1,699 — amplification alone hurt perceived competence),
-   and the compressor's 6 ms costs impact sync in a game full of hit-stop.
+   per-constant question for each. **And the whole sound-design pass now
+   joins it too** — `BUS_LEVELS`, `BUS_CAPS`, the reactor's own numbers, the
+   ping's detune scale, `CADENCES` and `roomFor`'s table are first-draft
+   guesses in exactly the same way everything else on this list is;
+   `docs/todo.md` §2 has the per-constant question for each, and the
+   positional echo bus already has its own machine-measured budget gate
+   there — what remains for all of it, echo included, is the listening pass
+   itself. Needs a human at the keyboard with the speakers on.
+2. ~~Revise the audio against the research.~~ **Closed, 2026-08-17.** The
+   sound-design pass
+   (`docs/superpowers/specs/2026-08-16-sound-design-design.md`) answered all
+   three disagreements `docs/audio-prior-art.md` named: the alert is now
+   `game/alert.ts`'s `AlertPulse`, a pulse rather than a bed; escalation is
+   spent entirely in `components` — spectral content, never level (CHI 2024,
+   n=1,699 — amplification alone hurt perceived competence), which
+   `audio/selftest.mjs`'s "the fundamental's level never moves" assertion
+   checks directly; and the compressor is gone, replaced by the zero-latency
+   `tanh` shaper `audio/Synth.ts` builds instead. What is left is not a
+   research disagreement — it is the same listening pass every other block
+   in `docs/todo.md` §2 is waiting on, item 1 above included, and nobody has
+   run it yet.
 
 ## Gotchas
 
@@ -529,6 +614,15 @@ sits at one fixed world position however the chart is drawn).
   reason: the control surface is full, and a binding spent on something that
   appears once in fourteen waves — or that you only look at — is a binding
   spent on nothing.
+  **`__sound` exposes the bank itself**, for the same headless-inspection
+  reason: `.radio.lastPhrase` (`{ party, event, at }` — which of the three
+  parties last spoke, on what event, and when), `.room` (`{ name, wet }` —
+  the sector's own room as `roomFor` picked it, `"comet"` while inside one,
+  `null` before the first `enterSector` call) and `.lastPing`
+  (`{ at, spread }` — when the scanner ping last actually sounded and how
+  wide the return's own drawn uncertainty was) are the probe's own hooks
+  onto state a screenshot cannot show. `.lastLanceCharge` is the same idea
+  for the Lance's own charge tell.
   `__probe.state` is still only `clear`/`fighting`/`dead`; the title and attract
   screens are `__probe.mode`, which is the shell around a run, not a combat
   phase. **A headless run must launch itself** — the page now lands on the
