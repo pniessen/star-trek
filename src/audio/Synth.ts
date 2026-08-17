@@ -28,6 +28,9 @@
  */
 
 import type { Phrase } from "./formant.js";
+import { renderImpulse, type RoomDesign } from "./acoustics.js";
+
+export type { RoomDesign } from "./acoustics.js";
 
 /**
  * Nine buses, so the mix is a handful of constants in one place rather than a
@@ -222,7 +225,31 @@ interface Rig {
   readonly master: GainNode;
   readonly buses: Record<Bus, GainNode>;
   readonly noise: AudioBuffer;
+  /**
+   * The space send, built lazily on the first `setSpace(design)` call rather
+   * than in `build()` — most sectors never call it, and a convolver with an
+   * empty buffer is a node the engine would otherwise carry all game for
+   * nothing. `sends` are per-bus gains, one each, tapped off every bus gain
+   * (post-level, so `wet` scales the same signal the dry path hears) and
+   * summed into `convolver`; `convolver`'s own output goes to `master`,
+   * post-buses and pre-limiter, never back into a bus — feeding a bus would
+   * be feedback.
+   */
+  convolver: ConvolverNode | null;
+  sends: Record<Bus, GainNode> | null;
 }
+
+/**
+ * The two buses that are never in the room: `bed` is the reactor drone,
+ * which is inside the ship, and `radio` is a transmitted carrier, which is a
+ * signal arriving from elsewhere rather than a sound happening in the space
+ * around the ship. Every other bus — weapons, impacts, hostiles, mechanisms,
+ * the panel, the alert, the echo — is something the hull itself is doing or
+ * hearing, so it belongs in the room and gets `design.wet`. Pinned rather
+ * than merely defaulted low, so no future `RoomDesign` can accidentally put
+ * the engine bed in a cave.
+ */
+const DRY_SENDS: ReadonlySet<Bus> = new Set(["bed", "radio"]);
 
 interface Voice {
   /** Context time this voice is done at; used for reaping and for stealing. */
@@ -250,6 +277,20 @@ export class Synth {
   private readonly beds: Bed[] = [];
   /** Backs `group()`. */
   private groupSeq = 0;
+  /** The last `RoomDesign` handed to `setSpace`, or `null` for a dry ship. */
+  private spaceDesign: RoomDesign | null = null;
+  /** The threat duck's own multiplier on every send, 0..1. See `spaceLevel`. */
+  private spaceLevelValue = 1;
+  /**
+   * What `applySendLevels` last asked each send for. Tracked here rather
+   * than read back off the `GainNode`, since `setTargetAtTime` schedules an
+   * asymptotic ramp rather than writing `.value` — this is the target that
+   * ramp is heading for, which is what `sendLevels()` (and `setSpace`
+   * itself, on the next call) needs to reason about.
+   */
+  private readonly sendTargets: Record<Bus, number> = Object.fromEntries(
+    (Object.keys(BUS_LEVELS) as Bus[]).map((name) => [name, 0]),
+  ) as Record<Bus, number>;
 
   /** True once there is a running context to schedule into. */
   get live(): boolean {
@@ -662,6 +703,99 @@ export class Synth {
     }
   }
 
+  /**
+   * The per-sector room. `null` is a dry ship — every send closes and the
+   * convolver, if one was ever built, is simply left with nothing feeding it.
+   * A `RoomDesign` renders a fresh impulse (`renderImpulse`, `acoustics.ts`)
+   * into the convolver's buffer and opens every send but the two pinned dry
+   * (`DRY_SENDS`) to `design.wet`, scaled by the current `spaceLevel`.
+   *
+   * The convolver and its sends are built once, lazily, on the first call
+   * with a non-null `design` — most sectors have a room, but nothing here
+   * should cost a node graph before the first one does.
+   *
+   * `rng` defaults to `Math.random`; Task 12 always passes a seeded one (one
+   * impulse per sector, deterministic from the campaign seed), so a caller
+   * that wants a reproducible room supplies its own generator rather than
+   * relying on this default.
+   */
+  setSpace(design: RoomDesign | null, rng: () => number = Math.random): void {
+    const rig = this.rig;
+    if (!rig || this.failed) return;
+    try {
+      this.spaceDesign = design;
+      if (design) {
+        const ctx = rig.ctx;
+        if (!rig.convolver) {
+          const convolver = ctx.createConvolver();
+          // Our IR is already peak-normalised in `renderImpulse` — the
+          // node's own auto-normalise would re-scale it by a factor tied to
+          // its length and undo that.
+          convolver.normalize = false;
+          convolver.connect(rig.master);
+          const sends = {} as Record<Bus, GainNode>;
+          for (const name of Object.keys(BUS_LEVELS) as Bus[]) {
+            const send = ctx.createGain();
+            send.gain.value = 0;
+            rig.buses[name].connect(send);
+            send.connect(convolver);
+            sends[name] = send;
+          }
+          rig.convolver = convolver;
+          rig.sends = sends;
+        }
+        const ir = renderImpulse(design, ctx.sampleRate, rng);
+        const buffer = ctx.createBuffer(1, ir.length, ctx.sampleRate);
+        buffer.getChannelData(0).set(ir);
+        rig.convolver.buffer = buffer;
+      }
+      this.applySendLevels();
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * The threat duck for the space: scales every open send by `x` (0..1),
+   * smoothed rather than switched, same reasoning as `duck` and `muted` — a
+   * send that steps is a click, and this one is meant to breathe with threat
+   * rather than announce itself. Composes with `setSpace`: whichever was
+   * called more recently, the other's own value is still the one in effect.
+   */
+  spaceLevel(x: number): void {
+    const rig = this.rig;
+    if (!rig || this.failed) return;
+    try {
+      this.spaceLevelValue = clamp(x, 0, 1);
+      this.applySendLevels();
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * @internal test hook — `setTargetAtTime` schedules a ramp rather than
+   * writing a value the mock (or, at any given instant, real WebAudio) can
+   * read back, so this returns `applySendLevels`'s own bookkeeping of what
+   * each send was last asked for, keyed by `Bus`, rather than asking a test
+   * to reconstruct bed/radio's identity from node-graph structure alone.
+   */
+  sendLevels(): Record<Bus, number> {
+    return { ...this.sendTargets };
+  }
+
+  private applySendLevels(): void {
+    const rig = this.rig;
+    const sends = rig?.sends;
+    const now = rig?.ctx.currentTime ?? 0;
+    const wet = this.spaceDesign ? this.spaceDesign.wet : 0;
+    for (const name of Object.keys(BUS_LEVELS) as Bus[]) {
+      const target = DRY_SENDS.has(name) ? 0 : wet * this.spaceLevelValue;
+      this.sendTargets[name] = target;
+      if (sends) sends[name].gain.setTargetAtTime(target, now, 0.05);
+    }
+  }
+
   /** @internal — used by `Bed`, which needs the rig it was built against. */
   get context(): Rig | null {
     return this.failed ? null : this.rig;
@@ -740,7 +874,7 @@ export class Synth {
     const samples = noise.getChannelData(0);
     for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
 
-    return { ctx, master, buses, noise };
+    return { ctx, master, buses, noise, convolver: null, sends: null };
   }
 
   private reap(now: number): void {

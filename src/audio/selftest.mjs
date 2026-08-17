@@ -35,6 +35,7 @@ execFileSync(
     "src/audio/Synth.ts",
     "src/audio/sound.ts",
     "src/audio/formant.ts",
+    "src/audio/acoustics.ts",
     "src/game/alert.ts",
     "--ignoreConfig",
     "--outDir",
@@ -170,6 +171,10 @@ function makeContext({ state = "running", fail = {} } = {}) {
       guard("createWaveShaper");
       return node("waveshaper", { curve: null, oversample: "none" });
     },
+    createConvolver() {
+      guard("createConvolver");
+      return node("convolver", { buffer: null, normalize: true });
+    },
     createDynamicsCompressor() {
       compressors++;
       return node("compressor", {
@@ -277,6 +282,9 @@ function everyCue(s) {
   s.listen(0, 0, 0);
   s.update({ threat: 400, hull: 0.6, thrust: 0.5, speed: 30, alive: true, docked: false });
   s.synth.speak({ phrase: TEST_PHRASE, bus: "radio", level: 0.4, drive: 2, band: [300, 3400] });
+  s.synth.setSpace({ tailSeconds: 0.3, tailCutoffHz: 3500, earlyReflections: [{ at: 0.02, gain: 0.4 }], wet: 0.25 });
+  s.synth.spaceLevel(0.5);
+  s.synth.setSpace(null);
   s.phaser(true, 1);
   s.phaser(false, 0);
   s.torpedo(false);
@@ -441,6 +449,29 @@ function everyCue(s) {
   s.phaser(true, 1);
   s.update({ threat: 9, hull: 1, thrust: 1, speed: 9, alive: true, docked: false });
   ok("mid-run failure: stays retired", voicesSince(after).length === 0);
+}
+
+{
+  // A browser with everything else but no `ConvolverNode` — `setSpace` must
+  // retire the layer exactly like any other missing factory, not throw out
+  // of the frame loop the way an unguarded call would.
+  const ctx = makeContext({ fail: { createConvolver: 0 } });
+  globalThis.AudioContext = function () {
+    return ctx;
+  };
+  nodes = [];
+  warnings = [];
+  const s = new Sound();
+  s.start();
+  let threw = null;
+  try {
+    s.synth.setSpace({ tailSeconds: 0.3, tailCutoffHz: 3500, earlyReflections: [], wet: 0.25 });
+  } catch (error) {
+    threw = error;
+  }
+  ok("no createConvolver: nothing throws", threw === null, String(threw));
+  ok("no createConvolver: reported exactly once", warnings.length === 1, `${warnings.length} warnings`);
+  ok("no createConvolver: reported as a warning", (warnings[0] ?? "").startsWith("audio disabled"));
 }
 
 // ── 2. the master chain ────────────────────────────────────────────────────
@@ -938,6 +969,84 @@ let chain;
     !gate2 || !gate2.gain.events.some((e) => e[0] === "lin"),
     "the gate ramped despite no syllables to voice",
   );
+}
+
+// ── 10. the space: a computed impulse on a send ────────────────────────────
+
+{
+  const { renderImpulse } = await import(join(out, "audio/acoustics.js"));
+  let seed = 3; const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const rocks = renderImpulse({ tailSeconds: 0.5, tailCutoffHz: 4000, earlyReflections: [{ at: 0.05, gain: 0.5 }, { at: 0.12, gain: 0.3 }], wet: 0.3 }, 48000, rng);
+  ok("the impulse has the tail's length", rocks.length === 24000, `${rocks.length}`);
+  ok("early reflections are discrete peaks", Math.abs(rocks[Math.round(0.05 * 48000)]) > 0.3, "");
+  ok("peak is normalised under 0.9", Math.max(...rocks.map(Math.abs)) <= 0.9, "");
+  const bare = renderImpulse({ tailSeconds: 0.05, tailCutoffHz: 8000, earlyReflections: [], wet: 0 }, 48000, rng);
+  ok("a bare room is nearly nothing", bare.length <= 2400, "");
+
+  // `noiseOnly` (the comet's tail): flat, and no discrete bounces even if
+  // some are supplied — a room in name only.
+  const mist = renderImpulse(
+    { tailSeconds: 0.3, tailCutoffHz: 2000, earlyReflections: [{ at: 0.01, gain: 0.9 }], wet: 0.4, noiseOnly: true },
+    48000,
+    rng,
+  );
+  const early = Math.max(...mist.slice(0, mist.length / 3).map(Math.abs));
+  const late = Math.max(...mist.slice(-Math.floor(mist.length / 3)).map(Math.abs));
+  ok("noiseOnly does not decay: the tail end is as loud as the start", late > early * 0.5, `${early} then ${late}`);
+  ok(
+    "noiseOnly plants no discrete reflection despite one being supplied",
+    Math.abs(mist[Math.round(0.01 * 48000)]) < 0.9,
+    `${mist[Math.round(0.01 * 48000)]}`,
+  );
+
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const synth = new Synth();
+  synth.start();
+  ok("no convolver before a space is set", !nodes.some((n) => n.kind === "convolver"), "");
+  synth.setSpace({ tailSeconds: 0.5, tailCutoffHz: 4000, earlyReflections: [], wet: 0.3 });
+  const conv = nodes.find((n) => n.kind === "convolver");
+  ok("setSpace builds one convolver with a buffer", conv && conv.buffer !== null, "");
+  ok("the convolver does not normalise (our IR is already scaled)", conv && conv.normalize === false, "");
+
+  // Sends: every bus send gain is a gain whose out includes the convolver.
+  const sends = nodes.filter((n) => n.kind === "gain" && n.out.includes(conv));
+  ok("sends exist per bus", sends.length >= 6, `${sends.length}`);
+
+  // Bed and radio are pinned dry (the reactor is inside the ship, the radio
+  // is a carrier — neither is in the room) — identified by `Bus`, through
+  // `sendLevels()`, rather than by node-graph structure the mock cannot
+  // label. Every other send opens to `design.wet` (0.3, at spaceLevel 1).
+  const levels = synth.sendLevels();
+  ok("bed's send is always dry", levels.bed === 0, `${levels.bed}`);
+  ok("radio's send is always dry", levels.radio === 0, `${levels.radio}`);
+  ok(
+    "every other bus opens to design.wet",
+    (["weapon", "impact", "hostile", "mechanism", "panel", "alert", "echo"]).every((b) => Math.abs(levels[b] - 0.3) < 1e-9),
+    JSON.stringify(levels),
+  );
+
+  // The threat duck: `spaceLevel` scales every open send, never the pinned
+  // two (0 × anything is still 0).
+  synth.spaceLevel(0.5);
+  const ducked = synth.sendLevels();
+  ok("spaceLevel scales the open sends", Math.abs(ducked.weapon - 0.15) < 1e-9, `${ducked.weapon}`);
+  ok("...and leaves the pinned two at 0", ducked.bed === 0 && ducked.radio === 0);
+
+  // `setSpace(null)`: every send closes, the pinned two included (already 0).
+  synth.setSpace(null);
+  const closed = synth.sendLevels();
+  ok(
+    "setSpace(null) closes every send",
+    Object.values(closed).every((v) => v === 0),
+    JSON.stringify(closed),
+  );
+
+  // The convolver's own output goes straight to master, never back into a
+  // bus — routing it into a bus would be feedback.
+  const master = nodes.find((n) => n.kind === "gain" && n.out.some((o) => o.kind === "biquad" && o.type === "highpass"));
+  ok("the convolver feeds master, not a bus", conv.out.length === 1 && conv.out[0] === master, "");
 }
 
 // ── report ─────────────────────────────────────────────────────────────────
