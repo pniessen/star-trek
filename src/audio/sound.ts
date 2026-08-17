@@ -152,6 +152,58 @@ const ARPEGGIO = [0, 4, 7, 12, 16, 19, 24];
 const SERVICE_NOTES = [523.25, 659.25, 783.99, 987.77];
 
 /**
+ * The multiplier family's own scale — semitones over a root. `deposit`
+ * (`kill`'s own note), `multiplierTick`, `salvageTransfer` and `tally` all
+ * read pitches off this one array rather than each choosing frequencies
+ * independently, so a kill landing, the HUD ticking, salvage crossing at the
+ * dock and the tally's own arpeggio are audibly the same idea told in four
+ * registers — the whole point of Task 10 — rather than four sounds that
+ * happen to share a subject. `ARPEGGIO` above is this shape again, extended
+ * with the octave-up repeats (16, 19, 24 = 4, 7, 12 plus an octave) that let
+ * the tally alone keep climbing past four notes.
+ */
+const MOTIF = [0, 4, 7, 12] as const;
+
+/** `MOTIF[degree]` semitones above `root`, in Hz. `degree` is an index into
+ *  `MOTIF` (0..3), not a semitone count — callers cap their own index with
+ *  `Math.min(3, …)` before calling this, the same way `ARPEGGIO`'s own
+ *  index never runs past its length. */
+function motifHz(root: number, degree: number): number {
+  return root * Math.pow(2, MOTIF[degree] / 12);
+}
+
+/**
+ * The multiplier family's own root and levels. `deposit` is the loudest —
+ * it fires on every paid kill, so it has to read as a mark on the ledger
+ * without being a distraction — `multiplierTick` is `Sound`'s own docblock
+ * calls "the same family, quieter" at half that, and `salvageTransfer`
+ * (docking's own single crossing, not a per-frame event) sits close to the
+ * deposit's own level since it happens once a dock rather than once a kill.
+ */
+const MOTIF_ROOT = 220;
+const DEPOSIT_LEVEL = 0.09;
+
+/**
+ * The A-N radio range (Phase C), 1930s aviation's own course guidance: two
+ * overlapping legs broadcast a Morse "A" (di-dah) or "N" (dah-di) off the
+ * beam and interlock into one steady tone exactly on it. 700 Hz is close to
+ * the historical range's own tone; the rest are this bank's own timing.
+ */
+const APPROACH = {
+  freq: 700,
+  /** Never more than one voice scheduled inside this window — `approach`'s own rate gate. */
+  rate: 0.35,
+  level: 0.05,
+  dot: 0.09,
+  dash: 0.24,
+  gap: 0.04,
+  /** Longer than `rate`: retriggering the on-course note every `rate`
+   *  seconds still overlaps the tail of the last one, so it reads as one
+   *  held tone rather than a series of blips. */
+  onCourseHold: 0.4,
+} as const;
+
+/**
  * The one level the alert ever uses, in any condition, at any urgency.
  *
  * This is the CHI 2024 contract made literal: escalation is spectral, so there
@@ -261,6 +313,9 @@ export class Sound {
 
   /** Audio-clock time the last mine tick actually sounded — `mineTick`'s own rate gate. */
   private lastMineTickAt = -Infinity;
+
+  /** Audio-clock time the last approach note actually sounded — `approach`'s own rate gate. */
+  private lastApproachAt = -Infinity;
 
   /**
    * The probe's own hook: when a ping last sounded and how rough it was.
@@ -847,8 +902,15 @@ export class Sound {
     });
   }
 
-  /** @param size relative to a Raider; a Bastion is worth more air than a Raider. */
-  kill(x: number, z: number, size: number): void {
+  /**
+   * @param size       relative to a Raider; a Bastion is worth more air than a Raider.
+   * @param multiplier the run's multiplier *after* this kill's own increment —
+   *   `deposit`'s own note, so a paid kill audibly points at the dock. `null`
+   *   (the default) for a kill that pays the player nothing — `destroyByAlly`,
+   *   the Warden's own kills — since a deposit note over an event that credits
+   *   no salvage would say something false. See `deposit`'s own docblock.
+   */
+  kill(x: number, z: number, size: number, multiplier: number | null = null): void {
     const { level, pan } = this.place(x, z);
     // Three layers, one slot — the cap counts cues, no exceptions (owner's
     // ruling). A kill's own body/crack layers stay together the same way a
@@ -887,6 +949,60 @@ export class Sound {
       attack: 0.001,
       decay: 0.07,
       pan,
+    });
+    if (multiplier !== null) this.deposit(multiplier);
+  }
+
+  /**
+   * The deposit: one short tone on the shared `MOTIF`, landing every time a
+   * kill actually pays. Its own voice on the `panel` bus, deliberately
+   * outside `kill`'s own group — that group is the blast, on `impact`; this
+   * is the ledger, on a different bus entirely, and it gets its own slot
+   * (panel's cap is 2) rather than riding along inside the blast's one.
+   *
+   * The degree climbs with the multiplier itself, capped at `MOTIF`'s own
+   * top degree — a kill banked at 1x and one banked at 4x land on
+   * recognisably different notes, the same "a bigger bank is audibly
+   * bigger" idea `tally` already carries, told here at the scale of a
+   * single kill instead of a whole run.
+   */
+  private deposit(multiplier: number): void {
+    const degree = Math.min(3, Math.floor(multiplier));
+    this.synth.play({
+      bus: "panel",
+      wave: "triangle",
+      freq: motifHz(MOTIF_ROOT, degree),
+      level: DEPOSIT_LEVEL,
+      attack: 0.003,
+      decay: 0.14,
+    });
+  }
+
+  /**
+   * The same note family as `deposit`, at half its level — the HUD's own
+   * multiplier changing for a reason *other* than a paid kill.
+   *
+   * Deliberately unwired from every kill site: `destroy` and
+   * `destroySpinner` both already ring through `kill`'s own `deposit`
+   * (called with the post-kill multiplier), so calling this there too would
+   * be two panel voices for one event, and the brief's own ruling is that
+   * one is enough. The residual case this method exists for — a multiplier
+   * change that is neither a kill nor already voiced elsewhere — currently
+   * has no caller: hyperwarp arrival's own halving already has
+   * `hyperwarpArrive`, and a breach already has `multiplierHalved`. Kept as
+   * a defined, tested register rather than deleted, the same way
+   * `relayTick` stood ready before `DeathSequence`'s own blip needed it —
+   * see this file's own §16 selftest for proof it works on its own terms.
+   */
+  multiplierTick(multiplier: number): void {
+    const degree = Math.min(3, Math.floor(multiplier));
+    this.synth.play({
+      bus: "panel",
+      wave: "triangle",
+      freq: motifHz(MOTIF_ROOT, degree),
+      level: DEPOSIT_LEVEL * 0.5,
+      attack: 0.003,
+      decay: 0.14,
     });
   }
 
@@ -1048,16 +1164,28 @@ export class Sound {
   }
 
   /**
-   * The money leaving. A falling two-note figure — 660→440 Hz, a descending
-   * fourth — on the panel bus: the multiplier family's own "loss" register.
-   * Hardcoded for now; Task 10's `MOTIF` re-roots this into the shared
-   * multiplier family once it exists, the same way `alertBeat`'s partials
-   * were hardcoded before `AlertPulse` existed to drive them.
+   * The money leaving. A falling two-note figure on the panel bus — the
+   * multiplier family's own "loss" register — re-rooted onto `MOTIF`:
+   * `motifHz(220, 2) × 2` (659.26 Hz) into `motifHz(220, 3)` (440 Hz), a
+   * descending fourth. Before this task these were the hardcoded 660→440
+   * Hz that shipped with Task 9; chosen deliberately to land within a
+   * quarter percent of the old pair (659.26 vs 660) rather than picking
+   * fresh pitches, so the re-rooting is inaudible on its own and only shows
+   * up where it is supposed to — the §16 "four registers agree" test —
+   * instead of also being a retune nobody asked for.
    */
   multiplierHalved(): void {
     const g = this.synth.group();
-    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 660, level: 0.07, decay: 0.16 });
-    this.synth.play({ bus: "panel", group: g, wave: "square", freq: 440, level: 0.07, decay: 0.2, delay: 0.15 });
+    this.synth.play({ bus: "panel", group: g, wave: "square", freq: motifHz(MOTIF_ROOT, 2) * 2, level: 0.07, decay: 0.16 });
+    this.synth.play({
+      bus: "panel",
+      group: g,
+      wave: "square",
+      freq: motifHz(MOTIF_ROOT, 3),
+      level: 0.07,
+      decay: 0.2,
+      delay: 0.15,
+    });
   }
 
   mineBlast(x: number, z: number): void {
@@ -1955,6 +2083,79 @@ export class Sound {
 
   // ── docking ──────────────────────────────────────────────────────────────
 
+  /**
+   * The A-N radio range, on the `radio` bus (Task 1) because that is what
+   * this instrument actually was: 1930s aviation flew a corridor onto a
+   * runway by ear, off two overlapping transmitters that broadcast Morse "A"
+   * (di-dah) to one side of the beam and "N" (dah-di) to the other, and
+   * interlocked into one steady tone exactly on it. `Docking.updateApproach`
+   * calls this every frame while `phase === "aligning"` and guidance is
+   * visible; the rate gate below is what turns a sixty-times-a-second call
+   * into an actual cadence rather than a wall of voices.
+   *
+   * The two-argument interface folds the historical range's two pieces of
+   * information — which side, and how far — into one signed number, since
+   * Morse timing itself does not vary continuously with distance the way a
+   * needle does: you are either on the beam or you are not, and if not,
+   * which letter you hear is the only thing worth saying. `onCourse` wins
+   * outright over `offCourse` when both are supplied, so a caller does not
+   * have to zero `offCourse` itself once it has decided the ship is centred.
+   *
+   * @param offCourse -1..1, signed lateral error. `>= 0` reads "A" (di-dah,
+   *   short then long); `< 0` reads "N" (dah-di, long then short) — an
+   *   arbitrary but fixed assignment of the range's own two legs, since the
+   *   corridor has no compass heading of its own to hang "which side is A"
+   *   on. Ignored when `onCourse` is true.
+   * @param onCourse  inside the capture cone — `Docking`'s own guidance is
+   *   aligned closely enough that a capture is imminent. Interlocks into one
+   *   sustained tone rather than alternating.
+   */
+  approach(offCourse: number, onCourse: boolean): void {
+    const now = this.synth.context?.ctx.currentTime;
+    if (now === undefined || now - this.lastApproachAt < APPROACH.rate) return;
+    this.lastApproachAt = now;
+
+    if (onCourse) {
+      this.synth.play({
+        bus: "radio",
+        wave: "sine",
+        freq: APPROACH.freq,
+        level: APPROACH.level,
+        attack: 0.02,
+        hold: APPROACH.onCourseHold,
+        decay: 0.06,
+      });
+      return;
+    }
+
+    // Two layers, one slot — the letter is one gesture, not two competing ones.
+    const g = this.synth.group();
+    const starboard = offCourse >= 0;
+    const first = starboard ? APPROACH.dot : APPROACH.dash;
+    const second = starboard ? APPROACH.dash : APPROACH.dot;
+    this.synth.play({
+      bus: "radio",
+      group: g,
+      wave: "sine",
+      freq: APPROACH.freq,
+      level: APPROACH.level,
+      attack: 0.006,
+      hold: first,
+      decay: 0.03,
+    });
+    this.synth.play({
+      bus: "radio",
+      group: g,
+      wave: "sine",
+      freq: APPROACH.freq,
+      level: APPROACH.level,
+      attack: 0.006,
+      hold: second,
+      decay: 0.03,
+      delay: first + 0.03 + APPROACH.gap,
+    });
+  }
+
   /** Entering the capture ring. A tick, so the gate is something you hear pass. */
   gate(): void {
     this.synth.play({ bus: "mechanism", wave: "sine", freq: 1244, level: 0.07, decay: 0.06 });
@@ -2071,22 +2272,69 @@ export class Sound {
   }
 
   /**
+   * The money crossing — `docking.ts`'s own "SALVAGE TRANSFER" stage, the
+   * one step in the service sequence that pays rather than repairs. The
+   * other four (`service`, above) restore shields, hull, energy and
+   * torpedoes on `SERVICE_NOTES`, a plain rising figure that owes nothing to
+   * the multiplier family; this is the moment the run's own tally actually
+   * moves, so it speaks in `MOTIF` instead — the same register `deposit`
+   * and `tally` do, on the `panel` bus rather than `mechanism`, since a
+   * repair is the station doing something to the ship and this is the ship's
+   * own earnings, the same distinction `brace`/`scram` already draw between
+   * `mechanism` and `panel`.
+   *
+   * @param step the transfer's own step, 0-indexed, ascending on `MOTIF` the
+   *   same way `deposit`'s degree climbs with the multiplier — kept general
+   *   for however many steps a transfer takes, though the docking sequence
+   *   currently has exactly one (`salvageTransfer(0, 1)`).
+   * @param of   how many steps the whole transfer has; the last one
+   *   (`step >= of - 1`) resolves a little louder and a little longer, the
+   *   same shape `tally`'s own final note gets.
+   */
+  salvageTransfer(step: number, of: number): void {
+    const degree = Math.min(3, step);
+    const final = step >= of - 1;
+    this.synth.play({
+      bus: "panel",
+      wave: "triangle",
+      freq: motifHz(MOTIF_ROOT, degree),
+      level: DEPOSIT_LEVEL * (final ? 1 : 0.75),
+      attack: 0.003,
+      decay: final ? 0.22 : 0.14,
+    });
+  }
+
+  /**
    * The tally, pitched by the multiplier — the whole greed loop as one sound.
    *
-   * A big bank has to be audibly bigger, so three things move together: the root
-   * climbs up to an octave, the arpeggio runs further up, and a sub note comes
-   * in underneath. Banking at 1.0x is four notes and a shrug. Banking at 9x is
-   * seven notes an octave higher over a bass note, and that is the sound the
-   * game wants a player pushing one wave too far to be chasing.
+   * A big bank has to be audibly bigger, so two things move together: the
+   * arpeggio runs further up `ARPEGGIO` (the tally's own extension of
+   * `MOTIF` — see that constant's own docblock), and a sub note comes in
+   * underneath. Banking at 1.0x is four notes and a shrug. Banking at 9x is
+   * seven notes over a bass note, and that is the sound the game wants a
+   * player pushing one wave too far to be chasing.
+   *
+   * **Re-rooted to a fixed 220 Hz** (Task 10; before, the root itself
+   * climbed a semitone at a time with the multiplier, up to an octave). That
+   * climb is what this task's own "four registers agree" test would have
+   * caught: an arbitrary semitone shift puts most of the run's own tallies
+   * on pitches `deposit`, `multiplierTick` and `salvageTransfer` never
+   * land on, so the same multiplier changing the same currency would have
+   * sounded like four unrelated instruments rather than one. The size-reads-
+   * as-size argument the old climb was serving still holds — it just now
+   * lives entirely in note count and the sub note's own octave, both of
+   * which `ARPEGGIO`'s existing shape already carries without help from a
+   * moving root.
    */
   tally(multiplier: number, total: number): void {
     if (total <= 0) {
-      this.synth.play({ bus: "panel", wave: "triangle", freq: 523.25, level: 0.1, decay: 0.2 });
+      // The "nothing to bank" shrug — a single plain note, still on the
+      // family rather than the old off-motif 523.25 Hz (a bare C5).
+      this.synth.play({ bus: "panel", wave: "triangle", freq: motifHz(MOTIF_ROOT, 3), level: 0.1, decay: 0.2 });
       return;
     }
 
-    const semitones = Math.round(clamp((multiplier - 1) * 1.4, 0, 12));
-    const root = 261.63 * Math.pow(2, semitones / 12);
+    const root = MOTIF_ROOT;
     const notes = Math.min(ARPEGGIO.length, 4 + Math.floor(multiplier / 2.2));
 
     // Up to eight layers (the run plus a sub note), one slot — this is the

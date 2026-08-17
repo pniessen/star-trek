@@ -1074,12 +1074,15 @@ export class Session {
 
     // A bigger hull earns a longer beat, still bounded by `HIT_STOP.max`.
     this.hitStop.strike(size > 1 ? HIT_STOP.heavyKill : HIT_STOP.kill);
-    // One scalar for the burst and the blast, so what you see come apart and
-    // what you hear come apart are the same size.
-    sound.kill(hostile.position.x, hostile.position.z, size);
     this.kills++;
     this.pending += hostile.spec.value * this.salvageScale;
     this.multiplier = Math.min(9.9, this.multiplier + 0.2);
+    // One scalar for the burst and the blast, so what you see come apart and
+    // what you hear come apart are the same size. The post-kill multiplier
+    // rides along so `sound.kill`'s own deposit note (Task 10's shared
+    // `MOTIF`) reflects what this kill actually just banked toward — the
+    // multiplier is updated above, before this call, for exactly that reason.
+    sound.kill(hostile.position.x, hostile.position.z, size, this.multiplier);
     this.fleet.retire(hostile);
     void player;
   }
@@ -1154,7 +1157,11 @@ export class Session {
     );
     // The ring is world-facing, same as the burst — only the ledger below is
     // where this diverges from `destroy`. No hit-stop: that stays a feel
-    // reward for the player's own kill, per this method's own docblock.
+    // reward for the player's own kill, per this method's own docblock. No
+    // multiplier either, for the same reason: `sound.kill`'s deposit note
+    // says "this kill just paid", and this method's whole point is that a
+    // Warden kill pays the player nothing — leaving the argument at its
+    // `null` default keeps the ear honest about that.
     this.debris.ring(hostile.position, HOSTILE_COLORS[hostile.kind], size);
     sound.kill(hostile.position.x, hostile.position.z, size);
     this.fleet.retire(hostile);
@@ -1313,10 +1320,12 @@ export class Session {
     );
 
     this.hitStop.strike(HIT_STOP.kill);
-    sound.kill(spinner.position.x, spinner.position.z, 1.3);
     this.kills++;
     this.pending += LOOM.value * this.salvageScale;
     this.multiplier = Math.min(9.9, this.multiplier + 0.2);
+    // The ledger is `destroy`'s, per this method's own docblock — the
+    // deposit note follows the same rule, post-kill multiplier and all.
+    sound.kill(spinner.position.x, spinner.position.z, 1.3, this.multiplier);
     this.loom.collapse();
     this.say("WEAVE COLLAPSING");
   }

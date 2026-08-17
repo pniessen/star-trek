@@ -34,6 +34,14 @@ export const DOCK_GEOMETRY = {
   alignTolerance: 0.55,
   /** Range at which guidance appears at all. */
   guidanceRange: 62,
+  /**
+   * How far off the centreline, as a fraction of `captureRadius`, the
+   * A-N radio range's own interlock still calls "on the beam" — see
+   * `sound.approach`. Narrower than the gate itself: `inGate` only asks
+   * whether you are close enough for the tractor to try, which is a range
+   * to the gate, not a claim about being centred on the corridor.
+   */
+  courseBand: 0.22,
 } as const;
 
 const TIMING = {
@@ -266,6 +274,20 @@ export class Docking {
       sound.tractor(TIMING.capture);
       void player;
     }
+
+    // The A-N radio range: only while still aligning, never on the very
+    // frame capture engages — `tractor`, just above, already speaks for
+    // that moment, and playing both would be two instruments answering the
+    // same instant.
+    if (this.phase === "aligning") {
+      const lateral = MathUtils.clamp(g.lateral / DOCK_GEOMETRY.captureRadius, -1, 1);
+      // "On the beam" mirrors `draw()`'s own `locked` read — centred and
+      // pointed down the corridor — narrowed to `courseBand` rather than
+      // `inGate`'s own wider radius, since `inGate` is a distance-to-gate
+      // check and this is a claim about being centred on the corridor.
+      const onCourse = g.headingOk && Math.abs(lateral) < DOCK_GEOMETRY.courseBand;
+      sound.approach(lateral, onCourse);
+    }
   }
 
   private updateCapture(dt: number, player: Ship, onMoored: () => void): void {
@@ -339,6 +361,10 @@ export class Docking {
 
     if (previous < TIMING.torpedoes && this.service >= TIMING.torpedoes) {
       this.status = "SALVAGE TRANSFER";
+      // The one step in this sequence that pays rather than repairs — see
+      // `Sound.salvageTransfer`'s own docblock for why it speaks in `MOTIF`
+      // instead of `SERVICE_NOTES`, on `panel` instead of `mechanism`.
+      sound.salvageTransfer(0, 1);
       onServiced();
     }
 

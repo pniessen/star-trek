@@ -299,10 +299,14 @@ function everyCue(s) {
   s.nearMiss(3, 3);
   s.impact(2, 2);
   s.thud(2, 2);
-  s.kill(4, 4, 1.4);
+  s.kill(4, 4, 1.4, 2.6);
   s.shieldHit(1, 1, "port", 0.6);
   s.breach();
   s.multiplierHalved();
+  s.multiplierTick(2.6);
+  s.salvageTransfer(0, 1);
+  s.approach(0.4, false);
+  s.approach(0, true);
   s.mineBlast(5, 5);
   s.mineLay(6, 6);
   s.decloak(7, 7);
@@ -1839,6 +1843,134 @@ let chain;
     lastGainEvent[1],
     0.028,
     0.002,
+  );
+}
+
+// ── 16. the multiplier family: one motif in four registers ─────────────────
+// `deposit` (inside `kill`), `multiplierTick`, `salvageTransfer` and `tally`
+// all read pitches off the same `MOTIF` — this section is the "four
+// registers agree" check the brief names: every frequency any of the four
+// schedules has to be some `motifHz(220, d) × 2^k` for a plain octave shift
+// k, or the shared vocabulary is a claim rather than a fact.
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+
+  // A test-local mirror of `sound.ts`'s own MOTIF/motifHz — the same
+  // reasoning every other structural check in this file gives: the point is
+  // to verify the bank's own arithmetic against an independent copy, not to
+  // import the thing under test and check it equals itself.
+  const MOTIF = [0, 4, 7, 12];
+  const motifHz = (root, degree) => root * Math.pow(2, MOTIF[degree] / 12);
+  const onMotif = (freq) => {
+    for (let d = 0; d < MOTIF.length; d++) {
+      for (const k of [-1, 0, 1, 2]) {
+        if (Math.abs(freq / (motifHz(220, d) * Math.pow(2, k)) - 1) < 0.01) return true;
+      }
+    }
+    return false;
+  };
+
+  // kill's own deposit: one extra voice beyond the three-layer blast, a
+  // triangle (the family's own timbre) rather than the blast's own sine/noise.
+  let from = mark();
+  s.kill(4, 4, 1, 2.6);
+  const killVoices = voicesSince(from);
+  const depositVoices = killVoices.filter((v) => v.wave === "triangle");
+  ok("a paid kill schedules exactly one deposit note beyond its own blast", killVoices.length === 4 && depositVoices.length === 1, `${killVoices.length} voices, ${depositVoices.length} triangle`);
+  ok("...and it lands on a motif degree", onMotif(depositVoices[0].from), `${depositVoices[0].from}`);
+
+  // The Warden's own kill (no multiplier passed) pays no deposit.
+  ctx.currentTime += 1;
+  from = mark();
+  s.kill(4, 4, 1);
+  ok("a kill with no multiplier (the Warden's own) schedules no deposit", voicesSince(from).length === 3, `${voicesSince(from).length}`);
+
+  // multiplierTick: the same family, quieter — defined and tested even
+  // though no live call site wires it yet (see its own docblock).
+  ctx.currentTime += 1;
+  from = mark();
+  s.multiplierTick(2.6);
+  const tick = voicesSince(from);
+  ok("multiplierTick schedules one note", tick.length === 1, `${tick.length}`);
+  ok("...on a motif degree", onMotif(tick[0].from), `${tick[0].from}`);
+  ok("...quieter than the deposit", tick[0].level < depositVoices[0].level, `${tick[0].level} vs ${depositVoices[0].level}`);
+  near("...the same degree as a deposit at the same multiplier", tick[0].from, depositVoices[0].from, 0.5);
+
+  // salvageTransfer: ascending across the steps, every note on the motif.
+  ctx.currentTime += 1;
+  from = mark();
+  s.salvageTransfer(0, 3);
+  ctx.currentTime += 1;
+  s.salvageTransfer(1, 3);
+  ctx.currentTime += 1;
+  s.salvageTransfer(2, 3);
+  const steps = voicesSince(from);
+  ok(
+    "salvageTransfer schedules three notes, all on the motif",
+    steps.length === 3 && steps.every((v) => onMotif(v.from)),
+    steps.map((v) => v.from.toFixed(1)).join(","),
+  );
+  ok("...ascending", steps[0].from < steps[1].from && steps[1].from < steps[2].from, steps.map((v) => v.from.toFixed(1)).join(","));
+
+  // tally, re-rooted: `tally(4.5, 900)` schedules several notes, all on the motif.
+  ctx.currentTime += 1;
+  from = mark();
+  s.tally(4.5, 900);
+  const tallyVoices = voicesSince(from);
+  ok("tally(4.5, 900) schedules at least three notes", tallyVoices.length >= 3, `${tallyVoices.length}`);
+  ok(
+    "...every one on a motif degree",
+    tallyVoices.every((v) => onMotif(v.from)),
+    tallyVoices.map((v) => v.from.toFixed(1)).join(","),
+  );
+
+  // approach: off course alternates short/long; on course holds one long tone.
+  ctx.currentTime += 1;
+  from = mark();
+  s.approach(0.8, false);
+  const offCourse = voicesSince(from);
+  ok("approach(0.8, false) schedules two tones", offCourse.length === 2, `${offCourse.length}`);
+  ok("...of different lengths", offCourse.length === 2 && offCourse[0].hold !== offCourse[1].hold, offCourse.map((v) => v.hold).join(","));
+  ok("...at 700 Hz", offCourse.every((v) => Math.abs(v.from - 700) < 1), offCourse.map((v) => v.from).join(","));
+
+  ctx.currentTime += 1;
+  from = mark();
+  s.approach(0, true);
+  const onCourseVoices = voicesSince(from);
+  ok(
+    "approach(0, true) schedules one long-hold tone",
+    onCourseVoices.length === 1 && onCourseVoices[0].hold > 0.3,
+    JSON.stringify(onCourseVoices.map((v) => v.hold)),
+  );
+
+  // The other side of the beam reverses which tone is short and which is long.
+  ctx.currentTime += 1;
+  from = mark();
+  s.approach(-0.8, false);
+  const otherSide = voicesSince(from);
+  ok(
+    "the other side of the beam reverses the pattern",
+    otherSide.length === 2 && otherSide[0].hold !== offCourse[0].hold,
+    `${otherSide[0] && otherSide[0].hold} vs ${offCourse[0].hold}`,
+  );
+
+  // Rate limit: a call in the same instant as the one above schedules nothing.
+  from = mark();
+  s.approach(0.8, false);
+  ok("approach rate-limits to one call per 0.35s", voicesSince(from).length === 0, `${voicesSince(from).length}`);
+
+  // The four registers agree: every frequency collected above is a motif
+  // degree times a plain octave — the whole point of this task.
+  const allFreqs = [depositVoices[0].from, tick[0].from, ...steps.map((v) => v.from), ...tallyVoices.map((v) => v.from)];
+  ok(
+    "the four registers agree: every frequency is a motif degree × 2^k",
+    allFreqs.every(onMotif),
+    allFreqs.map((f) => f.toFixed(1)).join(","),
   );
 }
 
