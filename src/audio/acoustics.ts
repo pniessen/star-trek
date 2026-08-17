@@ -143,6 +143,34 @@ export function roomFor(hero: HeroKind, shoal: boolean, insideComet: boolean): R
   };
 }
 
+/**
+ * Structural equality on two rooms (or the dry `null`), reflections
+ * included — `Synth.setSpace`'s own guard against a redundant rebuild.
+ *
+ * `insideComet`'s hysteresis (`sound.ts`) stops the *latch* from chattering
+ * at the tail's edge, but a caller can still legitimately ask for the same
+ * room twice — `enterSector`'s own key cache already short-circuits most of
+ * those, but `Synth` re-rendering an `AudioBuffer` and swapping the
+ * convolver mid-decay (an audible click, on top of the wasted allocation)
+ * should not depend on every future caller remembering to key-cache first.
+ * This is the second, cheaper line: compare what was actually asked for
+ * rather than trust how it got asked.
+ */
+export function sameDesign(a: RoomDesign | null, b: RoomDesign | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.tailSeconds !== b.tailSeconds) return false;
+  if (a.tailCutoffHz !== b.tailCutoffHz) return false;
+  if (a.wet !== b.wet) return false;
+  if (!!a.noiseOnly !== !!b.noiseOnly) return false;
+  if (a.earlyReflections.length !== b.earlyReflections.length) return false;
+  for (let i = 0; i < a.earlyReflections.length; i++) {
+    if (a.earlyReflections[i].at !== b.earlyReflections[i].at) return false;
+    if (a.earlyReflections[i].gain !== b.earlyReflections[i].gain) return false;
+  }
+  return true;
+}
+
 export function renderImpulse(design: RoomDesign, sampleRate: number, rng: () => number): Float32Array {
   const length = Math.max(1, Math.round(design.tailSeconds * sampleRate));
   const ir = new Float32Array(length);

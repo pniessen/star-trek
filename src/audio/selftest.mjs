@@ -2234,6 +2234,19 @@ const { roomFor } = await import(join(out, "audio/acoustics.js"));
   s.listen(0, 0, 0);
   ok("no room on the probe before a sector is entered", s.room === null, "");
 
+  // Counts `createBuffer` calls directly rather than convolver *nodes* —
+  // the convolver itself is built once, lazily, and stays one node forever
+  // (`Synth.setSpace`'s own doc), so a node count alone cannot distinguish
+  // "never rebuilt" from "rebuilt in place a dozen times." A buffer swap is
+  // the actual cost (allocation, plus an audible click mid-decay) the
+  // `sameDesign` guard exists to avoid.
+  let bufferCalls = 0;
+  const realCreateBuffer = ctx.createBuffer.bind(ctx);
+  ctx.createBuffer = (...args) => {
+    bufferCalls++;
+    return realCreateBuffer(...args);
+  };
+
   s.enterSector("rocks", false, 11, 4);
   const conv = nodes.find((n) => n.kind === "convolver");
   ok("enterSector builds a convolver with a buffer", conv && conv.buffer !== null, "");
@@ -2242,12 +2255,18 @@ const { roomFor } = await import(join(out, "audio/acoustics.js"));
     s.room && s.room.name === "rocks" && s.room.wet === roomFor("rocks", false, false).wet,
     JSON.stringify(s.room),
   );
+  ok("one buffer built for the one real change so far", bufferCalls === 1, `${bufferCalls}`);
 
   s.enterSector("rocks", false, 11, 4); // same key: a no-op
   ok(
     "re-entering the same sector does not rebuild the convolver",
     nodes.filter((n) => n.kind === "convolver").length === 1,
     "",
+  );
+  ok(
+    "...and builds no second buffer either — calling enterSector twice with the same args costs one buffer, not two",
+    bufferCalls === 1,
+    `${bufferCalls}`,
   );
 
   s.enterSector("rocks", true, 11, 4); // shoal flag differs: a real change
@@ -2256,9 +2275,44 @@ const { roomFor } = await import(join(out, "audio/acoustics.js"));
     s.room && s.room.name === "rocks+shoal",
     JSON.stringify(s.room),
   );
+  ok("...and a real change does build a second buffer", bufferCalls === 2, `${bufferCalls}`);
 
   s.enterSector("bare", false, 11, 5);
   ok("a bare sector reads wet 0 on the probe too", s.room && s.room.wet === 0, JSON.stringify(s.room));
+}
+
+{
+  // `Synth.setSpace`'s own `sameDesign` guard, exercised directly rather
+  // than through `Sound`'s own key cache — the guard exists precisely so a
+  // caller that does *not* key-cache first (or, like `insideComet`, calls
+  // `roomFor` fresh on every restore) still cannot swap the convolver's
+  // buffer for an identical one.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const synth = new Synth();
+  synth.start();
+  let bufferCalls = 0;
+  const realCreateBuffer = ctx.createBuffer.bind(ctx);
+  ctx.createBuffer = (...args) => {
+    bufferCalls++;
+    return realCreateBuffer(...args);
+  };
+
+  const a = { tailSeconds: 0.5, tailCutoffHz: 4000, earlyReflections: [{ at: 0.04, gain: 0.5 }], wet: 0.3 };
+  const b = { tailSeconds: 0.5, tailCutoffHz: 4000, earlyReflections: [{ at: 0.04, gain: 0.5 }], wet: 0.3 }; // same fields, different object
+  synth.setSpace(a);
+  ok("the first setSpace builds a buffer", bufferCalls === 1, `${bufferCalls}`);
+  synth.setSpace(b);
+  ok(
+    "a structurally identical design, by a different reference, builds no second buffer",
+    bufferCalls === 1,
+    `${bufferCalls}`,
+  );
+  synth.setSpace({ ...b, wet: 0.31 }); // one field differs
+  ok("a genuinely different design still rebuilds", bufferCalls === 2, `${bufferCalls}`);
+  synth.setSpace({ ...b, wet: 0.31, earlyReflections: [{ at: 0.04, gain: 0.51 }] }); // reflections differ
+  ok("...reflections are compared too, not just the top-level fields", bufferCalls === 3, `${bufferCalls}`);
 }
 
 {
@@ -2326,6 +2380,33 @@ const { roomFor } = await import(join(out, "audio/acoustics.js"));
     s.room && s.room.name === "bare" && s.room.wet === 0,
     JSON.stringify(s.room),
   );
+}
+
+{
+  // `insideComet`'s own hysteresis: a player parked right at `COMET_STRIP_AT`
+  // must not chatter the latch. Starting outside, `0.52` (inside the band
+  // but under the 0.55 enter threshold) must not enter; `0.56` must. Now
+  // inside, `0.48` (inside the band but over the 0.45 exit threshold) must
+  // not exit; `0.44` must — the exact four-step sequence the finding named.
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const s = new Sound();
+  s.start();
+  s.listen(0, 0, 0);
+  s.enterSector("giant", false, 6, 3);
+
+  s.insideComet(0.52);
+  ok("0.52 from outside does not enter — under the 0.55 threshold", s.room.name === "giant", JSON.stringify(s.room));
+
+  s.insideComet(0.56);
+  ok("0.56 from outside does enter — clears the 0.55 threshold", s.room.name === "comet", JSON.stringify(s.room));
+
+  s.insideComet(0.48);
+  ok("0.48 from inside does not exit — over the 0.45 threshold", s.room.name === "comet", JSON.stringify(s.room));
+
+  s.insideComet(0.44);
+  ok("0.44 from inside does exit — under the 0.45 threshold", s.room.name === "giant", JSON.stringify(s.room));
 }
 
 {

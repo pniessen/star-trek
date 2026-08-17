@@ -28,7 +28,7 @@
  */
 
 import type { Phrase } from "./formant.js";
-import { renderImpulse, type RoomDesign } from "./acoustics.js";
+import { renderImpulse, sameDesign, type RoomDesign } from "./acoustics.js";
 
 export type { RoomDesign } from "./acoustics.js";
 
@@ -730,10 +730,19 @@ export class Synth {
    * impulse per sector, deterministic from the campaign seed), so a caller
    * that wants a reproducible room supplies its own generator rather than
    * relying on this default.
+   *
+   * Skips the rebuild outright when `design` is `sameDesign` as what is
+   * already on the convolver (`acoustics.ts`'s own helper — see its
+   * docblock): re-rendering an identical IR and swapping the buffer mid-decay
+   * is wasted work and an audible click for zero actual change, and a caller
+   * asking twice is a real case, not a hypothetical one — `insideComet`'s own
+   * hysteresis exists precisely because the reading it latches on can sit
+   * right at a threshold.
    */
   setSpace(design: RoomDesign | null, rng: () => number = Math.random): void {
     const rig = this.rig;
     if (!rig || this.failed) return;
+    if (sameDesign(design, this.spaceDesign)) return;
     try {
       this.spaceDesign = design;
       if (design) {

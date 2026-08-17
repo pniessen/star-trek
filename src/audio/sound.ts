@@ -95,6 +95,26 @@ const PING = {
 const CLOAK_WIND = 0.45;
 
 /**
+ * `COMET.stripAt` (`game/comet.ts`) — the threshold past which a Shroud
+ * loses its cloak and the scanner gives up on a contact entirely. Mirrored
+ * rather than imported for the reason every other mirrored constant in this
+ * file gives (see `PING`'s own docblock): `comet.ts` pulls in `three`, and
+ * this file is tsc-emitted standalone.
+ */
+const COMET_STRIP_AT = 0.5;
+
+/**
+ * The hysteresis band `insideComet` latches through, on either side of
+ * `COMET_STRIP_AT` — a player parked right at the tail's own edge reads
+ * `interference` chattering above and below 0.5 several times a second, and
+ * without a band every one of those flips would re-render an `AudioBuffer`
+ * and swap the convolver mid-decay: wasted work at best, an audible click at
+ * worst. Enter above `0.55`, exit below `0.45`; the strip between the two
+ * holds whichever side the latch already settled on.
+ */
+const COMET_ROOM_HYSTERESIS = 0.05;
+
+/**
  * Mirrors `game/hostiles.ts`'s own `HostileKind` — a structural copy rather
  * than an `import type`, for the same reason `PING` above is a mirrored
  * constant and `game/session.ts` declares its own `Rock` locally: the
@@ -449,18 +469,22 @@ export class Sound {
    * the game announces — you are in it or you are not, continuously, the
    * same way the drain and the scanner's own degradation already work.
    *
-   * `0.5` mirrors `COMET.stripAt` (`game/comet.ts`) — the threshold past
-   * which a Shroud loses its cloak and the scanner gives up on a contact
-   * entirely — rather than importing it, for the reason every other
-   * mirrored constant in this file gives (see `PING`'s own docblock):
-   * `comet.ts` pulls in `three`, and this file is tsc-emitted standalone.
-   *
-   * Edge-triggered: only acts when the inside/outside reading actually
-   * flips, so a player sitting still just inside the strip threshold does
-   * not re-render the same room's IR sixty times a second.
+   * Edge-triggered *with hysteresis*: while outside, only enters once
+   * `interference` clears `COMET_STRIP_AT + COMET_ROOM_HYSTERESIS`; while
+   * inside, only exits once it falls under `COMET_STRIP_AT -
+   * COMET_ROOM_HYSTERESIS`. A plain edge trigger at one threshold is exactly
+   * the failure mode this fixes: a player holding position right at the
+   * tail's edge reads as crossing `0.5` several times a second, and each
+   * crossing used to re-render the room's IR and swap the convolver
+   * mid-decay — `COMET_ROOM_HYSTERESIS`'s own docblock has the full case.
+   * `Synth.setSpace`'s own `sameDesign` guard is the second, independent
+   * line against the same failure — this is the one that stops it from
+   * being asked for in the first place.
    */
   insideComet(interference: number): void {
-    const inside = interference > 0.5;
+    const inside = this.inComet
+      ? interference >= COMET_STRIP_AT - COMET_ROOM_HYSTERESIS
+      : interference > COMET_STRIP_AT + COMET_ROOM_HYSTERESIS;
     if (inside === this.inComet) return;
     this.inComet = inside;
     if (inside) {
