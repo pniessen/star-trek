@@ -352,11 +352,22 @@ export class Hostile {
    * follow its own tell by at least `LANCE_LEAD` seconds, however long
    * `cooldown` sat waiting first.
    *
-   * If aim breaks (or the hostile starts withdrawing) while charged and
-   * before the lead has elapsed, this is discarded back to `null` rather
-   * than left standing — the tell was for a shot that is not coming, and
-   * the next attempt earns its own fresh, audible lead rather than firing
-   * off a stale one. Reset to `null` on the actual shot, same as before.
+   * If aim breaks (or the hostile starts withdrawing, or the target moves
+   * out of `reach`) while charged and before the lead has elapsed, this is
+   * discarded back to `null` rather than left standing — the tell was for a
+   * shot that is not coming, and the next attempt earns its own fresh,
+   * audible lead rather than firing off a stale one. Reset to `null` on the
+   * actual shot, same as before.
+   *
+   * **Range-gated, same as the shot itself.** The charge condition mirrors
+   * the fire condition's own `distance < reach` and the discard mirrors its
+   * negation (`distance >= reach`) — without it, a sniper could charge while
+   * briefly in range, keep closing while `chargedAt` sat unconditionally
+   * ticking toward `LANCE_LEAD`, and fire the instant it crossed back inside
+   * `reach`, seconds after the tell the player actually heard and no longer
+   * had any reason to expect a shot from. The tell is a promise about *this*
+   * approach, not a standing charge that can be cashed in whenever range
+   * happens to reopen.
    */
   private chargedAt: number | null = null;
 
@@ -547,18 +558,20 @@ export class Hostile {
     // docblock for why the shot has to wait on this rather than merely
     // follow it).
     if (this.kind === "sniper") {
-      if (this.chargedAt !== null && (aimError >= 0.4 || this.withdrawing || this.hidden)) {
-        // The tell was for a shot that is not coming — aim broke, or the
-        // hostile stopped fighting entirely. Discard rather than leave it
-        // standing, so the next attempt earns a fresh, audible lead instead
-        // of firing off a stale one the player never actually heard.
+      if (this.chargedAt !== null && (aimError >= 0.4 || this.withdrawing || this.hidden || distance >= reach)) {
+        // The tell was for a shot that is not coming — aim broke, the
+        // hostile stopped fighting entirely, or the target has drifted back
+        // out of `reach` while the charge sat ticking. Discard rather than
+        // leave it standing, so the next attempt earns a fresh, audible lead
+        // instead of firing off a stale one the player never actually heard.
         this.chargedAt = null;
       } else if (
         this.chargedAt === null &&
         !this.withdrawing &&
         !this.hidden &&
         this.cooldown <= LANCE_CHARGE_AT &&
-        aimError < 0.4
+        aimError < 0.4 &&
+        distance < reach
       ) {
         this.chargedAt = this.clock;
         sound.lanceCharge(this.position.x, this.position.z);
