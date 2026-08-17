@@ -496,8 +496,10 @@ export class Sound {
     const { level, pan } = this.place(x, z, 0.35);
     const g = this.synth.group();
     this.synth.play({
+      kind: "fm",
       group: g,
-      wave: "sawtooth",
+      ratio: 2.01,
+      index: 4,
       freq: 640,
       to: 430,
       level: 0.1 * level,
@@ -1481,9 +1483,15 @@ export class Sound {
       decay: 0.22,
     });
     this.synth.play({
+      kind: "fm",
       bus: "mechanism",
       group: g,
-      wave: "sine",
+      ratio: 1.41,
+      index: 8,
+      // Short against the layer's own 0.3s decay: the clunk's brightness
+      // sheds fast, settling into a plain low thud rather than ringing —
+      // the modal-strike character, not shieldHit's sustained metal.
+      indexDecay: 0.05,
       freq: 96,
       to: 52,
       level: 0.3,

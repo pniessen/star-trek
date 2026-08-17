@@ -846,6 +846,28 @@ let chain;
   ok("out of earshot, it plays nothing", gone.length === 0, `${gone.length}`);
 }
 
+// ── 8. the fm voice: a modulator into the carrier's frequency ──────────────
+
+{
+  const ctx = makeContext();
+  globalThis.AudioContext = function () { return ctx; };
+  nodes = [];
+  const synth = new Synth();
+  synth.start();
+  const from = mark();
+  synth.play({ kind: "fm", bus: "impact", freq: 220, ratio: 1.4, index: 6, decay: 0.3, level: 0.3 });
+  const fresh = nodes.slice(from);
+  const oscs = fresh.filter((n) => n.kind === "oscillator");
+  ok("fm builds two oscillators", oscs.length === 2, `${oscs.length}`);
+  const carrier = oscs.find((o) => fresh.some((g) => g.kind === "gain" && o.out.includes(g) && g.gain.events[0] && g.gain.events[0][1] === 0.0001));
+  const modulator = oscs.find((o) => o !== carrier);
+  ok("the modulator drives the carrier's frequency, not the output",
+    modulator && modulator.out.some((g) => g.kind === "gain" && g.out.includes(carrier.frequency)), "modulator not routed to carrier.frequency");
+  near("the modulator sits at ratio × carrier", modulator ? modulator.frequency.events[0][1] : 0, 220 * 1.4, 1e-6);
+  const modGain = fresh.find((g) => g.kind === "gain" && modulator && modulator.out.includes(g));
+  ok("the index decays (a ramp is scheduled on the modulator gain)", modGain && modGain.gain.events.length >= 2, "index has no envelope");
+}
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 console.warn = realWarn;

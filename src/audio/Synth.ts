@@ -50,16 +50,27 @@ export type Bus =
   | "echo";
 
 export interface VoiceSpec {
-  /** Pitched by default; `noise` swaps the oscillator for filtered noise. */
-  readonly kind?: "tone" | "noise";
+  /**
+   * Pitched by default; `noise` swaps the oscillator for filtered noise;
+   * `fm` adds a second oscillator that modulates the first's pitch — a
+   * struck bell rather than a held tone, since the modulation index decays
+   * on its own envelope (`indexDecay`) independent of the voice's own.
+   */
+  readonly kind?: "tone" | "noise" | "fm";
   readonly bus?: Bus;
-  /** Tone: starting pitch. Noise: starting filter frequency. */
+  /** Tone/fm: starting pitch (fm: the carrier's). Noise: starting filter frequency. */
   readonly freq: number;
-  /** Glide/sweep target, arrived at as the envelope ends. */
+  /** Glide/sweep target, arrived at as the envelope ends. Fm: the carrier's. */
   readonly to?: number;
   readonly wave?: OscillatorType;
   readonly filter?: BiquadFilterType;
   readonly q?: number;
+  /** Fm only: modulator/carrier frequency ratio. Default 1.4. */
+  readonly ratio?: number;
+  /** Fm only: peak modulation depth, in Hz-of-carrier units (modulator gain = index × freq). Default 3. */
+  readonly index?: number;
+  /** Fm only: seconds for the index to fall to ~zero. Default the voice's own `decay`. */
+  readonly indexDecay?: number;
   /** Peak gain within the bus. */
   readonly level: number;
   readonly attack?: number;
@@ -308,6 +319,28 @@ export class Synth {
         player.playbackRate.value = 0.85 + Math.random() * 0.35;
         player.start(at, Math.random() * (rig.noise.duration - 0.5));
         source = player;
+      } else if (spec.kind === "fm") {
+        const carrier = ctx.createOscillator();
+        carrier.type = spec.wave ?? "sine";
+        carrier.frequency.setValueAtTime(clamp(spec.freq, 20, 18000), at);
+        if (spec.to !== undefined) carrier.frequency.exponentialRampToValueAtTime(clamp(spec.to, 20, 18000), end);
+        const modulator = ctx.createOscillator();
+        modulator.type = "sine";
+        const ratio = spec.ratio ?? 1.4;
+        modulator.frequency.setValueAtTime(clamp(spec.freq * ratio, 1, 18000), at);
+        const depth = ctx.createGain();
+        const index = spec.index ?? 3;
+        depth.gain.setValueAtTime(index * spec.freq, at);
+        // The index is the timbre's own envelope: bright and inharmonic on the
+        // attack, settling toward a plain tone — a struck bell, not a held one.
+        depth.gain.exponentialRampToValueAtTime(0.01, at + Math.max(spec.indexDecay ?? spec.decay, 0.01));
+        modulator.connect(depth).connect(carrier.frequency);
+        carrier.connect(gain);
+        modulator.start(at);
+        carrier.start(at);
+        modulator.stop(end + 0.02);
+        chain.push(depth, modulator);
+        source = carrier;
       } else {
         const osc = ctx.createOscillator();
         osc.type = spec.wave ?? "sine";
