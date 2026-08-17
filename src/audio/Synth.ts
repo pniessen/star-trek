@@ -5,9 +5,11 @@
  * one stroke buffer, and every glyph out of one stroke font, because a look
  * comes from a small vocabulary used consistently rather than from a bespoke
  * object per effect. This is the same argument in the other medium. There are
- * exactly two voices here: a pitched oscillator that can glide, and filtered
- * noise whose filter can sweep. A phaser, a hard dock, a mine going off and the
- * Shroud materialising are all combinations of those two with different
+ * three voices here: a pitched oscillator that can glide, filtered noise
+ * whose filter can sweep, and a pair of oscillators — carrier and modulator —
+ * where the second rings the first's pitch and its own depth decays, a struck
+ * bell rather than a held tone. A phaser, a hard dock, a mine going off and
+ * the Shroud materialising are all combinations of these three with different
  * envelopes, which is why they sound like they came off the same bench.
  *
  * Two rules the rest of the game depends on:
