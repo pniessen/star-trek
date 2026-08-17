@@ -128,13 +128,22 @@ export class Sound {
   private reactor: Bed | null = null;
 
   /**
-   * Audio-clock time the next relay tick is due. Wall-clock (`ctx.currentTime`),
-   * like `Bed.dip`, so the tick's own rhythm survives hit-stop and frame
-   * stutter alike. `0` both at boot and whenever `starved` goes false, so a
-   * fresh starved window always ticks on its first live frame rather than
-   * waiting out whatever was left of the last window's period.
+   * Audio-clock time (`ctx.currentTime`) the relay tick last fired — never
+   * the next-due time, and never reset just because `starved` went false for
+   * a frame. `Ship.updateEnergy` skips the drain outright while starved
+   * (`if (!this.starved) this.energy -= ...`) but always applies regen, so a
+   * ship parked at the impulse floor genuinely oscillates in and out of
+   * `starved` a few times a second — regen ticks it just above the floor,
+   * the next frame's un-drained thrust (or simple regen settling) can tick
+   * it back under. A reset-on-exit accumulator would fire on every one of
+   * those re-entries and the tick's own 1.4 s cadence would collapse to a
+   * buzz exactly during the sustained-starved moment it exists to mark.
+   * A minimum-gap timer instead: while starved, tick only once
+   * `REACTOR_TICK_INTERVAL` has actually elapsed since the last one, flicker
+   * or not. Reset only on `silence()` — a new run, or the title screen —
+   * never merely on `starved` clearing.
    */
-  private reactorTickAt = 0;
+  private reactorTickAt = -Infinity;
 
   /** The listener: where the ship is and which way it is pointing. */
   private lx = 0;
@@ -233,11 +242,15 @@ export class Sound {
     // The relay tick. A sparse click rather than an alarm — starved is
     // already said by the pitch drop, this only marks time while it lasts.
     // Scheduled off the audio clock so hit-stop and frame stutter cannot
-    // speed it up or stall it, the same reasoning `Bed.dip` uses.
+    // speed it up or stall it, the same reasoning `Bed.dip` uses. A
+    // minimum-gap timer against the *last* tick, not a due-time accumulator
+    // that resets on every un-starve — see `reactorTickAt`'s own docblock
+    // for why a flickering `starved` would otherwise buzz this well past its
+    // documented ~1.4 s cadence.
     if (scene.alive && scene.starved) {
       const now = this.synth.context?.ctx.currentTime;
-      if (now !== undefined && now >= this.reactorTickAt) {
-        this.reactorTickAt = now + REACTOR_TICK_INTERVAL;
+      if (now !== undefined && now - this.reactorTickAt >= REACTOR_TICK_INTERVAL) {
+        this.reactorTickAt = now;
         // On `panel`, not `bed`: the bed bus's cap of 2 is already spent on
         // the engine and the reactor themselves, so a third bed-bus voice
         // would be refused outright. This is a relay click on the panel, the
@@ -253,8 +266,6 @@ export class Sound {
           decay: 0.03,
         });
       }
-    } else {
-      this.reactorTickAt = 0;
     }
   }
 
@@ -273,6 +284,10 @@ export class Sound {
   /** A restart, a mode change, a death: whatever was ringing stops ringing. */
   silence(): void {
     this.synth.silence();
+    // A new run (or the title screen) starts the relay tick's own clock
+    // fresh rather than inheriting a `reactorTickAt` from whatever the last
+    // run's reserve was doing when it ended.
+    this.reactorTickAt = -Infinity;
   }
 
   // ── weapons ──────────────────────────────────────────────────────────────

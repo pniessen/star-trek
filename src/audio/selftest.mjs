@@ -1270,8 +1270,10 @@ let chain;
     );
   ok("at least one relay tick fires within 3s of a starved reserve", ticks.length >= 1, `${ticks.length}`);
 
-  // Un-starved: the tick stops, and the accumulator resets rather than
-  // firing a backlog the instant starved next returns.
+  // Un-starved: the tick simply stops firing — `reactorTickAt` is a
+  // minimum-gap timestamp now, not a due-time accumulator, so it is *not*
+  // reset here (see the flicker regression below for why that distinction
+  // matters).
   s.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 1, starved: false });
   const quietFrom = mark();
   for (let i = 0; i < 6; i++) {
@@ -1282,6 +1284,84 @@ let chain;
     .slice(quietFrom)
     .filter((n) => n.kind === "biquad" && n.type === "highpass" && n.frequency.events[0] && n.frequency.events[0][1] === 3200);
   ok("the relay tick stops once the reserve is no longer starved", noTicks.length === 0, `${noTicks.length}`);
+
+  // The flicker regression (review finding): `Ship.updateEnergy` skips the
+  // drain outright while starved but always applies regen, so a ship pinned
+  // at the impulse floor genuinely oscillates in and out of `starved` a few
+  // times a second — regen ticks it just above the floor, the next frame's
+  // settling ticks it back under. A reset-on-exit accumulator would fire on
+  // every one of those re-entries; the minimum-gap timer must not. Stress it
+  // harder than the real ~0.35-0.4s cycle: alternate every 0.1s for 3s.
+  const ctx2 = makeContext();
+  globalThis.AudioContext = function () { return ctx2; };
+  nodes = [];
+  const flicker = new Sound();
+  flicker.start();
+  flicker.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 0.02, starved: true });
+  const panelBus2 = flicker.synth.context.buses.panel;
+  const flickerFrom = mark();
+  for (let i = 0; i < 30; i++) {
+    ctx2.currentTime += 0.1;
+    flicker.update({
+      threat: 0,
+      hull: 1,
+      thrust: 0,
+      speed: 0,
+      alive: true,
+      docked: false,
+      energy: 0.02,
+      starved: i % 2 === 0,
+    });
+  }
+  const flickerTicks = nodes
+    .slice(flickerFrom)
+    .filter(
+      (n) =>
+        n.kind === "biquad" &&
+        n.type === "highpass" &&
+        n.frequency.events[0] &&
+        n.frequency.events[0][1] === 3200 &&
+        n.out.some((g) => g.kind === "gain" && g.out.includes(panelBus2)),
+    );
+  // ≈ 3s / 1.4s, rounded up — not the ~15 a reset-on-exit accumulator would
+  // produce by ticking on nearly every other 0.1s step.
+  ok(
+    "a flickering starved state does not speed the relay tick past its own cadence",
+    flickerTicks.length <= 3,
+    `${flickerTicks.length}`,
+  );
+
+  // silence() — a new run, or the title screen — resets the timer, so it is
+  // the one place a stale gap from a *previous* run's reserve is allowed to
+  // be thrown away.
+  const ctx3 = makeContext();
+  globalThis.AudioContext = function () { return ctx3; };
+  nodes = [];
+  const s3 = new Sound();
+  s3.start();
+  s3.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 0.02, starved: true });
+  s3.silence();
+  const panelBus3 = s3.synth.context.buses.panel;
+  const afterSilence = mark();
+  // Barely any audio time passes — well under the 1.4s cadence — so this
+  // only ticks if `silence()` actually reset the timestamp.
+  ctx3.currentTime += 0.05;
+  s3.update({ threat: 0, hull: 1, thrust: 0, speed: 0, alive: true, docked: false, energy: 0.02, starved: true });
+  const ticksAfterSilence = nodes
+    .slice(afterSilence)
+    .filter(
+      (n) =>
+        n.kind === "biquad" &&
+        n.type === "highpass" &&
+        n.frequency.events[0] &&
+        n.frequency.events[0][1] === 3200 &&
+        n.out.some((g) => g.kind === "gain" && g.out.includes(panelBus3)),
+    );
+  ok(
+    "silence() resets the relay timer, so the next run's first starved frame ticks immediately",
+    ticksAfterSilence.length === 1,
+    `${ticksAfterSilence.length}`,
+  );
 }
 
 // ── report ─────────────────────────────────────────────────────────────────
