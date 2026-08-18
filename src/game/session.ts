@@ -80,7 +80,18 @@ export interface CombatInput {
   readonly brace: boolean;
 }
 
-const WAVE_BREAK = 2.6;
+/**
+ * Seconds of quiet between waves.
+ *
+ * A field of an object rather than a bare `const` for one reason: the tuning
+ * console (`game/tuning.ts`) writes to the numbers on its list while the game
+ * is running, and a module-level primitive is the one shape it cannot reach.
+ * Every reader below goes through `PACING.waveBreak`, so the indirection costs
+ * a property lookup and buys the break being adjustable from the keyboard.
+ */
+export const PACING = {
+  waveBreak: 2.6,
+};
 /**
  * The base sphere projectiles test the player against, before the hull's own
  * scaling. A Galaxy is a genuinely bigger target and a Defiant a smaller one —
@@ -121,15 +132,15 @@ export const ROCKS = {
  * band for free. `cooldown` keeps a dense wave from turning the cue into a
  * bed — one voice at a time is what makes it read as a specific event.
  */
-const NEAR_MISS = {
+export const NEAR_MISS = {
   outer: 4.5,
   cooldown: 0.4,
-} as const;
+};
 
 /**
  * Seconds the arrival card holds. Short on purpose: it has to say "you are now
  * here" and then stop being in the way, because the fight it arrived into is
- * already running. Slightly under `WAVE_BREAK`, so the card is gone by the
+ * already running. Slightly under `PACING.waveBreak`, so the card is gone by the
  * time the destination's first wave announces itself.
  */
 const ARRIVAL_CARD = 2.4;
@@ -344,7 +355,7 @@ export class Session {
    */
   lastRun = { wave: 0, kills: 0, lost: 0, score: 0 };
 
-  breakTimer = WAVE_BREAK;
+  breakTimer = PACING.waveBreak;
   message = "STAND BY";
   /**
    * HQ's channel. It has its own row and its own clock — it used to borrow this
@@ -1619,7 +1630,7 @@ export class Session {
 
     if (this.state === "fighting") {
       this.state = "clear";
-      this.breakTimer = WAVE_BREAK;
+      this.breakTimer = PACING.waveBreak;
       // Clearing a wave in a sector with a committed attack against it is the
       // interception — the whole reason to read the chart mid-run rather than
       // only between runs. But the "fighting" flag reaching this point can

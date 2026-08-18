@@ -38,7 +38,11 @@ under half, **`Z` tapped strips the three after facings and stacks them into the
 bow**, R restart. `G`
 toggles wireframe vs occluded, `B`/`F`/`V` toggle bloom/phosphor/CRT, `M` mutes,
 **`L` turns the deck log off and back on**, **`Y` switches the altitude slab off
-and back on**, `1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics.
+and back on**, `1`/`2`/`3` switch cockpit/chase/orbit, `H` hides diagnostics,
+**`` ` `` opens the tuning console** — `,`/`.` pick a knob, `;`/`'` move it
+(held, with a repeat), `/` turns the page, `0` resets one knob, `\` copies a
+paste-ready patch. It does not pause the game and it does not touch a
+flight key.
 
 **WASD moves the sector cursor on every screen that has a grid**, and nothing
 else ever does. `Tab` raises the chart without pausing the game; WASD moves its
@@ -177,7 +181,9 @@ src/render/   Stage (post chain), VectorObject (the two draw modes),
 src/geometry/ hulls.ts — every ship, built from merged low-poly primitives
 src/game/     Ship, altitude (the slab, its constants and its switch), session
               (rules), docking, death, hostiles, allies (the Warden), weapons,
-              debris, hitStop, presentation (the title/attract/run shell)
+              debris, hitStop, presentation (the title/attract/run shell),
+              tuning (the console's registry — every knob, and the patch it
+              dumps; `hud/tuning.ts` is the panel that draws it)
 src/chart/    campaign state, the enemy turn, the economy and the four
               decisions, persistence, and the chart renderer (both modes)
 src/hud/      Hud (stroke buffer), draw.ts (layout), strokeFont.ts
@@ -408,6 +414,36 @@ rather than teach the harness a new global. See `render/scenery.ts`,
 `render/Moon.ts`, `render/SunHero.ts`, `render/Asteroids.ts` and
 `render/Shoals.ts`.
 
+Also built: **the tuning console**, the answer to every other item on this
+list having been reasoned about rather than played. `docs/todo.md` §2 is six
+hundred lines of first-draft constants and `status.md`'s roadmap says outright
+that tuning "is the one item on the list that cannot be done by reasoning about
+it" — but what actually stopped it was the loop: play, form an opinion, quit,
+find the constant, edit, rebuild, fly back, and by then the opinion is a memory
+of an opinion. `` ` `` opens a stroke-drawn panel over the right-hand column
+carrying seven pages — the flight model, the slab, the brace, weapons, feel, the
+Loom and the mix — with a track showing where each number sits in its own range
+and a second mark showing where the file still says it should be.
+**It does not pause the game**, for the reason the chart does not: a number is
+judged against the thing it governs while that thing is happening. **It does not
+touch a flight key** — the arrows, WASD, Space, X, C, Z, Shift and Tab are
+untouched by construction, and `tools/playtest.mjs` asserts the two keyboards do
+not overlap, which is the one property here that could regress with nothing
+looking wrong. **Nothing persists**, in line with the gotcha below: `\` dumps a
+paste-ready patch grouped by file with every old value beside its new one, and
+that patch is the whole output — the findings survive by being pasted into the
+files they came from, which is also the only form in which they can be reviewed
+or argued with. A reload is the reset, which is why there is no key for one.
+Three shapes had to change to be reachable and each is documented where it
+lives: the flight model's statics on `Ship` gave up `private readonly` rather
+than being written through a cast that would have made the file lie about
+itself, `WAVE_BREAK` became `PACING.waveBreak` because a module-level primitive
+is the one shape nothing outside can nudge, and the mix goes through
+`Synth.setBusLevel` because a bus level lives in a `GainNode` as well as in a
+table. The console is **not** gated on localhost — it is a tool, not a probe,
+which is half of `docs/todo.md` §6.1's complaint answered. See
+`game/tuning.ts` and `hud/tuning.ts`.
+
 Also built: **the finite invasion**, the answer to `campaign-balance.md`'s
 finding that a war with one input — `gainGround` — can only be passed or
 failed, never contested. The enemy now spends from a **reserve** rather than
@@ -535,7 +571,11 @@ sits at one fixed world position however the chart is drawn).
 
 ## Next, in order
 
-1. **Tuning, now including the mix.** Every audio level and envelope was chosen
+1. **Tuning, now including the mix.** **The instrument for this now exists** —
+   `` ` `` opens the tuning console, which carries the flight model, the slab,
+   the brace, weapons, feel, the Loom and the mix on seven pages and dumps a
+   paste-ready patch, so what is left is the sitting itself rather than the
+   round trip that kept preventing it. Every audio level and envelope was chosen
    by reasoning about it rather than by hearing it, so `BUS_LEVELS`, the phaser's
    cadence and pitch pair, and the alert's `FULL_THREAT` are first-draft
    guesses in exactly the way the flight model is: `Ship.TURN_ACCEL/TURN_DAMP/
@@ -622,12 +662,20 @@ sits at one fixed world position however the chart is drawn).
   wide the return's own drawn uncertainty was) are the probe's own hooks
   onto state a screenshot cannot show. `.lastLanceCharge` is the same idea
   for the Lance's own charge tell.
+  **`__tuning` is the exception and is exposed on every host**, the way
+  `__scenery` already is and for the same reason — the harness is its consumer
+  and does not run on `localhost`. It carries the live `tuner`, `patch()` and
+  the knob registry, so a script can read and move any tunable number without a
+  keypress. The console it belongs to is ungated too, which is why the Loom's
+  `rise` can now be tuned on the build being played even though `__loom.seed()`
+  still cannot summon one there.
   `__probe.state` is still only `clear`/`fighting`/`dead`; the title and attract
   screens are `__probe.mode`, which is the shell around a run, not a combat
   phase. **A headless run must launch itself** — the page now lands on the
   title, so a harness has to press a key (or call
   `window.__presentation.startRun()`) before anything spawns.
-- **No display setting persists**, the deck log switch included. The shape
+- **No display setting persists**, the deck log switch included, and neither
+  does anything the tuning console moves — a reload is its reset, deliberately. The shape
   mode, the three post passes, the diagnostics, the mute, the slab and `L` are
   all plain in-memory fields that reset on reload; `kobayashi.campaign` is the
   only thing this game writes to storage. Adding persistence is a decision to

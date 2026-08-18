@@ -85,7 +85,7 @@ export const BRACE = {
    * of quietly spending everything for a sliver — see `Ship.brace`.
    */
   minimum: 0.25,
-} as const;
+};
 
 /**
  * Flight on a floor, Asteroids-style: you rotate, you thrust along your facing,
@@ -176,12 +176,25 @@ export class Ship {
   /** The same, for the dive key. Never true at the same time as `climbing`. */
   diving = false;
 
-  private static readonly TURN_ACCEL = 5.4;
-  private static readonly TURN_DAMP = 3.6;
-  private static readonly MAX_TURN = 2.1;
-  private static readonly THRUST = 26;
-  private static readonly DRAG = 0.44;
-  private static readonly MAX_SPEED = 62;
+  /**
+   * The flight model, and the reason these nine are `static` rather than
+   * `private static readonly`.
+   *
+   * They are the block `docs/todo.md` §2 names first and the block nobody has
+   * ever flown, so the tuning console (`game/tuning.ts`) writes to them from
+   * the keyboard mid-run. `private` and `readonly` would both be lies the
+   * moment it did, and a cast that defeats them is a lie that does not even
+   * show up in the file it is told about. Public and mutable is the honest
+   * shape for a number a player is expected to nudge; `Ship.TURN_ACCEL` still
+   * reads exactly as it did, which is what keeps every doc comment in
+   * `altitude.ts`, `loom.ts` and `comet.ts` that names one of these true.
+   */
+  static TURN_ACCEL = 5.4;
+  static TURN_DAMP = 3.6;
+  static MAX_TURN = 2.1;
+  static THRUST = 26;
+  static DRAG = 0.44;
+  static MAX_SPEED = 62;
 
   /** Energy per second at full burn. */
   /**
@@ -193,8 +206,8 @@ export class Ship {
    * decision into an errand. Every drain came down together and the trickle came
    * up, so the reserve lasts roughly twice as long as it did.
    */
-  private static readonly THRUST_DRAIN = 0.024;
-  private static readonly SHIELD_REGEN = 0.06;
+  static THRUST_DRAIN = 0.024;
+  static SHIELD_REGEN = 0.06;
   /**
    * The trickle, and it is the floor every other cost is measured against — which
    * is the mistake worth recording here rather than in a commit nobody re-reads.
@@ -210,11 +223,11 @@ export class Ship {
    * faster refill is part of not having to dock, but it stays well under every
    * cost it is competing with.
    */
-  private static readonly RESERVE_REGEN = 0.016;
+  static RESERVE_REGEN = 0.016;
   /** Reserve at or below which the drive falls back to impulse. */
-  private static readonly IMPULSE_FLOOR = 0.02;
+  static IMPULSE_FLOOR = 0.02;
   /** Fraction of full thrust available with nothing in the reserve. */
-  private static readonly IMPULSE = 0.32;
+  static IMPULSE = 0.32;
 
   /** Rounds carried, which torpedo racks raise. */
   get torpedoCapacity(): number {

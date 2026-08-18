@@ -99,7 +99,7 @@ export const ALTITUDE = {
    * steeper one for the new.
    */
   drain: 0.038,
-} as const;
+};
 
 /**
  * The switch, so it can be flown both ways.

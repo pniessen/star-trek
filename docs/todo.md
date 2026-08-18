@@ -77,6 +77,26 @@ rather than built.
 Every constant below was chosen by reasoning about it. None has been played or
 heard. This is the one block of work that cannot be done by thinking harder.
 
+**The instrument now exists.** `` ` `` opens the tuning console
+(`src/game/tuning.ts`, drawn by `src/hud/tuning.ts`): seven pages — the flight
+model, the slab, the brace, weapons, feel, the Loom and the mix — each knob
+carrying its range, a track showing where it sits in that range, a second mark
+showing where the file still says it should be, and one line on what question
+that particular number decides. `;`/`'` move the highlighted value and repeat
+while held; `\` dumps a paste-ready patch, grouped by file, with every old
+value beside its new one. It does not pause the game and it does not touch a
+flight key, so a number is moved while the thing it governs is happening. It is
+not gated on localhost, which is half of §6.1 below.
+
+What it does **not** cover, and why: everything on the list whose home is not a
+number in a plain object. The death sequence's `TIMING`, the attract loop's
+dwell times, the multiplier gain, `DebrisField.ring`'s radius curve and the
+`1 + yield` salvage curve are all either local constants inside a function or
+expressions rather than fields, and each would need the same small structural
+change `PACING.waveBreak` took before a knob could reach it. Worth doing when
+the sitting reaches them, not before — a registry entry for a number nobody has
+asked to move yet is scope, not coverage.
+
 **Flight and combat**
 `Ship.TURN_ACCEL / TURN_DAMP / MAX_TURN / DRAG`, `PHASER.falloffStart/End`,
 `WAVE_BREAK`, multiplier gain, `HIT_STOP` (now including `heavyKill = kill ×
@@ -901,6 +921,17 @@ expose a deliberately narrow probe on the deployed build, or make the Loom a
 scheduled event at a known escalation index so a run that gets far enough is
 guaranteed to meet one.
 
+**Half-answered, 2026-08-17.** The tuning console (§2) is not gated on
+`DEBUG_PROBE` — it is a tool rather than a probe, and `__tuning` beside it is
+exposed on every host the way `__scenery` already is. So `LOOM.rise` and every
+other number on its list can now be moved on the build actually being played,
+which is the "a feature that rare, on a build where it cannot be forced, will
+never be tuned" half of the complaint. The other half stands unchanged:
+`__loom.seed()` is still localhost-only, so on the deployed build a Loom still
+cannot be *summoned* — only tuned once one turns up on its own one-in-ten roll.
+The decision this section asks for is therefore still open, and now smaller:
+it is about forcing the encounter, not about reaching its constants.
+
 ### 6.2 Known flakes in `tools/playtest.mjs`
 
 Three pre-existing checks have each been observed to fail independently,
@@ -926,6 +957,16 @@ anything any task here actually changed:
   observed it recur twice regardless, under extra load from a concurrent
   browser tab, and confirmed the same diagnosis on a clean, uncontended
   retry.
+
+**A fourth was found and fixed, 2026-08-17**, and unlike the three above it
+had a cause rather than a timing budget: "forcing a bare sector leaves the
+room bone dry within a frame" asserted `wet === 0`, but a gas shoal is rolled
+independently of `planHero` (`main.ts` says so in as many words), so a `bare`
+sector carrying a curtain is `bare+shoal` with `wet = 0.1` and the assertion
+failed. It only showed up run to run because the campaign seed does — roughly
+one run in five. The sector search now skips any sector with a shoal, which
+makes the room's name exactly the hero's for both this check and the `rocks`
+one beside it.
 
 Worth a maintainer's attention if any starts failing CI intermittently, but
 these are known rather than new defects, and out of scope for a docs pass to

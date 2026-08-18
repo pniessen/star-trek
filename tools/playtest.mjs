@@ -114,6 +114,76 @@ check("...and not off to the side", vol.outside === 0, `v=${vol.outside}`);
 check("...and fades toward the edge", vol.edge > 0 && vol.edge < vol.onAxis, `edge=${vol.edge} axis=${vol.onAxis}`);
 check("no comet, no interference", vol.none === 0, `v=${vol.none}`);
 
+// ── the tuning console ──────────────────────────────────────────────────────
+// Asserted here, before a run exists, for the reason the two pure-function
+// blocks around it are: the console works on the title screen and nothing it
+// touches needs a session. It is also the safest place for it — every key
+// pressed below is either a display toggle or one the open console eats, so
+// none of them launches a run and the sequencing after this point is
+// untouched. The block puts everything back before it leaves.
+const consoleKeys = await page.evaluate(() => window.__tuning.keys);
+// The one property of this feature that can regress silently: a key added to
+// the console that the ship already flies with. `Z` and `C` are the two most
+// recent additions to the ship's own keyboard and the two most likely to be
+// forgotten, so the ship's whole control surface is spelled out rather than
+// sampled.
+const flightKeys = [
+  "arrowup", "arrowdown", "arrowleft", "arrowright",
+  "w", "a", "s", "d", "q", "e", " ", "x", "c", "z", "shift", "tab", "r",
+];
+check(
+  "the console's keyboard does not overlap the ship's",
+  flightKeys.every((k) => !consoleKeys.includes(k)),
+  `console=${consoleKeys.join("")}`,
+);
+
+await page.keyboard.press("`");
+check("backquote opens the console", (await page.evaluate(() => window.__tuning.tuner.open)) === true);
+
+// `'` is one step on the highlighted knob, and the first knob of the first
+// block is `Ship.TURN_ACCEL` — the oldest first-draft guess in the game and
+// the reason the console exists at all.
+const knobWas = await page.evaluate(() => window.__tuning.blocks[0].knobs[0].read());
+await page.keyboard.press("'");
+const knobNow = await page.evaluate(() => window.__tuning.blocks[0].knobs[0].read());
+const knobStep = await page.evaluate(() => window.__tuning.blocks[0].knobs[0].step);
+check("a tap moves the knob exactly one step", Math.abs(knobNow - knobWas - knobStep) < 1e-9, `${knobWas} -> ${knobNow}`);
+check("...and the ship is actually flying it", (await page.evaluate(() => window.__player.constructor.TURN_ACCEL)) === knobNow, `Ship.TURN_ACCEL=${knobNow}`);
+
+const dump = await page.evaluate(() => window.__tuning.patch());
+check("the patch names the file, the field and what it used to say",
+  dump.includes("src/game/Ship.ts") && dump.includes("TURN_ACCEL") && dump.includes(`was ${knobWas}`),
+  dump.replace(/\n/g, " | "));
+
+// `,` and `.` walk the list, `/` turns the page. Checked together because a
+// page turn has to reset the row or the cursor lands past the end of a
+// shorter block.
+await page.keyboard.press(".");
+check("a step down the list moves the highlight", (await page.evaluate(() => window.__tuning.tuner.row)) === 1);
+await page.keyboard.press(",");
+check("...and a step back up returns it", (await page.evaluate(() => window.__tuning.tuner.row)) === 0);
+await page.keyboard.press("/");
+const paged = await page.evaluate(() => ({ block: window.__tuning.tuner.block, row: window.__tuning.tuner.row }));
+check("a page turn changes block and resets the row", paged.block === 1 && paged.row === 0, JSON.stringify(paged));
+
+// Back to the first block, then put the knob back — the rest of this file
+// flies the ship and must fly the one the source describes.
+await page.keyboard.press("/");
+await page.keyboard.press("/");
+await page.keyboard.press("/");
+await page.keyboard.press("/");
+await page.keyboard.press("/");
+await page.keyboard.press("/");
+await page.keyboard.press("0");
+check("reset puts the knob back to what the file says",
+  (await page.evaluate(() => window.__tuning.patch())).includes("nothing moved"),
+  await page.evaluate(() => window.__tuning.blocks[0].knobs[0].read()),
+);
+
+await page.keyboard.press("`");
+check("backquote closes it again", (await page.evaluate(() => window.__tuning.tuner.open)) === false);
+check("...and the title screen is still the title screen", (await probe()).mode === "title", (await probe()).mode);
+
 // ── the sector's star is pure and seeded ────────────────────────────────────
 // `planLight`/`shadeAt` (`render/light.ts`) are pure functions with nothing
 // wired into a run yet — Task 3 is the first consumer — so, like the comet's
@@ -417,11 +487,20 @@ if (!shoalWiring.skip) {
 await page.keyboard.press("h");
 const roomSectors = await page.evaluate(async () => {
   const { planHero } = await import("/src/render/scenery.ts");
+  const { planShoal } = await import("/src/render/Shoals.ts");
   const seed = window.__campaign.seed;
   const sectorBefore = window.__campaign.current;
   let bareSector = -1;
   let rockSector = -1;
   for (let s = 0; s < 64 && (bareSector < 0 || rockSector < 0); s++) {
+    // A shoal is rolled independently of the hero (`main.ts`'s own comment
+    // says so: "not `planHero`'s — so a shoal can stand in a `bare` sector"),
+    // and `roomFor` then hands back `bare+shoal` with a non-zero `wet`. The
+    // bare assertion below asserts `wet === 0`, so a bare sector that happens
+    // to carry a curtain fails it — a real ~20% flake, since the campaign
+    // seed differs run to run. Both sectors are therefore required to be
+    // shoal-free, which is what makes the room's name exactly the hero's.
+    if (planShoal(seed, s)) continue;
     const kind = planHero(seed, s);
     if (bareSector < 0 && kind === "bare") bareSector = s;
     if (rockSector < 0 && kind === "rocks") rockSector = s;

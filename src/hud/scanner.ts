@@ -74,7 +74,7 @@ export const SCANNER = {
   altitudeScale: 1.4,
   /** A return this fresh lights the annunciator. */
   alertAge: 1.8,
-} as const;
+};
 
 export interface Ghost {
   readonly x: number;

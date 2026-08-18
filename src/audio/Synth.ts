@@ -155,8 +155,17 @@ const BUS_CAPS: Record<Bus, number> = {
   echo: 3,
 };
 
-/** Peak gain per bus. The entire mix balance is these nine numbers. */
-const BUS_LEVELS: Record<Bus, number> = {
+/**
+ * Peak gain per bus. The entire mix balance is these nine numbers.
+ *
+ * Exported and mutable, because they are the block `docs/todo.md` §2 calls
+ * first-draft guesses "in exactly the way the flight model is" and the mix
+ * is the one thing here that cannot be judged except by hearing it. The
+ * tuning console reaches them through `Synth.setBusLevel`, never by writing
+ * this record directly — the levels are baked into a `GainNode` when the rig
+ * is built, so a write here alone would change the number and not the sound.
+ */
+export const BUS_LEVELS: Record<Bus, number> = {
   weapon: 0.5,
   impact: 0.85,
   hostile: 0.7,
@@ -316,6 +325,29 @@ export class Synth {
       // Ramped rather than switched: a gain that steps to zero clicks, and a
       // click is the one sound in the game nobody authored.
       rig.master.gain.setTargetAtTime(value ? 0 : 1, rig.ctx.currentTime, 0.02);
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * Move one bus's peak level, on the rig as well as in the table.
+   *
+   * The mix is nine numbers and none of them has ever been heard, so they are
+   * on the tuning console's list — and a bus level is the one kind of knob that
+   * needs a method rather than a plain field write. `BUS_LEVELS[bus]` is read
+   * when the graph is built and when `duck` computes what to recover to; the
+   * live gain is a node. Both have to move together or the next duck would
+   * snap the bus back to the level the player just tuned away from.
+   *
+   * Ramped for the same reason `muted` is: a gain that steps clicks.
+   */
+  setBusLevel(bus: Bus, level: number): void {
+    BUS_LEVELS[bus] = level;
+    const rig = this.rig;
+    if (!rig || this.failed) return;
+    try {
+      rig.buses[bus].gain.setTargetAtTime(level, rig.ctx.currentTime, 0.02);
     } catch (error) {
       this.fail(error);
     }

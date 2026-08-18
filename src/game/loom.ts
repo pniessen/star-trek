@@ -209,7 +209,7 @@ export const LOOM = {
    * your position in the fight you were already in.
    */
   value: 500,
-} as const;
+};
 
 /**
  * The switches, so the game can be played without either encounter.

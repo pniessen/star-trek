@@ -43,7 +43,7 @@ export const PHASER = {
   falloffEnd: 78,
   /** Half-angle of the assist cone, radians. Aim is the nose, not a cursor. */
   aimCone: 0.13,
-} as const;
+};
 
 export const TORPEDO = {
   cooldown: 0.62,

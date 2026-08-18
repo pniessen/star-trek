@@ -36,7 +36,7 @@ export const HIT_STOP = {
   death: 0.2,
   /** Hard ceiling on the window, whatever asks for it. */
   max: 0.2,
-} as const;
+};
 
 export class HitStop {
   /** Real seconds left in the window. */

@@ -1,6 +1,8 @@
 import { Color, MathUtils, Vector3, type PerspectiveCamera } from "three";
 import { TORPEDO } from "../game/weapons.js";
 import { PALETTE } from "../render/palette.js";
+import { drawTuning } from "./tuning.js";
+import type { Tuner } from "../game/tuning.js";
 import type { Hud } from "./Hud.js";
 import { BRACE, FACINGS, type Ship } from "../game/Ship.js";
 import { ALTITUDE, flight } from "../game/altitude.js";
@@ -47,6 +49,8 @@ export interface HudView {
   readonly commandSelection: number;
   /** The command view's answer to the last decision taken, refusal included. */
   readonly commandMessage: string;
+  /** The tuning console, drawn over whatever the panel turned out to be. */
+  readonly tuner: Tuner;
 }
 
 const dim = PALETTE.trace.clone().multiplyScalar(0.5);
@@ -163,19 +167,42 @@ function pad(value: number, width: number): string {
 }
 
 export function drawHud(hud: Hud, view: HudView): void {
+  hud.begin();
+  // The instrument supply. Everything in `drawPanel` is scaled by it, so when
+  // the ship loses power the panel browns out whole rather than each readout
+  // blinking out on its own schedule.
+  hud.power = view.session.death.power;
+  drawPanel(hud, view);
+
+  // The tuning console, last and over everything, in every mode.
+  //
+  // Every early return in `drawPanel` — the title, the command view, the deck
+  // log, the epitaph — used to be a place the console would have had to be
+  // drawn again, which is four chances to forget one. Hoisting the begin/end
+  // pair up here makes that structural: whatever the panel decided to be this
+  // frame, the console goes on top of it. It has to, because the numbers on
+  // its list govern the title's attract dwell and the epitaph's timing as
+  // surely as they govern a fight.
+  //
+  // At full supply regardless of the brownout: the console is the ship's
+  // instrument in no sense at all, and dimming a dev tool to nothing through
+  // the death sequence would hide it exactly while `HIT_STOP.death` is being
+  // judged.
+  if (view.tuner.open) {
+    hud.power = 1;
+    drawTuning(hud, view.tuner);
+  }
+  hud.end();
+}
+
+/** Everything the ship itself draws. See `drawHud` for the frame around it. */
+function drawPanel(hud: Hud, view: HudView): void {
   const { width, height } = hud.size;
   const { player, session, presentation } = view;
   const death = session.death;
 
-  hud.begin();
-  // The instrument supply. Everything below is scaled by it, so when the ship
-  // loses power the panel browns out whole rather than each readout blinking
-  // out on its own schedule.
-  hud.power = death.power;
-
   if (presentation.mode === "title") {
     drawTitle(hud, view, width, height);
-    hud.end();
     return;
   }
 
@@ -190,7 +217,6 @@ export function drawHud(hud: Hud, view: HudView): void {
       report: presentation.report,
       time: view.time,
     });
-    hud.end();
     return;
   }
 
@@ -200,7 +226,6 @@ export function drawHud(hud: Hud, view: HudView): void {
   // `game/briefing.ts` — so it is checked here rather than in the switch above.
   if (presentation.briefing.active) {
     drawBriefing(hud, presentation.briefing, width, height);
-    hud.end();
     return;
   }
 
@@ -211,7 +236,6 @@ export function drawHud(hud: Hud, view: HudView): void {
   if (death.phase === "tally") {
     drawEpitaph(hud, view, width, height);
     if (view.showDiagnostics) drawDiagnostics(hud, view, width, height);
-    hud.end();
     return;
   }
 
@@ -286,7 +310,6 @@ export function drawHud(hud: Hud, view: HudView): void {
     drainPerSecond: HYPERWARP.drainPerSecond,
   });
 
-  hud.end();
 }
 
 /**

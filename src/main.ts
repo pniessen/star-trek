@@ -39,6 +39,7 @@ import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
 import type { DeathSequence } from "./game/death.js";
 import { contacts, drawHud } from "./hud/draw.js";
+import { BLOCKS, Tuner, patch } from "./game/tuning.js";
 import { load, save } from "./chart/persistence.js";
 import { colOf, indexOf, inBounds, neighbours, rowOf } from "./chart/sectors.js";
 import { DECISIONS, decide } from "./chart/command.js";
@@ -405,6 +406,15 @@ const settings = {
   diagnostics: true,
 };
 
+/**
+ * The tuning console. `\`` opens it; see `game/tuning.ts` for what it is for.
+ *
+ * Lives here rather than inside the session because it outlives runs, survives
+ * the title screen and the command view, and is not part of any of them — the
+ * numbers it moves are the game's, not a run's.
+ */
+const tuner = new Tuner();
+
 const held = new Set<string>();
 
 /**
@@ -423,7 +433,15 @@ const pressed = new Set<string>();
  * cabinet convention — but you should still be able to turn the CRT glass off
  * while admiring the title screen.
  */
-const DISPLAY_KEYS = new Set(["g", "b", "f", "v", "h", "l", "m", "n", "y", "1", "2", "3", "[", "]", "-", "=", "tab"]);
+const DISPLAY_KEYS = new Set([
+  "g", "b", "f", "v", "h", "l", "m", "n", "y", "1", "2", "3", "[", "]", "-", "=", "tab",
+  // The tuning console's opener, and only the opener. Its other seven keys
+  // (`Tuner.KEYS`) stay live below: closed, they should still launch a run off
+  // the title like any other key, because a cabinet where a third of the
+  // keyboard does nothing is a cabinet that reads as broken. Open, the console
+  // takes them before the mode dispatch ever sees them.
+  "`",
+]);
 
 /**
  * The command view's keys that only move a highlight — the two idioms of
@@ -635,6 +653,18 @@ window.addEventListener("keydown", (event) => {
         return;
       }
       break;
+    case "`":
+      /**
+       * The tuning console, on and off.
+       *
+       * In `DISPLAY_KEYS` so that pressing it on the title opens the console
+       * rather than launching a run — the same courtesy `Y` and `L` already
+       * get, and for a stronger reason than either: the block most worth
+       * opening it for is the flight model, and you want it up *before* the
+       * run you are about to judge, not three waves into one.
+       */
+      tuner.open = !tuner.open;
+      break;
     case "1":
     case "2":
     case "3":
@@ -655,6 +685,36 @@ window.addEventListener("keydown", (event) => {
   }
 
   if (DISPLAY_KEYS.has(key)) return;
+
+  // The console, while it is up, owns its seven keys and nothing else. Checked
+  // before the briefing skip and the mode dispatch below, so tuning the deck
+  // log's own timings does not destroy the log you are timing — and after
+  // `DISPLAY_KEYS`, so nothing here can shadow a display toggle.
+  //
+  // Flight is untouched by design: the arrows, WASD, Space, X, C, Z, Shift and
+  // Tab never reach this branch, because the whole point is to fly with the
+  // panel up and move a number while the thing it governs is happening.
+  if (tuner.open && Tuner.KEYS.has(key)) {
+    tuner.key(key);
+    // The clipboard is the DOM's and the registry is not allowed to touch it,
+    // so the one key whose work happens outside `Tuner` does it here. The
+    // patch goes to the console log regardless: `writeText` needs a secure
+    // context and the document focused, and a tuning session that ended with
+    // a silent copy failure would have lost the entire evening.
+    if (key === "\\") {
+      const text = patch();
+      console.log(text);
+      if (navigator.clipboard) {
+        navigator.clipboard
+          .writeText(text)
+          .then(() => tuner.say("PATCH COPIED"))
+          .catch(() => tuner.say("PATCH IN CONSOLE"));
+      } else {
+        tuner.say("PATCH IN CONSOLE");
+      }
+    }
+    return;
+  }
 
   // The opening log ends on the frame the key arrives, whatever the key and
   // wherever the crawl has got to. This is a cabinet: the fastest way to make
@@ -890,6 +950,9 @@ function frame(now: number): void {
   // separate, named, bounded multiplier, so a stalled frame and a landed
   // torpedo can never be mistaken for one another. See `game/hitStop.ts`.
   const gameDt = dt * session.timeScale;
+  // Real seconds, not `gameDt`: hit-stop scales the world and must not scale
+  // the panel that is being used to tune hit-stop.
+  tuner.update(dt, held);
 
   presentation.update(dt);
 
@@ -1254,6 +1317,7 @@ function frame(now: number): void {
     chartCursor,
     commandSelection,
     commandMessage,
+    tuner,
   });
 
   // The scanner's own paints, heard: `ScannerModel.update` (called inside
@@ -1569,6 +1633,30 @@ const sceneryHandles = [giant, planet, moon, sunHero, asteroids] as const;
     for (const handle of sceneryHandles) handle.object.visible = true;
     shoalsVisible = true;
   },
+};
+
+/**
+ * The tuning console, reachable from outside — and unconditional, for the two
+ * reasons `__scenery` right above is.
+ *
+ * The harness is one consumer and does not run on `localhost`, so gating this
+ * behind `DEBUG_PROBE` would break the checks that keep the console's keyboard
+ * from being silently eaten by a later `DISPLAY_KEYS` entry. The other reason is
+ * `docs/todo.md` §6.1's own complaint: the hooks being localhost-only means the
+ * build actually being played is the one build where nothing can be inspected or
+ * forced. The console itself is already on every host — it is a tool, not a
+ * probe — and this makes the numbers it moves readable from a script on the
+ * same terms.
+ *
+ * `keys` is exported rather than reconstructed by the caller so a test can
+ * assert the console's keyboard does not overlap the ship's, which is the one
+ * property of this feature that could regress without anything looking wrong.
+ */
+(window as unknown as Record<string, unknown>).__tuning = {
+  tuner,
+  patch,
+  blocks: BLOCKS,
+  keys: [...Tuner.KEYS],
 };
 
 requestAnimationFrame(frame);
