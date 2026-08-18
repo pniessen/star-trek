@@ -200,6 +200,18 @@ Post chain order matters: `scene → bloom → phosphor → CRT → output encod
 The output encode is not optional — without it the composer writes linear light
 to an sRGB display and every dim trace is crushed to black.
 
+**The scene is drawn into its own multisampled target and the chain starts from
+that target's texture**, rather than beginning with a `RenderPass` into the
+composer's own buffers. `antialias: true` on the renderer only ever applied to
+the default framebuffer, which this game uses solely for the HUD — so the
+instruments were antialiased and every ship edge, grid line and beam was not.
+Handing `EffectComposer` a multisampled target instead is the obvious fix and
+the wrong one: it clones that target for its second ping-pong buffer, so all
+five passes end up resolving, and only the first has any geometry in it.
+Measured on an M2 Max at 2560×1440 — 1.52 ms a frame with no AA, **4.91 ms**
+the naive way, **2.46 ms** with the scene target alone. One resolve, not five.
+See `render/Stage.ts`.
+
 ## Conventions
 
 - **+Z is forward, +Y is up, the XZ plane is the floor.** `y = 0` is where
