@@ -7,6 +7,7 @@ import { Nebula } from "./render/Nebula.js";
 import { Planet } from "./render/Planet.js";
 import { planLight, shadeAt, RIG, type SectorLight } from "./render/light.js";
 import { EventLights } from "./render/eventLights.js";
+import { installShadows } from "./render/shadows.js";
 import type { LightSink } from "./game/lightSink.js";
 import { drawWarpFx, resetWarpFx } from "./game/warpFx.js";
 import { GasGiant } from "./render/GasGiant.js";
@@ -341,6 +342,26 @@ sun.color.copy(sectorLight.colour);
  */
 const sunFill = new AmbientLight(0xffffff, RIG.ambient);
 stage.scene.add(sun, sunFill);
+
+/**
+ * The star casts, and the sector receives.
+ *
+ * The focus is an accessor rather than a position because the shadow frustum
+ * follows the ship: a directional shadow fitted to the whole sector would need
+ * ~1800 units across to reach the far rock band, which is 0.44 world units per
+ * texel — every gravel grain sub-texel and every boulder casting a smear.
+ * Fitted to combat space at 160 units it is 0.078, and a 0.3-unit grain still
+ * gets four texels.
+ *
+ * `installShadows` rides `Scene.onBeforeRender`, which three calls immediately
+ * before it builds the render list and draws the shadow map — so there is no
+ * frame-loop line, and no chance of the focus being a frame stale. It throws
+ * rather than overwrite an existing `onBeforeRender`, which is the right noise
+ * to make: a silently replaced callback is a bug that surfaces three files
+ * away from its cause.
+ */
+installShadows(sun, stage.scene, () => player.position);
+
 /**
  * The lights events cast, standing up at boot alongside the star.
  *

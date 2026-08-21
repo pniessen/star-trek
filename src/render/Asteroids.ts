@@ -22,6 +22,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { makeRng, type Rng } from "../chart/rng.js";
 import { disposeRockMeshes, RockScatter, SILHOUETTE_COUNT } from "./InstancedRocks.js";
 import type { SectorLight } from "./light.js";
+import { shadowed } from "./shadows.js";
 import { VectorObject } from "./VectorObject.js";
 
 /**
@@ -280,6 +281,36 @@ interface LocalRock {
  * program cache, but a disposed material would force a recompile — and a
  * shader compile is a >100 ms stall in whatever frame it lands in. */
 const ROCK_MATERIAL = new MeshLambertMaterial({ color: ASTEROIDS.color, fog: false });
+
+/**
+ * Which tiers cast into the sector star's shadow map, and which only stand in
+ * it (`render/shadows.ts`).
+ *
+ * **Every tier receives.** Not because every tier will visibly be shadowed —
+ * the far band is 250–900 units out and the shadow frustum is 160 across the
+ * player — but because `ROCK_MATERIAL` is one material shared by every rock
+ * in the game and `receiveShadow` is part of three's *program* cache key. A
+ * far band that opted out would be a second compiled program for the same
+ * material, linked at whatever moment a `"rocks"` sector first drew one. See
+ * `shadowed`'s own comment; this is the case that made it worth writing down.
+ *
+ * **Casting is where the tiering is real.** The near field is the one the
+ * player flies through, so its boulders and its gravel both cast: gravel is
+ * the tier that makes the field read as *deep* (see `gravelCount`), and depth
+ * without occlusion is the exact complaint shadows exist to answer. The far
+ * band does not cast, and that is a measurement rather than a taste — it is
+ * 3500 instances in two draw calls whose bounding sphere spans the entire
+ * 900-unit shell, so it can never be frustum-culled out of the shadow pass
+ * even though essentially none of it is ever inside a 160-unit box around the
+ * player. It would be a per-frame depth-pass cost paid for nothing. The
+ * furniture clusters do cast: they are compact, so their bounding spheres
+ * cull cleanly, and unlike the far band the player can actually fly into one.
+ */
+const ROCK_CASTERS = {
+  near: true,
+  far: false,
+  furniture: true,
+} as const;
 
 /**
  * The docking corridor's own two endpoints, world space — hard-coded rather
@@ -619,6 +650,7 @@ export class Asteroids {
     this.nearGroup = Object.assign(new Group(), { name: "asteroids-near" });
     this.nearGroup.position.copy(this.nearCentre);
     this.nearMeshes = scatter.build(this.nearGroup, ROCK_MATERIAL);
+    for (const mesh of this.nearMeshes) shadowed(mesh, ROCK_CASTERS.near);
     this.object.add(this.nearGroup);
     this.nearAngle = 0;
     this.syncRocks();
@@ -658,6 +690,7 @@ export class Asteroids {
     }
     this.farGroup = Object.assign(new Group(), { name: "asteroids-far" });
     this.farMeshes = farScatter.build(this.farGroup, ROCK_MATERIAL);
+    for (const mesh of this.farMeshes) shadowed(mesh, ROCK_CASTERS.far);
     this.object.add(this.farGroup);
   }
 
@@ -712,6 +745,7 @@ export class Asteroids {
       const group = Object.assign(new Group(), { name: "asteroids-furniture" });
       group.position.copy(centre);
       const meshes = scatter.build(group, ROCK_MATERIAL);
+      for (const mesh of meshes) shadowed(mesh, ROCK_CASTERS.furniture);
       this.object.add(group);
       this.furnitureGroups.push({ group, meshes });
     }

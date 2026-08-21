@@ -14,6 +14,7 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { PALETTE } from "./palette.js";
 import { RIG } from "./light.js";
+import { shadowed } from "./shadows.js";
 
 export type ShapeMode = "wireframe" | "occluded";
 
@@ -74,6 +75,21 @@ export interface VectorObjectOptions {
    * too instead of every caller re-deriving the fix.
    */
   fog?: boolean;
+  /**
+   * Whether this object's occluder fill takes part in the sector star's
+   * shadows (`render/shadows.ts`). Defaults `true`, which is right for every
+   * hull, mine, station and wreck in the game — they are opaque solids
+   * standing in a lit sector, and one of them passing between the star and a
+   * rock field is the whole point of the feature.
+   *
+   * Only ever set `false` for a solid that is *not* really there: a ghost, a
+   * preview, a proxy. Note this governs *casting* only — receiving stays on
+   * unconditionally, and deliberately so, because `receiveShadow` is part of
+   * three's program cache key and a fill that disagreed with its neighbours
+   * about it would compile a second shader program at whatever moment it
+   * first appeared. See `shadowed`'s own comment.
+   */
+  castShadow?: boolean;
 }
 
 /**
@@ -188,6 +204,19 @@ export class VectorObject {
     });
     this.hull = new Mesh(geometry, this.fillMaterial);
     this.hull.renderOrder = 0;
+
+    // The fill is the only half of this object that can take part in a
+    // shadow, in either direction. Casting: the strokes are lines, and a
+    // line has no area to block a star with — the solid the strokes are
+    // drawn *from* is what occludes, which is exactly the same relationship
+    // the occluded shape mode already relies on. Receiving: the strokes are
+    // additively blended, so they *are* the light rather than receiving it
+    // (this class's own header), and darkening one under a shadow would read
+    // as a contact changing allegiance under the locked "colour is
+    // information" rule. `setMode("wireframe")` therefore also switches this
+    // object's shadow off, by the same `hull.visible` flag — correct, since
+    // in that mode nothing occludes anything anyway.
+    shadowed(this.hull, opts.castShadow ?? true);
 
     // Strokes: additive, so overlapping traces bloom toward white where they
     // cross — the single most characteristic vector-monitor artefact.
