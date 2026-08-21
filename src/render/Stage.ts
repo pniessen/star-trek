@@ -1,25 +1,26 @@
 import {
   Fog,
   HalfFloatType,
+  NoToneMapping,
   PerspectiveCamera,
   Scene,
-  Vector2,
   WebGLRenderer,
   WebGLRenderTarget,
 } from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { TexturePass } from "three/examples/jsm/postprocessing/TexturePass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { BloomPass } from "./BloomPass.js";
 import { PhosphorPass } from "./PhosphorPass.js";
 import { CrtPass } from "./CrtPass.js";
+import { ToneMapPass } from "./ToneMapPass.js";
 import { resizeLineMaterials } from "./VectorObject.js";
 import { Hud } from "../hud/Hud.js";
 
 /**
  * Owns the render chain. The look is entirely in this order:
  *
- *   scene → bloom → phosphor decay → CRT glass → screen
+ *   scene → TAA resolve → god rays → bloom → phosphor decay → CRT glass →
+ *   tone map + encode → screen
  *
  * Bloom sits before the feedback buffer on purpose: the trail then inherits the
  * glow, so a fast-moving stroke smears as light rather than as a hard line.
@@ -30,9 +31,10 @@ export class Stage {
   readonly camera: PerspectiveCamera;
   readonly hud = new Hud();
 
-  readonly bloom: UnrealBloomPass;
+  readonly bloom: BloomPass;
   readonly phosphor = new PhosphorPass();
   readonly crt = new CrtPass();
+  readonly toneMap = new ToneMapPass();
 
   private readonly composer: EffectComposer;
   /** Where the world is drawn, multisampled. See the constructor. */
@@ -81,7 +83,9 @@ export class Stage {
      *
      * `HalfFloatType` matches what the composer chooses for its own buffers:
      * the chain works in linear light and an 8-bit buffer bands visibly before
-     * `OutputPass` ever encodes it. The sample count is clamped to what the GL
+     * `ToneMapPass` ever encodes it — and, since that pass exists, an 8-bit
+     * buffer would also throw away the entire range above 1.0 that the
+     * highlight rolloff is there to spend. The sample count is clamped to what the GL
      * actually offers rather than assumed — four is the common ceiling and what
      * Apple silicon reports, and asking for more than the driver has is an
      * invalid-value error rather than a silent downgrade.
@@ -92,23 +96,41 @@ export class Stage {
     });
     this.sceneTarget.texture.name = "Stage.scene";
 
+    /**
+     * `NoToneMapping` is the default and is here to be *stated*, because the
+     * obvious way to do what `ToneMapPass` does is to set this field instead
+     * and let `OutputPass` pick the operator up — and that route is closed
+     * twice over. In three r185 a non-default value makes `WebGLRenderer.render`
+     * route canvas renders through an internal `WebGLOutput` composite of its
+     * own, which would both double-apply against the chain's own output pass
+     * and stamp on the scene-then-HUD composite in `render` below; and the
+     * per-material half of the same switch would tone-map the HUD, which is
+     * drawn direct to the canvas and is the one thing here authored in display
+     * values. See `ToneMapPass` for the tonal half of the argument.
+     */
+    this.renderer.toneMapping = NoToneMapping;
+
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new TexturePass(this.sceneTarget.texture));
 
-    // Threshold high enough that only traces bloom, strength low enough that a
-    // ship at combat range stays a silhouette instead of an orange smear. Small
-    // distant objects are the constraint here, not the hero shot.
-    this.bloom = new UnrealBloomPass(new Vector2(1, 1), 0.82, 0.45, 0.5);
+    // Multi-scale glare rather than `UnrealBloomPass`. The whole argument is
+    // in `BloomPass` — the short version is that a hard threshold and a single
+    // blur width are the two things a screen of thin bright lines is worst
+    // served by, and that the pyramid is also cheaper than what it replaced.
+    this.bloom = new BloomPass();
     this.composer.addPass(this.bloom);
     this.composer.addPass(this.phosphor);
     this.composer.addPass(this.crt);
 
-    // Everything above works in linear light. Without this final encode the
-    // composer writes linear values straight to an sRGB display and every dim
-    // trace — grid, starfield, low shield charge — is crushed to black, while
-    // the HUD (rendered direct to the canvas, and therefore encoded) looks
-    // correct. Always on: it is colour correctness, not an effect.
-    this.composer.addPass(new OutputPass());
+    // Everything above works in HDR linear light. This is where it becomes a
+    // picture: highlights roll off instead of clipping flat, and the result is
+    // sRGB-encoded — without which the composer would write linear values
+    // straight to the display and every dim trace (grid, starfield, low shield
+    // charge) is crushed to black, while the HUD, rendered direct to the canvas
+    // and therefore encoded, looks correct. Always on: it is colour
+    // correctness, not an effect. Replaces `OutputPass`, which did the encode
+    // alone.
+    this.composer.addPass(this.toneMap);
 
     this.setSize(window.innerWidth, window.innerHeight);
   }
@@ -159,6 +181,7 @@ export class Stage {
   dispose(): void {
     this.phosphor.dispose();
     this.crt.dispose();
+    this.toneMap.dispose();
     this.composer.dispose();
     this.sceneTarget.dispose();
     this.renderer.dispose();

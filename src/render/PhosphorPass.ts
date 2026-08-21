@@ -39,6 +39,35 @@ export class PhosphorPass extends Pass {
   /** Seconds since the previous frame; set by the game loop. */
   delta = 1 / 60;
 
+  /**
+   * Ceiling on what the feedback buffer is allowed to carry forward, in linear
+   * light. The scene is HDR and reaches ~5.6x white in a firefight, so without
+   * a ceiling a single detonation seeds the history with a value that takes a
+   * long time to decay back into the visible range.
+   *
+   * **This was 1.8, and 1.8 was a workaround for there being no tone mapping.**
+   * With the chain ending in a hard clip, every history value above 1.0 landed
+   * on the same white, so a trail sitting at 3.0 did not appear to fade at all
+   * for the several frames it took to fall under 1 — it held a flat patch and
+   * then started moving, which reads as burn-in rather than as persistence.
+   * Capping just under 2 kept that plateau down to about a frame.
+   *
+   * `ToneMapPass` removed the clip: 5.6 and 1.8 and 1.0 now land on 0.989,
+   * 0.955 and 0.88, all distinct, so a decaying HDR trail is *visibly*
+   * decaying the whole way down and the plateau is gone. The ceiling is
+   * therefore no longer protecting against clipping — it is only bounding how
+   * long a very hot event can dominate the buffer — and it can be opened up to
+   * where an overdriven stroke genuinely burns for a moment, which is what a
+   * real tube does when the beam current is slammed.
+   *
+   * 4.0 is about six frames of near-white on a torpedo detonation at 60fps
+   * before it starts visibly falling, and it is the number to lower if flashes
+   * start feeling sticky. It is deliberately still finite: `max()` feedback has
+   * no other bound, and an uncapped buffer that caught one absurd value would
+   * hold a plateau again, just at a value the shoulder can no longer separate.
+   */
+  historyCeiling = 4;
+
   constructor(width = 1, height = 1) {
     super();
 
@@ -58,6 +87,7 @@ export class PhosphorPass extends Pass {
         tCurrent: { value: null },
         tPrevious: { value: null },
         uDecay: { value: this.decay },
+        uCeiling: { value: this.historyCeiling },
         uTexel: { value: new Vector2(1 / width, 1 / height) },
       },
       vertexShader: /* glsl */ `
@@ -71,6 +101,7 @@ export class PhosphorPass extends Pass {
         uniform sampler2D tCurrent;
         uniform sampler2D tPrevious;
         uniform float uDecay;
+        uniform float uCeiling;
         uniform vec2 uTexel;
         varying vec2 vUv;
 
@@ -87,11 +118,10 @@ export class PhosphorPass extends Pass {
           prev += texture2D(tPrevious, vUv - vec2(0.0, uTexel.y)).rgb;
           prev /= 8.0;
 
-          // Cap what the history is allowed to carry. The scene is HDR — a
-          // bloomed stroke can be many times white — and an uncapped trail sits
-          // above the clipping point for dozens of frames, reading as burn-in
-          // that vanishes all at once instead of a trail that fades.
-          prev = min(prev, vec3(1.8));
+          // Bound what the history carries forward. See historyCeiling --
+          // this is a limit on how long one very hot event may dominate the
+          // buffer, not (since ToneMapPass) a guard against clipping.
+          prev = min(prev, vec3(uCeiling));
 
           // Per-channel decay: the blue-green trace outlives the red.
           vec3 decayed = prev * vec3(uDecay * 0.94, uDecay, uDecay * 1.02);
@@ -117,6 +147,7 @@ export class PhosphorPass extends Pass {
     // length at 60fps and at 400.
     const frameDecay = Math.pow(this.decay, Math.max(this.delta, 1e-4) * 60);
     this.material.uniforms.uDecay.value = frameDecay;
+    this.material.uniforms.uCeiling.value = this.historyCeiling;
     this.material.uniforms.tCurrent.value = readBuffer.texture;
     this.material.uniforms.tPrevious.value = this.previous.texture;
 
