@@ -2,6 +2,7 @@ import { Group, Mesh, ShaderMaterial, SphereGeometry, Vector3 } from "three";
 import { makeRng } from "../chart/rng.js";
 import { GIANT } from "./GasGiant.js";
 import type { SectorLight } from "./light.js";
+import { WORLEY2 } from "./shaders/noise.js";
 
 /**
  * The hero moon — scenery task 2, the second `HeroKind` `main.ts`'s
@@ -109,7 +110,7 @@ void main() {
  * competing surface pattern to protect is exactly the case that comment
  * says the floor is not for.
  */
-const BODY_FRAGMENT = `
+const BODY_FRAGMENT = /* glsl */ `
 uniform float uRotation;
 uniform float uCraterScale;
 uniform vec3 uLightColor;
@@ -118,21 +119,16 @@ varying vec3 vObjectNormal;
 varying vec3 vViewNormal;
 varying vec3 vLightDirView;
 
-// Hash and cellular (Worley) noise — craters are pits, not weather.
-vec2 hash2(vec2 p) {
-  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
-  return fract(sin(p) * 43758.5453);
-}
-float worley(vec2 p) {
-  vec2 cell = floor(p); vec2 f = fract(p);
-  float d = 1.0;
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
-    vec2 g = vec2(float(x), float(y));
-    vec2 o = hash2(cell + g);
-    d = min(d, length(g + o - f));
-  }
-  return d;
-}
+// Cellular (Worley) noise — craters are pits, not weather, so this body
+// takes the one rung of render/shaders/noise.ts it agrees with and none of
+// the fbm3/flow stack the giant and the nebula share. That the bench can be
+// drawn from a rung at a time rather than whole is the reason it is exported
+// in pieces; see its own header. Two-dimensional and sampled on a flat
+// (lon, lat) pair, which leaves a seam at lon = ±π that the giant closes by
+// embedding longitude on a circle — a crater field at this density hides it,
+// and paying for a 27-cell vec3 lookup to close a seam nobody can find would
+// be the wrong trade for the coarser of the two bodies.
+${WORLEY2}
 
 void main() {
   // Lat/lon from the sphere normal, the same read GasGiant.ts's own
