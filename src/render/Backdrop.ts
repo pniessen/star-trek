@@ -2,23 +2,26 @@ import {
   AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
-  CircleGeometry,
   Color,
   Group,
   LineBasicMaterial,
   LineSegments,
   Matrix4,
-  Mesh,
-  MeshBasicMaterial,
+  type Mesh,
   Points,
   PointsMaterial,
-  NormalBlending,
   type Object3D,
   SRGBColorSpace,
   Vector3,
 } from "three";
 import { makeRng, type Rng } from "../chart/rng.js";
 import { ASTERISMS, brightnessOf } from "./constellations.js";
+import { planLight } from "./light.js";
+import { planHero, type HeroKind } from "./scenery.js";
+import { SkyBodies, type SkyBodyKind, type SkyBodySpec } from "./SkyBodies.js";
+import { SUN_HERO } from "./SunHero.js";
+
+export type { SkyBodyKind } from "./SkyBodies.js";
 
 /**
  * The sky a sector is fought under.
@@ -49,12 +52,45 @@ import { ASTERISMS, brightnessOf } from "./constellations.js";
  *    see the ring, below.
  *  - **It is not information.** Colour is information in this game, so a
  *    backdrop — which is decoration by definition — lives under a stricter rule
- *    than "do not add a hue". See `SKY_COLOUR`.
+ *    than "do not add a hue". See `SKY_COLOUR`, and note that the *bodies* have
+ *    since been taken out from under it: `render/SkyBodies.ts` carries the
+ *    replacement, which is an apparent-size threshold rather than a flat cap.
  *  - **It does not move.** There is no `update(dt)` here on purpose. A sky that
  *    drifts on its own clock is a lie about a fixed star field, it would be the
  *    only per-frame cost this feature has, and the one thing that *should* move
  *    the sky — turning the ship — already does. The whole composition is built
  *    once per sector and then only ever translated.
+ *
+ * **Two of those four have since been overruled, deliberately, and both are
+ * recorded where they were overruled rather than quietly patched out.** The
+ * last one went first: `SKY.driftRate` gives the whole sky a slow wheel about
+ * the galactic pole, and `update` says why. The third went with this file's
+ * bodies.
+ *
+ * ---
+ *
+ * ## What this file draws, and what it no longer does
+ *
+ * It draws the *field*: the galactic band, the dust lane cut through it, a
+ * nebula's filaments, and one or two of Earth's asterisms hidden among them.
+ * All four are strokes and points, all four are things a stroke renderer is
+ * genuinely the right medium for, and none of them is in question.
+ *
+ * **It no longer draws bodies.** It used to, out of strokes and flat discs, and
+ * that was the last place in this project standing on an argument
+ * `docs/environment.md` §1.5 had already voided: "occluded geometry, not pure
+ * wireframe" is justified in its own sentence by *ships overlapping in combat*,
+ * and a planet does not overlap a planet. The hero gas giant took four rebuilds
+ * to learn that (§8.1) — three of them stroke-built, none of them producing a
+ * planet — and the sky went on shipping rebuild one to roughly half of all
+ * sectors, which meant the gas giant most players ever saw was the one that had
+ * been written off. `render/SkyBodies.ts` is the answer: the sky's bodies are
+ * now *the hero bodies*, instantiated and hung on the celestial sphere. That
+ * file carries the whole argument, the placement rules, and the apparent-size
+ * threshold that replaces this file's old flat colour cap.
+ *
+ * `planSky` below is still the source of truth for what a sector's sky contains
+ * and where — it just hands the answer to a builder now instead of drawing it.
  */
 
 /**
@@ -187,7 +223,29 @@ export const SKY = {
 } as const;
 
 /**
- * The colour rule, and it is stricter than the rest of the game's.
+ * The colour rule, **now scoped to the field alone** — the band, the nebula's
+ * filaments, the asterisms. It no longer governs bodies, and the paragraph
+ * below is kept because a rule that changed scope is worth more with its
+ * reasoning attached than replaced by its own conclusion.
+ *
+ * What broke it: the ceilings here are a single flat cap, and a flat cap cannot
+ * tell a frame-filling planet from a small bright disc at range —
+ * `docs/environment.md` §4.1 says exactly that, exempts bodies from "colour is
+ * information", and attaches three conditions, of which "small and distant
+ * should stay desaturated" is the one that had never been implemented anywhere
+ * in this codebase. `CLAUDE.md` records the gap as a requirement without an
+ * enforcement mechanism. `render/SkyBodies.ts`'s `tempering` is now that
+ * mechanism, and it is a ramp on apparent size rather than a cap on everything,
+ * which is what the ruling actually asked for.
+ *
+ * The second dividend below — that the sky never reaches the bloom threshold,
+ * so a large dim disc behind the HUD cannot wash out stroke text drawn through
+ * the same glow — is kept rather than dropped: `SKY_BODY.distanceDim` is that
+ * property restated as a fact about distance instead of a cap on palette.
+ *
+ * ---
+ *
+ * The original rule, for the field:
  *
  * "Colour is information" and "never introduce a decorative colour" are both
  * project rules, and a backdrop is decoration by construction — so it does not
@@ -215,8 +273,6 @@ export const SKY = {
  */
 const SKY_COLOUR = {
   maxSaturation: 0.22,
-  /** What a `jovian` giant is allowed, and nothing else. See the family's note. */
-  maxGiantSaturation: 0.44,
   /**
    * The ceiling on a *stroke*, and it was 0.30 in the first draft, which was the
    * single mistake that made the sky read as a diagram.
@@ -244,16 +300,6 @@ const SKY_COLOUR = {
    */
   maxLuminance: 0.72,
   /**
-   * And the ceiling on a body's *face*, which goes the other way.
-   *
-   * The fill is a mass, not a light. This is `VectorObject`'s occluded mode —
-   * the locked decision the whole game's look rests on — restated for the sky:
-   * glowing edges over near-void opaque faces. The first draft had these two
-   * numbers within a whisker of each other, so every body was a flat grey coin.
-   * Pulling them apart is what makes it a body.
-   */
-  maxFillLuminance: 0.09,
-  /**
    * Cyan is *ours* and is forbidden outright — the player and the Warden both
    * wear it, and it is the one hue in this game that means "not a target".
    * Enforced here rather than only in the families below, so a future family
@@ -264,15 +310,22 @@ const SKY_COLOUR = {
 } as const;
 
 /**
- * The four registers a sky body may be painted in. Deep dim blues, dusty
- * ochres, near-monochrome greys and dim warm whites — the safe end of the wheel,
- * and between them enough variety that two sectors do not look alike.
+ * The three registers the *field* may be painted in — deep dim blues, dusty
+ * ochres and near-monochrome greys, the safe end of the wheel, and between them
+ * enough variety that two sectors' nebulae do not look alike.
  *
- * `ochre` and `bone` both sit in the same quadrant as raider gold (35) and
- * within sight of lance (78), and that is fine and deliberate: at a tenth of
- * the saturation and half the luminance an ochre is a brown and a bone is a
- * dirty white, and neither is a gold. Saturation is doing the work here, which
- * is exactly what the rule above says it must.
+ * `ochre` sits in the same quadrant as raider gold (35) and within sight of
+ * lance (78), and that is fine and deliberate: at a tenth of the saturation and
+ * half the luminance an ochre is a brown, not a gold. Saturation is doing the
+ * work here, which is exactly what the rule above says it must.
+ *
+ * Two registers are gone with the bodies that wore them. `bone` was the dim
+ * warm white a stroke sun was drawn from; `jovian` was the one hot register,
+ * granted to gas giants alone on the argument that at a tenth of anyone's
+ * saturation a giant was "a grey arc that happened to be curved". Both are now
+ * answered by the hero classes' own palettes — `GIANT`'s six Hubble-anchored
+ * stops, `planLight`'s black-body star bands — which is a better answer to the
+ * same complaint than a fifth swatch would have been.
  */
 const FAMILIES = {
   /**
@@ -290,23 +343,6 @@ const FAMILIES = {
   ochre: { hue: [28, 46], saturation: [0.09, 0.18], luminance: [0.46, 0.66] },
   /** Near-monochrome. The hue is inert at this saturation and is only here so the maths has one. */
   ash: { hue: [220, 228], saturation: [0.0, 0.04], luminance: [0.42, 0.6] },
-  /** Dim warm white — what a star is made of here. */
-  bone: { hue: [38, 52], saturation: [0.04, 0.12], luminance: [0.55, 0.72] },
-  /**
-   * The one hot register, and it exists for gas giants alone.
-   *
-   * Everything else up there is a body in reflected light seen from a very long
-   * way off, and dusty is the truthful answer for those. A giant is different:
-   * it is the closest thing in the sky, it fills a third of the frame, and at a
-   * tenth of anyone's saturation it was a grey arc that happened to be curved.
-   *
-   * The ceiling is still doing its job. Raider gold sits at hue 35 saturation
-   * 0.88; this tops out at 0.44 — half of it — and lives on an object that is
-   * enormous, motionless, behind everything, and never on the scanner. The two
-   * cannot be confused by anything except a colour picker. Cyan remains banned
-   * outright, and this register is not offered to any other kind of body.
-   */
-  jovian: { hue: [20, 46], saturation: [0.3, 0.44], luminance: [0.5, 0.68] },
 } as const;
 
 type FamilyName = keyof typeof FAMILIES;
@@ -314,7 +350,6 @@ type FamilyName = keyof typeof FAMILIES;
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
 
-export type SkyBodyKind = "gas-giant" | "ringed" | "sun" | "companion" | "moon";
 /** What the sky *is*, as one word — the thing a player would call it. */
 export type SkyComposition = "gas-giant" | "ringed" | "sun" | "dual-sun";
 
@@ -341,26 +376,30 @@ export interface SkyReport {
   readonly bodies: readonly SkyBodyReport[];
 }
 
-interface Common {
-  azimuth: number;
-  elevation: number;
-  /** Apparent radius, degrees. */
-  size: number;
-  colour: Color;
-  /** Which way the body is lit, radians in its own billboard plane. */
-  light: number;
-}
-
 /**
  * A body's plan is generated in full before anything is built, so the
  * composition rules below can reason about a sky as a set of placements rather
  * than as a pile of half-constructed geometry.
+ *
+ * **It is much shorter than it was**, and the missing fields are the point. It
+ * used to carry `bands`, `tilt`, `ringInner`, `ringOuter`, `rays`, `spikes`,
+ * `curvature` and a `light` angle — every one of them a parameter of a *drawing*
+ * this file was about to make. None of that is this file's business any more:
+ * the hero classes roll their own banding, tilt, ring extents, storms and crater
+ * fields off a seed, and every one of those rolls is better argued than the
+ * number it replaced. What survives is the composition — where a body is, how
+ * big it looks, and which seed it is — plus `colour`, which is written back
+ * after the build so `describe()` reports what is actually on screen rather than
+ * what was intended.
  */
-type BodyPlan =
-  | (Common & { kind: "gas-giant" | "companion"; bands: number; tilt: number })
-  | (Common & { kind: "ringed"; bands: number; tilt: number; ringInner: number; ringOuter: number })
-  | (Common & { kind: "sun"; rays: number; spikes: boolean })
-  | (Common & { kind: "moon"; curvature: number });
+type BodyPlan = SkyBodySpec & {
+  /**
+   * Filled in by `show` from the built body's own materials. Before the first
+   * build this is a placeholder, which matters only to `sunAzimuthOf` — the one
+   * caller that reads a plan without building it, and which reads azimuth alone.
+   */
+  colour: Color;
+};
 
 interface BandPlan {
   /** Pole of the galactic plane, in the sky's own frame. */
@@ -461,10 +500,7 @@ function skyColour(rng: Rng, family: FamilyName): Color {
   }
   return new Color().setHSL(
     (((hue % 360) + 360) % 360) / 360,
-    Math.min(
-      range(rng, spec.saturation[0], spec.saturation[1]),
-      family === "jovian" ? SKY_COLOUR.maxGiantSaturation : SKY_COLOUR.maxSaturation,
-    ),
+    Math.min(range(rng, spec.saturation[0], spec.saturation[1]), SKY_COLOUR.maxSaturation),
     Math.min(range(rng, spec.luminance[0], spec.luminance[1]), SKY_COLOUR.maxLuminance),
     SRGBColorSpace,
   );
@@ -514,34 +550,82 @@ function separation(one: Placement, two: Placement): number {
  *     into one smear. Moons are exempt, by rule 3.
  *  5. **Everything lives in the `SKY` elevation band**, off the horizon and
  *     inside the frame — limb included, not merely centre. See `bandElevation`.
+ *  6. **The sky never casts the same kind of body the sector's hero already
+ *     is.** See `compositionFor`.
  *
  * The ceiling those come to is four bodies. That is the number, and it is low
  * on purpose: this is a backdrop for a game about reading three contacts at
  * once, and it has to lose that fight every time.
  */
 /**
- * Which composition a roll buys, and `ringed` is no longer among them.
+ * Which composition a roll buys — **and `ringed` is back**, after two rounds
+ * out.
  *
- * The ringed planet is real geometry in world space now — see `render/Planet.ts`
- * — because a body whose whole identity is a 3D relationship could never be sold
- * by a picture pinned to the sky, which is what both of its attempts on this
- * backdrop proved. Keeping a flat one here as well would put two ringed planets
- * in one sector and let the fake one undercut the real one.
+ * The reason it left is worth keeping, because it was right at the time: a
+ * ringed planet's whole identity is a 3D relationship, and a picture pinned to
+ * the sky could not sell one. Both of its attempts on this backdrop proved
+ * that, and `render/Planet.ts` was built in world space precisely because of
+ * it. Keeping a flat one here as well would have put two ringed planets in one
+ * sector and let the fake one undercut the real one.
  *
- * Its share goes to the gas giant, which is the composition that genuinely works
- * at this distance: a giant's interest is its banding, and banding is paint.
+ * What changed is that the sky's ringed planet **is** `render/Planet.ts` now —
+ * the same class, the same analytic ring shadows, the same ring density profile
+ * shared between the ring and its own shadow. There is no fake one left to
+ * undercut anything. And the second half of the old objection is answered by
+ * the sky's own wheel rather than by geometry: the body's *direction* from the
+ * eye moves as the sky turns about the galactic pole while its attitude is held
+ * fixed, so the rings genuinely open and close over a run. That is the thing
+ * the flat version had to fake with an animated Y scale, and it is now simply
+ * true. See `render/SkyBodies.ts`'s note on the three attitudes.
+ *
+ * **The duplication guard is what makes this safe**, and it generalises the old
+ * objection instead of repeating it per body. `planHero` casts the sector's own
+ * hero — giant, ringed, moon, sun, rocks or bare — and if the sky's roll lands
+ * on the same kind, it is deflected. Two gas giants in one frame is the single
+ * thing that would make both read as wallpaper, and it is also the one case
+ * where the expensive fragment shader could appear twice at hero scale. `moon`
+ * is deliberately *not* guarded: a hero moon fills a quarter of the frame and a
+ * sky moon is a degree across, so the two are not the same image and never
+ * compete. `rocks` and `bare` guard nothing, having no body to collide with.
+ *
+ * Deflection is to a fixed alternative rather than a re-roll, so the function
+ * stays pure in its two inputs and one roll — a re-roll would consume a
+ * variable number of draws and make every downstream placement in `planSky`
+ * depend on how the guard fell.
+ *
+ * **A deflected band is split rather than dumped**, and that was measured
+ * rather than reasoned. Sending the giant's whole 0.34 into `ringed` put the
+ * ringed planet in 41% of sixty-four sectors — one composition in every two and
+ * a half skies, and the most expensive one this file can draw, since a
+ * transparent annulus with a density profile and a shadow test covers roughly
+ * five times its own body's area. Splitting each deflected band across two
+ * destinations lands the four compositions at 32/27/24/17 instead, which is
+ * both a better sky and a cheaper one.
  *
  * A function rather than a ternary because TypeScript narrows a `const` by its
- * initialiser, and every remaining `composition === "ringed"` test below would
- * then be flagged as comparing types with no overlap. The plan builder and draw
- * path for the flat version are deliberately left standing behind that — dead but
- * intact, so reverting this one line brings it back. Excising them is a tidy-up,
- * not part of this change.
+ * initialiser, and every `composition === "ringed"` test below would then be
+ * flagged as comparing types with no overlap.
  */
-function compositionFor(roll: number): SkyComposition {
-  if (roll < 0.5) return "gas-giant";
-  if (roll < 0.78) return "sun";
-  return "dual-sun";
+function compositionFor(roll: number, hero: HeroKind): SkyComposition {
+  let composition: SkyComposition =
+    roll < 0.34 ? "gas-giant" : roll < 0.58 ? "ringed" : roll < 0.8 ? "sun" : "dual-sun";
+  if (hero === "giant" && composition === "gas-giant") {
+    // Split down the middle of the band the roll came from, so the two halves
+    // of "the sector already has a giant" do not both become ringed planets.
+    composition = roll < 0.17 ? "ringed" : "sun";
+  } else if (hero === "ringed" && composition === "ringed") composition = "gas-giant";
+  else if (hero === "sun" && (composition === "sun" || composition === "dual-sun")) {
+    // A sun hero *is* the sector's light, drawn at the exact bearing every body
+    // in the sector is shaded from. A second star in the sky would be the one
+    // thing on screen contradicting where the shadows fall, which is a much
+    // worse collision than two planets — so this is the one deflection that
+    // exists for a lighting reason rather than a compositional one. Split the
+    // same way: the single sun becomes a giant, the pair becomes a ringed
+    // planet, and neither leaves a sun-hero sector with three quarters of its
+    // skies showing the same thing.
+    composition = composition === "sun" ? "gas-giant" : "ringed";
+  }
+  return composition;
 }
 
 function planSky(seed: number, sector: number): SkyPlan {
@@ -549,7 +633,10 @@ function planSky(seed: number, sector: number): SkyPlan {
   const bodies: BodyPlan[] = [];
 
   const roll = rng.next();
-  const composition = compositionFor(roll);
+  // `planHero` is pure in the same two numbers this function is, so consulting
+  // it costs nothing and keeps `planSky` deterministic in `(seed, sector)`
+  // alone — which `sunAzimuthOf` depends on and `__sky.pin` relies on.
+  const composition = compositionFor(roll, planHero(seed, sector));
 
   const primaryAzimuth = range(rng, 0, 360);
   // Size is drawn before elevation everywhere here, and that ordering is the
@@ -559,15 +646,17 @@ function planSky(seed: number, sector: number): SkyPlan {
   if (composition === "dual-sun") {
     // Two stars, not one star and a rendering fault. What sells the pair is
     // that they disagree: the companion is between a half and two thirds the
-    // size, and it is drawn from a different family, so one is warm and one is
-    // cold. A matched pair reads as a double image.
-    const warmFirst = rng.next() < 0.5;
+    // size, and each rolls its own star through `planLight` — whose two hue
+    // bands are a black body's, so a warm one beside a cool one is the common
+    // case rather than something this file has to arrange. A matched pair reads
+    // as a double image. The old build reached the same place by hand, drawing
+    // one from the `bone` family and the other from `slate`.
     const size = range(rng, 0.75, 1.35);
     // The pair is placed as a pair: one elevation for both, with the companion
     // nudged off it, so they read as two bodies at one distance rather than as
     // two independent things that happen to be near each other.
-    const elevation = bandElevation(rng, size * 1.6);
-    const big = sun(rng, primaryAzimuth, elevation, size, warmFirst ? "bone" : "slate");
+    const elevation = bandElevation(rng, size * SUN_REACH);
+    const big = sun(rng, primaryAzimuth, elevation, size);
     const companionSize = size * range(rng, 0.42, 0.62);
     const small = sun(
       rng,
@@ -575,39 +664,44 @@ function planSky(seed: number, sector: number): SkyPlan {
       // degrees, so the pair is never a big star with a small one welded to its
       // limb. A flat spacing was tried and produced exactly that, because the
       // sizes are drawn independently of it.
-      primaryAzimuth + (size + companionSize) * range(rng, 1.7, 3.0),
+      primaryAzimuth + (size + companionSize) * range(rng, 3.5, 6.0),
       // Clamped like every other placement: the companion is the one body
       // positioned relative to another rather than drawn into the band
       // directly, and without this it can be nudged three degrees under the
       // floor and end up sitting on the horizon with the contacts.
       clampElevation(elevation + range(rng, -3, 3)),
       companionSize,
-      warmFirst ? "slate" : "bone",
     );
     bodies.push(big, small);
   } else if (composition === "sun") {
     const size = range(rng, 0.7, 1.3);
-    // A sun's rays reach well past its disc, so it is held lower than its own
-    // radius would ask for — the spikes are part of the silhouette.
-    bodies.push(sun(rng, primaryAzimuth, bandElevation(rng, size * 2.2), size, "bone"));
+    // A star's corona reaches well past its core, so it is held lower than its
+    // own radius would ask for — the halo is part of the silhouette.
+    bodies.push(sun(rng, primaryAzimuth, bandElevation(rng, size * SUN_REACH), size));
   } else if (composition === "ringed") {
     /**
-     * The one body that is deliberately *not* a limb.
+     * Whole, and at a distance — the one body that must never be cropped.
      *
-     * Giants became limbs because a giant's interest is its surface, and the
-     * closer you are the more of it there is. A ringed planet's interest is its
-     * outline — disc, then a gap, then an ellipse passing behind on one side and
-     * in front on the other — and an outline is the one thing that cannot
-     * survive being cropped. Built at limb scale it lost its rings entirely:
-     * they became arcs parallel to the edge, indistinguishable from the
-     * atmospheric layers a few degrees inside them.
+     * A ringed planet's interest is its outline: disc, then a gap, then an
+     * ellipse passing behind on one side and in front on the other. An outline
+     * is the one thing that cannot survive being cut by the frame edge, which
+     * is what killed the limb-scale attempt — the rings became arcs parallel
+     * to the edge, indistinguishable from the atmospheric layers a few degrees
+     * inside them.
      *
-     * So it stays far away and stays whole. Two vocabularies, because these are
-     * two different distances rather than one rule applied badly to both.
+     * Smaller than the flat version was, deliberately. That one was drawn at 5
+     * to 8.5 degrees because at anything less its ellipse arcs collapsed into
+     * one another; a real annulus with a real division sweeping through it
+     * survives being small in a way twelve hand-placed strands never could,
+     * and the ring's outer edge at 2.25 times the body still reaches 12 degrees
+     * at the top of this range. It also has to: the ring is the most expensive
+     * thing this file can put on screen, since a transparent annulus with a
+     * noise profile and a sphere-shadow test covers roughly five times the
+     * body's own area.
      */
-    const size = range(rng, 5.0, 8.5);
-    // A ring is half again as wide as its planet in both directions, and all of
-    // it has to stay in frame or the silhouette is broken anyway.
+    const size = range(rng, 3.2, 5.5);
+    // The ring is half again as wide as its planet in both directions, and all
+    // of it has to stay in frame or the silhouette is broken anyway.
     bodies.push(ringed(rng, primaryAzimuth, bandElevation(rng, size * 2.4), size));
   } else {
     /**
@@ -618,15 +712,16 @@ function planSky(seed: number, sector: number): SkyPlan {
      * both frame edges reads as scale, so bring the giant close enough that you
      * only see its edge. What actually happened is that the interesting part of
      * a giant *is* its banding, and cropping threw most of the banding off
-     * screen — leaving a set of nested arcs that read as arcs. The ringed planet
-     * failed the same way for a related reason and is a distance body now too.
+     * screen — leaving a set of nested arcs that read as arcs.
      *
-     * What survived the experiment is the colour. Each band carries its own hue
-     * rather than the body's one hue, and that lands harder here than it ever
-     * did on a limb, because on a whole disc you see every band at once and the
-     * chromatic banding is the entire read.
+     * Smaller than the flat build's 9-14 degrees, and for a reason the flat
+     * build could not have had: the sector's own hero giant subtends about
+     * 12.7 degrees of radius (`GIANT.radius` against `GIANT.range`), and a sky
+     * giant that outgrew it would invert the one hierarchy the scene has —
+     * near things are big. A stroke coin could get away with that because it
+     * never read as an object at all. This one does.
      */
-    const size = range(rng, 9, 14);
+    const size = range(rng, 6, 10.5);
     bodies.push(giant(rng, primaryAzimuth, bandElevation(rng, size), size));
   }
 
@@ -637,11 +732,11 @@ function planSky(seed: number, sector: number): SkyPlan {
     // rarer answer and it has to stay rare, or it becomes a dual-sun sky with
     // the wrong spacing — which is the one thing rule 2 exists to prevent.
     const secondSun = composition !== "sun" && rng.next() < 0.4;
-    const size = secondSun ? range(rng, 0.5, 0.9) : range(rng, 2.6, 4.6);
-    const placement = placeApart(rng, bodies, secondSun ? size * 2.2 : size);
+    const size = secondSun ? range(rng, 0.5, 0.9) : range(rng, 2.0, 3.6);
+    const placement = placeApart(rng, bodies, secondSun ? size * SUN_REACH : size);
     bodies.push(
       secondSun
-        ? sun(rng, placement.azimuth, placement.elevation, size, "bone")
+        ? sun(rng, placement.azimuth, placement.elevation, size)
         : giant(rng, placement.azimuth, placement.elevation, size, "companion"),
     );
   }
@@ -661,7 +756,12 @@ function planSky(seed: number, sector: number): SkyPlan {
         rng,
         parent.azimuth + (Math.cos(angle) * gap) / Math.cos(parent.elevation * DEG),
         clampElevation(parent.elevation + Math.sin(angle) * gap),
-        range(rng, 0.7, 1.6),
+        // A shade larger than the flat build's 0.7-1.6. That range was set by
+        // what a rim stroke and one terminator arc could still describe at
+        // small sizes; `render/Moon.ts`'s crater field wants a few dozen pixels
+        // of radius before its Worley cells resolve into pits rather than
+        // dither, and at the bottom of this range it gets them.
+        range(rng, 0.9, 2.2),
       ),
     );
   }
@@ -805,6 +905,47 @@ function placeApart(rng: Rng, existing: readonly BodyPlan[], size: number): Plac
   };
 }
 
+/**
+ * How far a star's visible extent reaches past its own core, as a multiple of
+ * it — the number `bandElevation` has to be told about so a sun's *halo*, not
+ * merely its disc, stays inside the frame.
+ *
+ * It is `SUN_HERO.haloInnerScale + streamerLengthMax`, which is where the
+ * longest corona spoke ends, rounded up. Derived rather than guessed because
+ * the flat build's own equivalent (2.2, for hand-drawn rays) is the sort of
+ * number that quietly stops matching the thing it describes; if the corona is
+ * ever lengthened, this is where the frame budget notices.
+ */
+const SUN_REACH = Math.ceil(SUN_HERO.haloInnerScale + SUN_HERO.streamerLengthMax);
+
+/**
+ * A per-body seed for the hero class that will draw it.
+ *
+ * Every hero class keys its entire look off `(seed, sector)` through a hash mix
+ * of its own, and `render/SkyBodies.ts` hands them this in place of the
+ * campaign's seed. Drawn from the sky's own stream, so it is deterministic in
+ * `(seed, sector)` like everything else here, and wide enough that two sectors'
+ * giants are never the same giant.
+ */
+function variant(rng: Rng): number {
+  return Math.floor(rng.next() * 0xffffff) + 1;
+}
+
+/**
+ * The body factories, and there is almost nothing left in them.
+ *
+ * Each used to carry the parameters of a drawing — how many bands, how far the
+ * terminator bows, how many rays, where the ring's inner and outer edges sit.
+ * Every one of those questions now has a better-argued answer inside the hero
+ * class that draws the body, rolled from `variant` alone. What is left is the
+ * composition: where, how big, and which seed.
+ *
+ * `colour` is a placeholder here and is written back by `Backdrop.show` from
+ * the built material. That inversion is deliberate — the old code decided a
+ * body's colour and then drew it, so `describe()` could only ever report an
+ * intention; now the body is built and then asked what colour it came out, so
+ * the report is evidence.
+ */
 function giant(
   rng: Rng,
   azimuth: number,
@@ -812,86 +953,19 @@ function giant(
   size: number,
   kind: "gas-giant" | "companion" = "gas-giant",
 ): BodyPlan {
-  return {
-    kind,
-    azimuth,
-    elevation,
-    size,
-    colour: skyColour(rng, kind === "gas-giant" ? "jovian" : pick(rng, ["slate", "ochre", "ash"] as const)),
-    light: range(rng, 0, TAU),
-    // Three bands is the fewest that reads as banding rather than as a line
-    // across a circle; seven is where a disc this size turns into hatching.
-    bands: kind === "gas-giant" ? 3 + Math.floor(rng.next() * 5) : 2 + Math.floor(rng.next() * 3),
-    tilt: range(rng, -0.42, 0.42),
-  };
+  return { kind, azimuth, elevation, size, variant: variant(rng), colour: new Color() };
 }
 
 function ringed(rng: Rng, azimuth: number, elevation: number, size: number): BodyPlan {
-  return {
-    kind: "ringed",
-    azimuth,
-    elevation,
-    size,
-    colour: skyColour(rng, pick(rng, ["ochre", "ash", "slate"] as const)),
-    light: range(rng, 0, TAU),
-    bands: 2 + Math.floor(rng.next() * 3),
-    // The ring's tilt *is* the planet's tilt — the bands bow the same way the
-    // ring opens, or the body reads as two objects photographed separately.
-    tilt: range(rng, 0.14, 0.5) * (rng.next() < 0.5 ? -1 : 1),
-    ringInner: range(rng, 1.32, 1.46),
-    ringOuter: range(rng, 1.95, 2.35),
-  };
+  return { kind: "ringed", azimuth, elevation, size, variant: variant(rng), colour: new Color() };
 }
 
-function sun(
-  rng: Rng,
-  azimuth: number,
-  elevation: number,
-  size: number,
-  family: FamilyName,
-): BodyPlan {
-  return {
-    kind: "sun",
-    azimuth,
-    elevation,
-    size,
-    // Hue from the family, luminance from the fact that this one is a *source*.
-    // The families' own ranges are built for bodies in reflected light, and a
-    // slate sun drawn at slate's luminance came out a dark blue coin — a hole in
-    // the sky rather than a star. So the hue still separates a warm star from a
-    // cold one, and both of them are bright.
-    colour: starColour(skyColour(rng, family)),
-    light: range(rng, 0, TAU),
-    rays: 14 + Math.floor(rng.next() * 12),
-    spikes: rng.next() < 0.6,
-  };
-}
-
-/**
- * Lift a family colour to a star's brightness, keeping its hue and its
- * saturation ceiling. The one place in this file that is allowed past
- * `SKY_COLOUR.maxLuminance`, for the reason given where suns are drawn: a star
- * is the only thing in the sky that emits, and it is small enough that letting
- * it through the bloom threshold costs a halo rather than a washed-out frame.
- */
-const _hsl = { h: 0, s: 0, l: 0 };
-function starColour(base: Color): Color {
-  base.getHSL(_hsl);
-  return base.setHSL(_hsl.h, Math.min(SKY_COLOUR.maxSaturation, _hsl.s), 0.95);
+function sun(rng: Rng, azimuth: number, elevation: number, size: number): BodyPlan {
+  return { kind: "sun", azimuth, elevation, size, variant: variant(rng), colour: new Color() };
 }
 
 function moon(rng: Rng, azimuth: number, elevation: number, size: number): BodyPlan {
-  return {
-    kind: "moon",
-    azimuth,
-    elevation,
-    size,
-    colour: skyColour(rng, pick(rng, ["ash", "slate", "ochre"] as const)),
-    light: range(rng, 0, TAU),
-    // How far the terminator bows. Near zero is a half moon; near one is a
-    // crescent or a nearly full disc, depending on the sign.
-    curvature: range(rng, -0.85, 0.85),
-  };
+  return { kind: "moon", azimuth, elevation, size, variant: variant(rng), colour: new Color() };
 }
 
 // ── strokes ────────────────────────────────────────────────────────────────
@@ -932,215 +1006,8 @@ function segment(
   strokes.colours.push(_tint.r, _tint.g, _tint.b);
 }
 
-/**
- * A body's rim, brightest where it is lit and falling away to a floor rather
- * than to nothing. The falloff is the only lighting model in here and it is
- * worth its handful of lines: an evenly bright circle is a hoop, and a rim that
- * fades around the limb is a sphere. No shading, no faces, no normals — the
- * stroke's own brightness is doing all of it, which is how everything else in
- * this renderer works too.
- */
-function rim(strokes: Strokes, radius: number, steps: number, colour: Color, light: number, floor: number): void {
-  const lit = (angle: number): number =>
-    floor + (1 - floor) * Math.max(0, Math.cos(angle - light)) ** 0.55;
-  for (let i = 0; i < steps; i++) {
-    const t0 = (i / steps) * TAU;
-    const t1 = ((i + 1) / steps) * TAU;
-    segment(
-      strokes,
-      Math.cos(t0) * radius,
-      Math.sin(t0) * radius,
-      Math.cos(t1) * radius,
-      Math.sin(t1) * radius,
-      colour,
-      lit(t0),
-      lit(t1),
-    );
-  }
-}
-
-/**
- * One latitude band on a sphere, which is what makes a gas giant a gas giant
- * rather than a circle.
- *
- * A band has to *bow* — a straight chord across the disc reads as a line drawn
- * on a coin. So each band is a real latitude circle on a unit sphere whose axis
- * is tilted `tilt` toward or away from the eye, projected straight down the
- * view axis. The visible half is longitudes within ninety degrees of the
- * meridian facing us; the ends are pulled a hair short of that so a band stops
- * just inside the limb instead of colliding with the rim stroke.
- */
-function band(
-  strokes: Strokes,
-  radius: number,
-  latitude: number,
-  tilt: number,
-  colour: Color,
-  light: number,
-  scale: number,
-): void {
-  const steps = 20;
-  const span = (Math.PI / 2) * 0.94;
-  let previousX = 0;
-  let previousY = 0;
-  for (let i = 0; i <= steps; i++) {
-    const longitude = -span + (i / steps) * span * 2;
-    const x = radius * Math.cos(latitude) * Math.sin(longitude);
-    const y =
-      radius * (Math.sin(latitude) * Math.cos(tilt) - Math.cos(latitude) * Math.cos(longitude) * Math.sin(tilt));
-    if (i > 0) {
-      // Bands take the same limb falloff the rim does, so the lit side of the
-      // body stays the lit side all the way across it.
-      const shade = (px: number, py: number): number =>
-        0.06 + 0.94 * Math.max(0, Math.cos(Math.atan2(py, px) - light)) ** 0.6;
-      segment(strokes, previousX, previousY, x, y, colour, scale * shade(previousX, previousY), scale * shade(x, y));
-    }
-    previousX = x;
-    previousY = y;
-  }
-}
-
-
-/**
- * The layers stacked just inside a limb, which is what a limb has instead of
- * banding.
- *
- * `band` draws a latitude circle across a whole disc, and that is the right
- * answer for a body you can see all of. It is the wrong answer here: at a
- * limb's scale the centre of the sphere is off the top of the frame, so a
- * latitude circle is off screen for almost its entire length and what little
- * survives is a nearly straight line in the corner.
- *
- * What you actually see approaching a world is the opposite — everything
- * *crowds* toward the edge. Equal steps of latitude compress into nothing at the
- * limb, so the visible strip is a stack of arcs parallel to the edge, dense
- * against it and opening out inward. That is the `t ** 1.9`: depth grows
- * non-linearly so the arcs pile up where the eye is already looking.
- *
- * The wobble is not decoration either. Perfectly even spacing at a single stroke
- * weight is the one thing that reads as a technical drawing rather than a place
- * — it is what made the first ring system look like a diagram of Saturn. Real
- * layers are uneven and some are brighter than their neighbours, so the spacing
- * and the brightness both ride an irrational-period sine: deterministic, seeded
- * by the body's own tilt, and never repeating a visible pattern.
- */
-/**
- * The colour of one band, and this is what a banded giant actually is.
- *
- * Every band shared the body's one colour before, and that is most of why a
- * giant read as a tinted circle no matter what was done to its brightness:
- * Jupiter is not one hue at several lightnesses, it is *cream next to tan next
- * to rust*. The banding is chromatic before it is anything else.
- *
- * So each band swings its own hue, saturation and lightness off the body's base
- * on an irrational period — never repeating, always deterministic, and still
- * bounded by the giant ceiling so the whole thing cannot walk into an
- * information colour. Hue swings about fourteen degrees either way, roughly the
- * spread between Jupiter's own belts and zones.
- *
- * This outlived the limb experiment it was written for, and lands harder now
- * than it did then: on a whole disc you see every band at once.
- */
-const _stratum = new Color();
-function stratumColour(base: Color, i: number, phase: number): Color {
-  _stratum.copy(base).getHSL(_hsl);
-  const swing = Math.sin(i * 2.7 + phase);
-  const warm = Math.sin(i * 1.31 + phase * 1.7);
-  return _stratum.setHSL(
-    (((_hsl.h + swing * 0.038) % 1) + 1) % 1,
-    Math.max(0, Math.min(SKY_COLOUR.maxGiantSaturation, _hsl.s * (1 + warm * 0.45))),
-    Math.max(0, Math.min(SKY_COLOUR.maxLuminance, _hsl.l * (0.82 + 0.34 * Math.abs(swing)))),
-    SRGBColorSpace,
-  );
-}
-
-/** The lit/unlit boundary across a small body: an arc, not a chord. */
-function terminator(
-  strokes: Strokes,
-  radius: number,
-  curvature: number,
-  light: number,
-  colour: Color,
-  scale: number,
-): void {
-  const steps = 14;
-  const axis = light + Math.PI / 2;
-  const cos = Math.cos(axis);
-  const sin = Math.sin(axis);
-  let previousX = 0;
-  let previousY = 0;
-  for (let i = 0; i <= steps; i++) {
-    const t = -Math.PI / 2 + (i / steps) * Math.PI;
-    // An ellipse arc squashed across the light axis, then rotated onto it.
-    const u = Math.cos(t) * curvature * radius;
-    const v = Math.sin(t) * radius;
-    const x = u * cos - v * sin;
-    const y = u * sin + v * cos;
-    if (i > 0) segment(strokes, previousX, previousY, x, y, colour, scale);
-    previousX = x;
-    previousY = y;
-  }
-}
-
-/** Half a ring, as an ellipse arc. `from`/`to` in radians of the ellipse's own parameter. */
-function ringArc(
-  strokes: Strokes,
-  major: number,
-  minor: number,
-  from: number,
-  to: number,
-  colour: Color,
-  scale: number,
-): void {
-  const steps = 26;
-  let previousX = 0;
-  let previousY = 0;
-  for (let i = 0; i <= steps; i++) {
-    const t = from + ((to - from) * i) / steps;
-    const x = Math.cos(t) * major;
-    const y = Math.sin(t) * minor;
-    if (i > 0) segment(strokes, previousX, previousY, x, y, colour, scale);
-    previousX = x;
-    previousY = y;
-  }
-}
 
 // ── building ───────────────────────────────────────────────────────────────
-
-/**
- * A single dim, opaque disc. Not additive and not transparent: this is the
- * occluder, and it exists to *replace* what is behind it.
- *
- * The idiom is `VectorObject`'s occluded mode, which is the locked decision this
- * project's whole look rests on — glowing edges over near-void opaque faces,
- * because pure wireframe is unreadable the moment two things overlap, and a
- * ring passing behind a planet is exactly two things overlapping. The one
- * difference is that `VectorObject` occludes with the depth buffer and this
- * occludes with draw order, for the reason given at the top of the file: the sky
- * is seen from a fixed direction, so what is in front of what is known when it
- * is built and does not need to be worked out again sixty times a second.
- */
-function fillDisc(radius: number, colour: Color, order: number, scale = 0.022): Mesh {
-  const material = new MeshBasicMaterial({
-    // A hint of the body rather than a hole in the sky, the same argument
-    // `VectorObject`'s `fill` makes. A star passes a higher `scale` than a
-    // planet does: it is the one thing up there that is supposed to be its own
-    // light source, and giving its face a lift is the only way to say so
-    // without reaching for brightness the colour rule has already spent.
-    color: colour.clone().multiplyScalar(scale),
-    blending: NormalBlending,
-    transparent: true,
-    depthTest: true,
-    depthWrite: false,
-    fog: false,
-  });
-  // 128, not the 40 this started with. A limb fills the frame edge to edge, and
-  // at that size a 40-gon's flats are plainly visible as a faceted horizon —
-  // the one artefact that would give away that a world is a polygon.
-  const mesh = new Mesh(new CircleGeometry(radius, 128), material);
-  mesh.renderOrder = order;
-  return mesh;
-}
 
 function strokeLines(strokes: Strokes, order: number): LineSegments {
   const geometry = new BufferGeometry();
@@ -1255,9 +1122,6 @@ function buildStarBand(plan: BandPlan, order: number): Points {
   stars.renderOrder = order;
   return stars;
 }
-
-/** Name on the child group whose Y scale is the body's aspect. See `buildBody`. */
-const TILTED = "tilted";
 
 
 /**
@@ -1384,148 +1248,10 @@ function buildNebula(plan: NebulaPlan, order: number): Group {
   return group;
 }
 
-function buildBody(plan: BodyPlan, nextOrder: () => number): Group {
-  const group = new Group();
-  orient(group, plan.azimuth, plan.elevation);
-  const radius = worldSize(plan.size);
-
-  if (plan.kind === "ringed") {
-    // How far the ring is open. `sin(tilt)` is the honest projection of a
-    // circle seen from `tilt` off its own plane, and using the same tilt the
-    // bands use is what keeps the two agreeing.
-    const flatten = Math.max(0.1, Math.abs(Math.sin(plan.tilt)));
-    const far = newStrokes();
-    const near = newStrokes();
-    // Not three hoops. Three evenly spaced ellipses at one stroke weight is
-    // precisely what made the first version read as a diagram of Saturn out of
-    // a schoolbook: the eye reads even spacing as notation, not as matter.
-    //
-    // A ring system is a *band* — many fine strands of uneven brightness, with
-    // divisions swept clear through it. So: a dozen strands across the span, the
-    // brightness riding an irrational period so no rhythm ever establishes
-    // itself, and two gaps punched at fixed fractions of the width where the
-    // strands are simply skipped. The gaps are what sell it. A real ring is
-    // known by its divisions, not by its edges.
-    const STRANDS = 12;
-    const edges: Array<[number, number]> = [];
-    for (let i = 0; i < STRANDS; i++) {
-      const t = i / (STRANDS - 1);
-      // Two divisions. Skipping strands leaves a true gap rather than a dim
-      // one, which is the difference between a division and a smudge.
-      if ((t > 0.34 && t < 0.44) || (t > 0.72 && t < 0.78)) continue;
-      const scale = plan.ringInner + (plan.ringOuter - plan.ringInner) * t;
-      // Brightest just outside the inner edge, as a real system is, and never
-      // uniform: the sine is what stops twelve strands reading as hatching.
-      const brightness = (0.34 + 0.46 * Math.abs(Math.sin(i * 1.911 + plan.tilt * 4))) * (1 - 0.35 * t);
-      edges.push([scale, brightness]);
-    }
-    // The far half is the one the tilt lifts *behind* the planet — which side
-    // that is follows the sign of the tilt, exactly as the bands' bow does.
-    const farFrom = plan.tilt >= 0 ? 0 : Math.PI;
-    for (const [scale, brightness] of edges) {
-      const major = radius * scale;
-      ringArc(far, major, major * flatten, farFrom, farFrom + Math.PI, plan.colour, brightness);
-      ringArc(near, major, major * flatten, farFrom + Math.PI, farFrom + TAU, plan.colour, brightness);
-    }
-
-    // Back to front, and this is the whole trick: far ring, then the planet as
-    // an opaque near-void disc that eats the middle of it, then the planet's own
-    // glowing rim and bands, then the near ring over the top. Three draw orders
-    // and no sorting.
-    /**
-     * Everything whose shape depends on the viewing angle goes in one child, so
-     * one Y scale can open and close the whole body's aspect together.
-     *
-     * A ringed planet was the one body here that read as a decal: instantly
-     * recognisable and completely inert, because how far its rings are open —
-     * the thing that actually identifies it — was baked in at build time. What
-     * moves is not the planet, it is *us*, and the honest expression of that is
-     * the ring opening and closing.
-     *
-     * Only the ring and the latitude bands belong in here. The rim does not: a
-     * planet's silhouette is a circle from every angle, and squashing it would
-     * turn the world into an egg. The fill stays out for the same reason.
-     *
-     * Bands share the scale because they must. The comment on `ringed`'s tilt
-     * says it already — the bands bow the way the ring opens, or the body reads
-     * as two things photographed separately. Flattening the ring toward edge-on
-     * while the equator stayed bowed would be exactly that.
-     */
-    const tilted = new Group();
-    tilted.name = TILTED;
-
-    tilted.add(strokeLines(far, nextOrder()));
-    group.add(fillDisc(radius, plan.colour, nextOrder()));
-
-    const bands = newStrokes();
-    for (let i = 0; i < plan.bands; i++) {
-      const latitude = (-0.55 + ((i + 0.5) / plan.bands) * 1.1) * (Math.PI / 2);
-      band(bands, radius, latitude, plan.tilt, plan.colour, plan.light, 0.7 + (i % 2) * 0.3);
-    }
-    tilted.add(strokeLines(bands, nextOrder()));
-    tilted.add(strokeLines(near, nextOrder()));
-
-    const silhouette = newStrokes();
-    rim(silhouette, radius, 72, plan.colour, plan.light, 0.0);
-    group.add(strokeLines(silhouette, nextOrder()));
-    group.add(tilted);
-    return group;
-  }
-
-  if (plan.kind === "sun") {
-    /**
-     * A star is a point, and the bloom pass is what makes it a star.
-     *
-     * This used to draw fourteen to twenty-six rays and four diffraction spikes
-     * by hand, at a brightness deliberately held below the bloom threshold —
-     * a sun "by its form, not by being brighter than everything else". That was
-     * the most childish thing in the sky, and it was solving a problem the
-     * renderer had already solved: `Stage` runs an UnrealBloom pass over the
-     * whole scene, and a small enough source above its 0.5 linear threshold
-     * *becomes* a halo with no rays drawn at all.
-     *
-     * So the rays are gone and the disc goes bright instead — the one place the
-     * sky is allowed above the threshold, because a star is the only thing up
-     * there that is genuinely a light source. It stays safe for the HUD because
-     * it is tiny: a degree of sky is about a dozen pixels, so what blooms is a
-     * halo rather than a field.
-     */
-    const strokes = newStrokes();
-    rim(strokes, radius, 40, plan.colour, plan.light, 1.0);
-    // A second rim just outside the first, dimmer: the corona's inner edge, and
-    // the only structure a star gets.
-    rim(strokes, radius * 1.22, 40, plan.colour, plan.light, 0.22);
-    group.add(fillDisc(radius, plan.colour, nextOrder(), 1.15));
-    group.add(strokeLines(strokes, nextOrder()));
-    return group;
-  }
-
-  if (plan.kind === "moon") {
-    const strokes = newStrokes();
-    rim(strokes, radius, 18, plan.colour, plan.light, 0.3);
-    terminator(strokes, radius, plan.curvature, plan.light, plan.colour, 0.45);
-    group.add(fillDisc(radius, plan.colour, nextOrder()));
-    group.add(strokeLines(strokes, nextOrder()));
-    return group;
-  }
-
-  const strokes = newStrokes();
-  rim(strokes, radius, plan.kind === "gas-giant" ? 84 : 40, plan.colour, plan.light, 0.0);
-  // A giant gets many bands, each its own colour; a small companion gets a few
-  // in the body's own, because at that size chromatic banding is three pixels
-  // of hue nobody can resolve.
-  const count = plan.kind === "gas-giant" ? 5 + plan.bands : plan.bands;
-  for (let i = 0; i < count; i++) {
-    const latitude = (-0.62 + ((i + 0.5) / count) * 1.24) * (Math.PI / 2);
-    const tint = plan.kind === "gas-giant" ? stratumColour(plan.colour, i, plan.tilt * 5) : plan.colour;
-    band(strokes, radius, latitude, plan.tilt, tint, plan.light, 0.7 + (i % 2) * 0.3);
-  }
-  group.add(fillDisc(radius, plan.colour, nextOrder()));
-  group.add(strokeLines(strokes, nextOrder()));
-  return group;
-}
-
 // ── the sky ────────────────────────────────────────────────────────────────
+
+/** Marks a child of the backdrop's group as this file's to dispose. See `Backdrop.clear`. */
+const OWNED = "backdropOwned";
 
 export class Backdrop {
   /**
@@ -1545,13 +1271,18 @@ export class Backdrop {
   private pinned: { seed: number; sector: number } | null = null;
   /** Radians wheeled about the galactic pole since this sky was built. */
   private drift = 0;
-  /** Seconds since this sky was built. Drives the aspect and the breath. */
-  private elapsed = 0;
   /**
-   * Bodies whose aspect is animated — in practice the ringed ones, which are the
-   * only bodies whose identity is a 3D relationship rather than a shape.
+   * The sector's bodies, or null when the sky is off or nothing is built.
+   *
+   * This field replaces a `tilting` list of groups whose Y scale was animated
+   * toward edge-on and back, which was the flat build's way of giving a ringed
+   * planet an aspect that changed. Nothing here is faked any more: the bodies
+   * carry their own clocks — the giant's jets shear, its storms turn, the
+   * moon's craters roll under a terminator that sweeps as the sky wheels — and
+   * the ringed planet's rings open and close because its *direction* from the
+   * eye genuinely moves. See `render/SkyBodies.ts`.
    */
-  private tilting: Array<{ group: Group; tilted: Object3D; rate: number; phase: number; breath: number }> = [];
+  private bodies: SkyBodies | null = null;
   /** 0 at rest, 1 at the top of a hyperwarp charge. Set by `warp`. */
   private warpIntensity = 0;
   private readonly axis = new Vector3(0, 1, 0);
@@ -1572,7 +1303,6 @@ export class Backdrop {
     const key = backdrop.enabled ? `${seed}:${sector}` : "";
     if (key === this.key) return;
     this.clear();
-    this.tilting = [];
     this.key = key;
     if (!key) return;
 
@@ -1581,31 +1311,42 @@ export class Backdrop {
     const nextOrder = (): number =>
       Math.min(SKY.orderLast, SKY.orderFirst + layer++ * SKY.orderStep);
     // Furthest first: the star band is the ground everything else stands on,
-    // then the nebula, then the bodies.
-    this.object.add(buildStarBand(this.plan.band, nextOrder()));
-    if (this.plan.nebula) this.object.add(buildNebula(this.plan.nebula, nextOrder()));
+    // then the nebula, then the asterisms.
+    this.add(buildStarBand(this.plan.band, nextOrder()));
+    if (this.plan.nebula) this.add(buildNebula(this.plan.nebula, nextOrder()));
     // After the field so a named star is never dimmed by a plain one drawn over
-    // it, and before the bodies, which are nearer than any star.
-    for (const shape of this.plan.asterisms) this.object.add(buildAsterism(shape, nextOrder()));
-    for (const body of this.plan.bodies) {
-      const group = buildBody(body, nextOrder);
-      this.object.add(group);
-      const tilted = group.getObjectByName(TILTED);
-      if (tilted) {
-        // Rates come off the plan rather than a clock or a fresh random, so the
-        // same sector always breathes at the same speed — the sky is still a
-        // fact about the sector, it is just a moving one now.
-        this.tilting.push({
-          group,
-          tilted,
-          rate: TAU / (52 + ((body.size * 7) % 1) * 46),
-          phase: body.azimuth * DEG,
-          breath: 0.1 + ((body.elevation * 3) % 1) * 0.12,
-        });
-      }
-    }
+    // it.
+    for (const shape of this.plan.asterisms) this.add(buildAsterism(shape, nextOrder()));
+
+    /**
+     * The bodies, and they are the one thing here that no longer takes a draw
+     * order from `nextOrder`.
+     *
+     * Everything above is a stroke or a point: additive, depth-writing nothing,
+     * and therefore ordered entirely by hand — which is exactly why this file
+     * could get away with a hand-assigned draw order for its bodies too. The
+     * hero bodies are opaque meshes that write depth, so they sort themselves,
+     * and they carry the render orders their own files assign (`GasGiant.body`
+     * at -1.98, `Planet`'s ring at -1.96, and so on) — every one of them ahead
+     * of `SKY.orderFirst`, so a body draws before the star field and the field
+     * then depth-tests against it. Stars behind a planet are eaten by the
+     * planet, which is the first time that has ever been true here rather than
+     * arranged.
+     *
+     * The sector's own star is fetched rather than passed for the same reason
+     * `render/Planet.ts` fetches it: `planLight` is pure in `(seed, sector)`, so
+     * this is the same answer `main.ts` already holds, not a second roll of it.
+     */
+    this.bodies = new SkyBodies(this.plan.bodies, planLight(seed, sector));
+    this.add(this.bodies.object);
+    // What each body actually came out, written back over the plan's
+    // placeholders so `describe()` reports evidence rather than intent.
+    const colours = this.bodies.colours;
+    this.plan.bodies.forEach((body, index) => {
+      if (colours[index]) body.colour.copy(colours[index]);
+    });
+
     this.drift = 0;
-    this.elapsed = 0;
     this.object.quaternion.identity();
   }
 
@@ -1640,32 +1381,22 @@ export class Backdrop {
    *
    * Time-based, like everything else that accumulates here. A sky that wheels
    * faster on a faster machine would be the same bug as a lengthening trail.
+   *
+   * **The wheel now does real work rather than only moving the field around.**
+   * A sky body's attitude rides it, so a fixed star sweeps a terminator across
+   * a giant's disc over the course of a run — and a ringed planet, whose
+   * attitude is deliberately held against the wheel, has its own direction from
+   * the eye move instead, which opens and closes its rings. Both are what the
+   * flat build faked with an animated Y scale and a "breath" on the group's
+   * scale, and both are now consequences of the one rotation this file already
+   * had rather than a second animation beside it.
    */
   update(dt: number): void {
     if (!backdrop.enabled || !this.plan) return;
     this.axis.copy(this.plan.band.pole);
     this.drift += (SKY.driftRate * DEG) * (1 + this.warpIntensity * SKY.warpSpin) * dt;
     this.object.quaternion.setFromAxisAngle(this.axis, this.drift);
-
-    this.elapsed += dt * (1 + this.warpIntensity * 8);
-    for (const t of this.tilting) {
-      const a = t.phase + this.elapsed * t.rate;
-      /**
-       * The aspect, and the floor on it is load-bearing rather than taste.
-       *
-       * This scales toward edge-on but never through it. The far and near halves
-       * of the ring were assigned their draw order when the body was built —
-       * which is the whole reason this sky needs no depth buffer — and passing
-       * through zero would swap which is which while the order stayed put,
-       * drawing the far arc over the planet it is meant to be behind. 0.16 is
-       * close enough to edge-on to read as a razor and far enough from it that
-       * the ordering can never invert.
-       */
-      t.tilted.scale.y = 0.16 + 0.84 * (0.5 + 0.5 * Math.sin(a));
-      // And the size, on a slower period than the aspect so the two never lock
-      // into one obvious rhythm.
-      t.group.scale.setScalar(1 + t.breath * Math.sin(a * 0.43 + 1.1));
-    }
+    this.bodies?.update(dt, this.object.quaternion, this.warpIntensity);
   }
 
   /**
@@ -1677,6 +1408,25 @@ export class Backdrop {
   }
 
   /** What is up, for the debug hook and for a headless harness. */
+  /**
+   * The galactic plane this sector's sky is built around, or `null` before the
+   * first `show`.
+   *
+   * Exposed for one reason: `render/Nebula.ts` draws the *haze* that fills the
+   * same band this file's starfield is weighted toward, and the two have to be
+   * the same plane or the sky reads as two skies. Rolling a second pole from
+   * the same seed would look like it worked and would not — a second hash of
+   * the same number is a different number. So the plan hands over the one it
+   * already made.
+   *
+   * `lane` is the dust lane's own latitude offset, in radians here rather than
+   * the degrees the plan stores, because every consumer of it is a shader.
+   */
+  get plane(): { pole: Vector3; lane: number } | null {
+    if (!this.plan) return null;
+    return { pole: this.plan.band.pole, lane: this.plan.band.lane * DEG };
+  }
+
   describe(): SkyReport | null {
     if (!this.plan) return null;
     const [seed, sector] = this.key.split(":");
@@ -1719,8 +1469,45 @@ export class Backdrop {
     this.key = "";
   }
 
+  /**
+   * Tear down what `show` built — and *only* what `show` built.
+   *
+   * This walked every child of the group and disposed it, which was correct
+   * for exactly as long as this file was the group's only contributor. It
+   * stopped being correct the moment `main.ts` parented the volumetric nebula
+   * here (deliberately, so the haze inherits the sky's pinning, its slow wheel
+   * about the pole and its hyperwarp tear rather than running a second clock).
+   * The next sector change then removed that nebula from the scene graph and
+   * disposed its material — so the haze silently stopped being drawn at all,
+   * and a shader recompile was paid for the privilege.
+   *
+   * A group is not a licence to destroy things you did not make. Everything
+   * `show` adds is tagged, and only tagged children are collected; anything
+   * else parented here is left strictly alone.
+   */
+  /**
+   * Add something this file owns and may later destroy. See `clear`.
+   *
+   * A method rather than a convention, because the convention is exactly what
+   * failed: four call sites in `show` each wrote `this.object.add(...)`, and
+   * nothing distinguished them from the one call site in `main.ts` that also
+   * writes to this group and must survive.
+   */
+  private add(child: Object3D): void {
+    child.userData[OWNED] = true;
+    this.object.add(child);
+  }
+
   private clear(): void {
+    // Bodies first, and through their own teardown rather than through the
+    // traverse below. Each is an instance of a hero class that keys its whole
+    // lifecycle off a private `key` string; emptying one behind its back would
+    // leave it believing it still has a sector built. The traverse then finds
+    // an empty group, which is the correct amount of work to do on it.
+    this.bodies?.dispose();
+    this.bodies = null;
     for (const child of [...this.object.children]) {
+      if (child.userData[OWNED] !== true) continue;
       this.object.remove(child);
       child.traverse((node) => {
         const drawable = node as Partial<Mesh>;

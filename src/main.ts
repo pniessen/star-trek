@@ -3,6 +3,7 @@ import { Stage } from "./render/Stage.js";
 import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { Backdrop, backdrop } from "./render/Backdrop.js";
+import { Nebula } from "./render/Nebula.js";
 import { Planet } from "./render/Planet.js";
 import { planLight, shadeAt, RIG, type SectorLight } from "./render/light.js";
 import { EventLights } from "./render/eventLights.js";
@@ -92,6 +93,17 @@ const starfield = createStarfield();
 // rebuilt in place; it draws between the starfield and the grid and is pinned
 // to the camera's position every frame. See `render/Backdrop.ts`.
 const sky = new Backdrop();
+/**
+ * The haze, parented to the sky rather than to the scene.
+ *
+ * `Backdrop.object` is already pinned to the camera every frame and already
+ * wheels slowly about the galactic pole, so hanging the nebula off it means the
+ * drift, the pinning and the hyperwarp tear all apply to the haze for free —
+ * with no second clock to keep in step, which is the failure mode every
+ * independently-animated background layer eventually finds.
+ */
+const nebula = new Nebula();
+sky.object.add(nebula.object);
 /**
  * The sector's ringed planet, and the one piece of scenery that is *not* on the
  * backdrop. It lives in world space so its parallax and its ring's aspect are
@@ -1393,6 +1405,16 @@ function frame(now: number): void {
   // campaign" rule is untouched, and the cabinet showing the sky of the sector
   // you would actually launch into is the better of the two readings anyway.
   sky.show(campaign.seed, campaign.current);
+  // After `sky.show`, never before: the haze takes its band from the plan that
+  // call builds, and on the frame a sector changes the old plan is still up
+  // until it runs. Both are key-cached internally, so this is a string compare
+  // on every frame but the two a war can change sector on.
+  const plane = sky.plane;
+  if (plane) nebula.show(campaign.seed, campaign.current, plane.pole, plane.lane);
+  // The tuning console writes to `NEBULA` directly; this is what carries those
+  // writes into the shader's own uniforms. Cheap enough to do unconditionally
+  // rather than dirty-tracking eight numbers.
+  nebula.sync();
   // Called unconditionally every frame, the same idiom as `sky.show` right
   // above — its own internal key cache (`Shoals.key`) makes every frame but
   // the two a sector can change on a cheap string comparison. This used to
@@ -1673,6 +1695,15 @@ if (DEBUG_PROBE) {
       prev: () => sky.cycle(-1),
       unpin: () => sky.unpin(),
       describe: () => sky.describe(),
+      /**
+       * The galactic plane the sky is currently built around, or `null` when
+       * the backdrop is switched off. Exposed because the nebula takes its band
+       * from here rather than rolling one, so "did the haze follow the sector"
+       * is only answerable by comparing the two — and a harness that cannot
+       * tell "the nebula did not update" from "the sky had nothing to give it"
+       * reports a regression that is not there.
+       */
+      plane: () => sky.plane,
     },
     /**
      * The comet, now wired into a run — `seed` and `model` are the session
@@ -1782,10 +1813,19 @@ const sceneryHandles = [giant, planet, moon, sunHero, asteroids] as const;
   hide(): void {
     for (const handle of sceneryHandles) handle.object.visible = false;
     shoalsVisible = false;
+    nebula.setVisible(false);
+    // The sky's own bodies are real lit meshes now, not strokes — the same
+    // `GasGiant`/`Planet`/`Moon`/`SunHero` the hero slot uses, hung on the
+    // celestial sphere. They are children of the backdrop rather than entries
+    // in `sceneryHandles`, so this switch used to walk straight past them,
+    // which is exactly the cost the harness calls it to dodge.
+    backdrop.enabled = false;
   },
   show(): void {
     for (const handle of sceneryHandles) handle.object.visible = true;
     shoalsVisible = true;
+    nebula.setVisible(true);
+    backdrop.enabled = true;
   },
 };
 
