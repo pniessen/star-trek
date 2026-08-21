@@ -30,6 +30,38 @@ import { makeRng } from "../chart/rng.js";
  * `docs/todo.md`'s tuning list once there is a body on screen to judge them
  * against.
  */
+/**
+ * The rig the sector's star is actually built as, and the one place its two
+ * intensities are written down.
+ *
+ * `main.ts` constructs a `DirectionalLight` and an `AmbientLight` from these,
+ * and `render/VectorObject.ts` divides by `ambient` to turn a caller's
+ * requested occluder darkness back into an albedo — three.js's lighting path
+ * resolves a Lambert surface to `albedo * (ambient + dotNL * directional) / PI`,
+ * so the night side of every hull in the game is `albedo * ambient / PI`.
+ *
+ * They live here rather than in `main.ts` because two files now depend on the
+ * *same* number and the second one cannot see the first. `VectorObject` shipped
+ * with `0.12 / Math.PI` written out by hand and a staleness warning attached,
+ * which is an honest way to describe a bug waiting to happen: move `ambient`
+ * and every hull's night side moves with it, silently, with nothing failing.
+ * A warning that a constant must be kept in step is worth less than not having
+ * two of them.
+ *
+ * The light itself is still owned by the sector — `planLight` decides where it
+ * is and what colour it is. This is only how brightly it is wired up.
+ */
+export const RIG = {
+  /** The star. */
+  directional: 1.4,
+  /**
+   * A low floor under it, so a real material's night side is dim rather than
+   * literally zero — the job `STAR.floor` does for `shadeAt`'s own Lambertian
+   * term. Low enough that the terminator still reads.
+   */
+  ambient: 0.12,
+};
+
 export const STAR = {
   /**
    * Distance from sector centre, in units. Far past anything it lights —

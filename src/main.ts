@@ -4,7 +4,7 @@ import { VectorObject, type ShapeMode } from "./render/VectorObject.js";
 import { TraceBuffer } from "./render/TraceBuffer.js";
 import { Backdrop, backdrop } from "./render/Backdrop.js";
 import { Planet } from "./render/Planet.js";
-import { planLight, shadeAt, type SectorLight } from "./render/light.js";
+import { planLight, shadeAt, RIG, type SectorLight } from "./render/light.js";
 import { GasGiant } from "./render/GasGiant.js";
 import { Moon } from "./render/Moon.js";
 import { SunHero } from "./render/SunHero.js";
@@ -308,7 +308,7 @@ let shoalsVisible = true;
  * construction (`three.js` never samples scene lights for an unlit
  * material).
  */
-const sun = new DirectionalLight(0xffffff, 1.4);
+const sun = new DirectionalLight(0xffffff, RIG.directional);
 sun.position.copy(sectorLight.position);
 sun.color.copy(sectorLight.colour);
 /**
@@ -319,7 +319,7 @@ sun.color.copy(sectorLight.colour);
  * inside a shading function no longer being called. Low enough that the
  * terminator this whole task exists to produce still reads clearly.
  */
-const sunFill = new AmbientLight(0xffffff, 0.12);
+const sunFill = new AmbientLight(0xffffff, RIG.ambient);
 stage.scene.add(sun, sunFill);
 
 /**
