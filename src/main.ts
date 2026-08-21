@@ -248,6 +248,11 @@ stage.scene.add(asteroids.object);
  * comet's alone.
  */
 const shoals = new Shoals();
+// Added beside the other bodies now that it has a node of its own. It used to
+// be strokes and so had nothing to add; the volumetric rebuild gave it a mesh,
+// which it was mounting off the trace buffer's own parent precisely because
+// this line did not exist.
+stage.scene.add(shoals.object);
 
 const STARBASE_POSITION = new Vector3(0, 0, 118);
 const starbase = new VectorObject(buildStarbase(), {
@@ -1355,7 +1360,7 @@ function frame(now: number): void {
   // The comet's tail, on the same terms: regenerated in full every call,
   // never accumulated. `object` (the rock) is a scene child and draws itself;
   // this is only the strokes.
-  session.comet.draw(trace);
+  session.comet.draw(trace, eventLights);
   session.debris.draw(trace);
   session.death.draw(trace);
   session.docking.draw(trace, player);
@@ -1382,7 +1387,7 @@ function frame(now: number): void {
   // gas shoal is its one producer so far; `shoalsVisible` is the `__scenery`
   // switch's own field (Task 4), read here for the first time.
   skyTrace.begin();
-  if (shoalsVisible) shoals.draw(skyTrace, dt);
+  if (shoalsVisible) shoals.draw(skyTrace, dt, eventLights);
   skyTrace.end();
 
   grid.follow(player.position.x, player.position.z);
@@ -1808,7 +1813,10 @@ if (DEBUG_PROBE) {
  * so gating it behind `DEBUG_PROBE` the way `__giant` etc. are would just
  * break the thing it exists for.
  */
-const sceneryHandles = [giant, planet, moon, sunHero, asteroids] as const;
+const sceneryHandles = [giant, planet, moon, sunHero, asteroids, shoals] as const;
+// The nebula is not a `.object.visible` handle like the rest — it owns a bake
+// queue and a cube target, and hiding it has to stop the bake as well as the
+// draw, which is why it carries its own pair rather than joining the list.
 (window as unknown as Record<string, unknown>).__scenery = {
   hide(): void {
     for (const handle of sceneryHandles) handle.object.visible = false;

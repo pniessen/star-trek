@@ -1,5 +1,7 @@
 import { BufferAttribute, Color, Group, IcosahedronGeometry, SRGBColorSpace, Vector3 } from "three";
 import { makeRng, type Rng } from "../chart/rng.js";
+import { CometMedium } from "../render/CometMedium.js";
+import type { MediaLightSource } from "../render/shaders/media.js";
 import type { TraceBuffer } from "../render/TraceBuffer.js";
 import { VectorObject } from "../render/VectorObject.js";
 
@@ -704,6 +706,21 @@ export class Comet {
   private readonly filaments: TailFilament[] = [];
 
   /**
+   * The tail as a raymarched medium, or `null` on a machine that cannot afford
+   * one — see `render/CometMedium.ts` and `mediaQuality`.
+   *
+   * **`null` is not a failure mode, it is the old renderer.** When there is no
+   * medium the filament plume below runs exactly as it always has, which is
+   * what keeps `tools/playtest.mjs` — which runs on headless software GL, where
+   * a full-screen march is seconds a frame — looking at the same game it was
+   * looking at before. When there *is* a medium, the filaments are skipped
+   * entirely rather than drawn over it: they were an approximation of the
+   * thing this now is, and stacking the two would be paying twice to draw one
+   * tail and getting a brighter core for the trouble.
+   */
+  private medium: CometMedium | null = null;
+
+  /**
    * Rebuild for a new plan, if it is not already the one standing.
    *
    * A reference check rather than a key string: unlike `Planet.show`, which is
@@ -727,7 +744,18 @@ export class Comet {
     this.object.add(this.rock.group);
     this.object.position.copy(plan.nucleus);
 
-    for (let i = 0; i < COMET.filaments; i++) {
+    // The volume, parented to the same node the rock hangs on — which is
+    // already kept on the nucleus every frame by `update`, so the hull tracks
+    // a drifting comet for free and there is no second transform to keep in
+    // step. `solidFraction` and `tipFloor` are handed across rather than
+    // duplicated in GLSL: the renderer and `interferenceAt` must taper the
+    // same cone, and a constant passed is a constant that cannot drift.
+    this.medium = CometMedium.build(plan, COMET.solidFraction, COMET.tipFloor);
+    if (this.medium) this.object.add(this.medium.object);
+
+    // Only when there is no medium to draw the tail instead. Seeded from the
+    // same `rng` either way is not required and would only matter if both ran.
+    for (let i = 0; this.medium === null && i < COMET.filaments; i++) {
       const span = COMET.filamentSpan * (0.55 + rng.next() * 0.9);
       this.filaments.push({
         // Seeded across the whole cycle including the negative part, so the
@@ -756,6 +784,14 @@ export class Comet {
     if (!this.plan) return;
     this.object.position.copy(this.plan.nucleus);
 
+    // The medium streams by scrolling a noise coordinate rather than by moving
+    // anything, so it is the same `COMET.flow` in the same world units per
+    // second the filaments use — one number, two renderers, no second clock.
+    if (this.medium) {
+      this.medium.update(dt, COMET.flow);
+      return;
+    }
+
     const step = (COMET.flow * dt) / this.plan.length;
     for (const filament of this.filaments) {
       filament.head += step;
@@ -779,9 +815,24 @@ export class Comet {
    * of its 5000-segment ceiling for the one comet a sector ever has standing
    * at once.
    */
-  draw(trace: TraceBuffer): void {
+  draw(trace: TraceBuffer, lights: MediaLightSource | null = null): void {
     if (!this.plan) return;
     const plan = this.plan;
+
+    // The medium draws itself — it is a scene child, not a stroke — so all
+    // there is to do here is tell it where the comet now stands and what the
+    // world is currently lit by, and then leave without pushing a segment.
+    //
+    // `lights` is optional and defaults to nothing, because `main.ts` calls
+    // this as `session.comet.draw(trace)` and this file may not change that.
+    // Passing `eventLights` as the second argument is the one line that turns
+    // a warhead detonating inside the tail into a flash that lights the tail;
+    // see `MediaVolume.injectLights`.
+    if (this.medium) {
+      this.medium.sync(plan, lights);
+      return;
+    }
+
     const { x: nx, y: ny, z: nz } = plan.nucleus;
 
     // Each filament walked as a connected chain, at a radius following the cone
@@ -853,6 +904,10 @@ export class Comet {
   clear(): void {
     this.rock?.dispose();
     this.rock = null;
+    // Before the child sweep below, which only detaches — a `ShaderMaterial`
+    // is a GPU program and has to be told.
+    this.medium?.dispose();
+    this.medium = null;
     this.filaments.length = 0;
     this.plan = null;
     this.says = null;

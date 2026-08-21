@@ -1,5 +1,7 @@
-import { Color, SRGBColorSpace } from "three";
+import { Color, Group, SRGBColorSpace, Vector3 } from "three";
 import { makeRng } from "../chart/rng.js";
+import { planLight } from "./light.js";
+import { MediaVolume, type MediaLightSource, mediaMaterial, mediaQuality } from "./shaders/media.js";
 import type { TraceBuffer } from "./TraceBuffer.js";
 
 /**
@@ -224,11 +226,246 @@ function seedFrom(plan: ShoalPlan): number {
   return (mix(plan.bearing) ^ mix(plan.range) ^ mix(plan.span) ^ mix(plan.drift)) >>> 0;
 }
 
+/**
+ * Every number the shoal's medium is — the raymarched half of this file, and
+ * the second consumer of `render/shaders/media.ts` after the comet.
+ *
+ * **Why a curtain is worth marching, given that the comet already proved it.**
+ * Because a shoal is the body a run flies *through* at speed, and the filament
+ * version could only ever add: a hundred and twenty additive strands are the
+ * same brightness whether the dense part of the curtain is between you and the
+ * far side or behind you, so flying into one looked exactly like flying out of
+ * one. A medium has a front and a back. It gets dark where the dust is thick
+ * and bright where a warhead just went off, and the transition from "gas ahead"
+ * to "gas around me" is a thing that happens rather than a thing you cross.
+ *
+ * **What it still refuses to do is unchanged.** Visual occlusion only. This
+ * body has no opinion on the scanner, on lock, or on cloaking, and the volume
+ * does not give it one — see the class header. The march is a picture; the
+ * comet keeps sole ownership of interference.
+ *
+ * Cheaper than the comet's on every axis — 14 steps against 22, a shorter span,
+ * a lower extinction — and the reason is measured rather than assumed. A shoal
+ * stands at *combat* range with a 90-unit span, so it fills the frame far more
+ * readily than a comet does; and its bounding hull is its exact shape, where
+ * the comet's cone sits inside a looser box and skips a share of its samples in
+ * vacuum for free.
+ *
+ * **The per-step comparison in this block used to say the opposite of what it
+ * now says, and the correction is worth keeping.** It read "7.9 ms at 12
+ * steps — nearly twice the comet's per-step price", from an extrapolation. Both
+ * measured directly, at 3024x1964, camera inside a maximum-size body: the box
+ * was **0.371 ms a step** against the cone's **0.391** — the same price, not
+ * twice it — and after `mediaNoise` moved the noise into a texture the box is
+ * the *cheaper* of the two at **0.137** against **0.216**. The vacuum samples
+ * the cone skips for free were never the dominant term; the noise the box pays
+ * for on every sample was, and it is the thing that got cheap.
+ *
+ * The 8-step figure that extrapolation forced did survive contact with a real
+ * measurement, and that is the part worth saying out loud: a curtain filling
+ * the frame at 8 steps was predicted at ~4.2 ms and measured at 4.0 in a live
+ * run. The extrapolation was right about the number and wrong about the reason.
+ *
+ * On top of which `planShoal` rolls independently of `planFixture`, so a
+ * curtain and a tail can be standing in one sector: two full-screen marches in
+ * one frame is the case that has to fit, not either one alone.
+ */
+export const SHOAL_MEDIA = {
+  /**
+   * Samples per march. **Was eight — the lowest number in this whole layer,
+   * forced there by cost — and is now fourteen for less than eight used to
+   * cost.** `render/shaders/media.ts` now reads its noise out of a 64³ texture
+   * rather than evaluating sixteen hashes a sample. Measured on an M2 Max at
+   * 3024x1964 with a maximum-size curtain (112 x 26 x 31) and the camera
+   * standing inside it, so every pixel is covered:
+   *
+   * | steps | analytic `fbm3` | `mediaNoise` texture |
+   * |------:|----------------:|---------------------:|
+   * |     8 |         2.66 ms |              0.94 ms |
+   * |    16 |         5.63 ms |              2.04 ms |
+   *
+   * — **0.371 ms per step before, 0.137 ms after, a 2.7x cut**, and rather more
+   * than the comet's 1.8x because a curtain's hull *is* its shape: the comet's
+   * cone sits in a looser bound and skips a good share of its samples in vacuum
+   * before the noise is ever reached, so it had less noise per step to save.
+   * Fourteen steps now cost 1.8 ms where eight used to cost 2.7.
+   *
+   * The old note's pairing argument survives and is the reason this stops at
+   * fourteen rather than going further: a sample every ten world units was
+   * matched to `noiseScale` 0.12's ~8-unit base cell, and fourteen halves the
+   * spacing to about five, which is now *finer* than the base cell rather than
+   * coarser. Past that the march is oversampling its own field and the money
+   * would be better spent on the field.
+   */
+  steps: 14,
+  /** Rows of the `mediaNoise` ladder. Three, matching the comet and for the
+   * same reason recorded there: the third row is the coarse one, and a curtain
+   * 112 units across against a 6-cell tile at `noiseScale` 0.12 (a 50-unit
+   * period) is exactly the case where the largest visible feature must not also
+   * be the period of the repeat. */
+  octaves: 3,
+  /** How far a march may run before it stops caring, in world units. A
+   * curtain's own longest diagonal is about 100; 150 covers the worst crossing
+   * with room and stops a grazing ray from stretching sixteen samples across
+   * three hundred units of mostly nothing. */
+  maxSpan: 150,
+  /** Extinction per unit density per world unit. Lower than the comet's: a
+   * shoal must never be a wall, because unlike a comet it carries no rule that
+   * would explain why you cannot see. It hides and reveals; it does not blind. */
+  sigma: 0.022,
+  /** World units per noise unit — a ~8-unit base cell, deliberately close to
+   * the march's own sample spacing at `steps: 8`. Finer than that (0.16 was
+   * tried) puts detail between the samples, where it becomes dither rather than
+   * structure; coarser loses the curtain's character entirely. */
+  noiseScale: 0.12,
+  /** How far the noise is stretched vertically. A curtain hangs; its structure
+   * runs up and down, which is the one thing the filament version got
+   * unambiguously right (`ShoalFilament` is a vertical strand) and the one
+   * thing worth carrying over unchanged. */
+  streak: 3.4,
+  /** How hard the noise swings the density either side of the shape term. */
+  contrast: 0.95,
+  /** Albedo in the dustiest places. Higher than the comet's 0.18: a shoal has
+   * no nucleus to shadow, so its dark places are dark by being *thin on light*
+   * rather than by standing in front of something bright, and taking them all
+   * the way down would read as holes. */
+  dustAlbedo: 0.3,
+  dustFrom: 0.48,
+  dustTo: 0.96,
+  /** Henyey-Greenstein asymmetry. Slightly under the comet's 0.45 — a shoal is
+   * met from every heading over a whole run rather than approached once, so the
+   * brightest and dimmest views of it need to be closer together. */
+  anisotropy: 0.38,
+  /** How hard the sector's star lights the medium, in `main.ts`'s own `sun`
+   * units. Unlike the comet, a shoal has a real `SectorLight` to read
+   * (`planLight`), so this multiplies a colour the rest of the sector agrees
+   * with. */
+  keyGain: 3.0,
+  /** How hard an event light — a warhead, a kill — lights it, against the
+   * star's own gain. **This is the number the whole feature is for.** A torpedo
+   * detonating inside a gas shoal, lighting the medium from within, is the shot
+   * that cannot be faked with strokes, and it is priced above the star because
+   * a flash is brief and inverse square has already taken most of it back by
+   * the time it is a hull's length away. */
+  lightGain: 1.2,
+  /** The floor the unlit side sits at. */
+  ambient: 0.18,
+  /** Overall output gain, in linear light. */
+  gain: 1,
+} as const;
+
+/** The dust. Darker and barely saturated, against `SHOAL_COLOR`'s gas — the
+ * same two-component split the comet makes, and for the same reason: the whole
+ * read is telling absorbing dust from scattering gas at a glance. */
+export const SHOAL_DUST = new Color().setHSL(196 / 360, 0.1, 0.2, SRGBColorSpace);
+/** The ambient floor's colour. */
+const SHOAL_AMBIENT = new Color().setHSL(190 / 360, 0.34, 0.62, SRGBColorSpace);
+
+/** The curtain's own frame and shape, as uniforms. */
+const MEDIA_UNIFORMS = /* glsl */ `
+uniform vec3 uCentre;
+uniform vec3 uAcross;
+uniform vec3 uDepth;
+uniform vec3 uExtent;
+uniform float uFlow;
+uniform float uNoiseScale;
+uniform float uStreak;
+uniform float uContrast;
+uniform float uDustAlbedo;
+uniform float uDustFrom;
+uniform float uDustTo;
+uniform vec3 uGasColor;
+uniform vec3 uDustColor;
+`;
+
+/**
+ * The curtain's hull: the oriented box `planShoal` already describes, tested
+ * with the core's own slab routine. The proxy mesh is that same box, so the
+ * analytic test and the rasterised hull agree exactly and no fragment is ever
+ * rasterised for a ray that misses.
+ */
+const MEDIA_BOUNDS = /* glsl */ `
+bool mediaBounds(vec3 ro, vec3 rd, out float t0, out float t1) {
+  return boxSpan(ro, rd, uCentre, uAcross, vec3(0.0, 1.0, 0.0), uDepth, uExtent, t0, t1);
+}
+`;
+
+/**
+ * Density: a soft-edged box times a vertically-streaked noise field.
+ *
+ * The shape is a product of three parabolic falloffs rather than a smoothstep
+ * on the box distance, because a product goes to zero on *every* face at once
+ * and reaches its maximum only in the middle — which is exactly the density
+ * `SHOAL.coreBias` was approximating by biasing where filaments were allowed to
+ * sit. The curtain now *is* dense in the middle and thin at the edges rather
+ * than having more strands there, which is the same statement made once instead
+ * of a hundred and twenty times.
+ */
+const MEDIA_DENSITY = /* glsl */ `
+Media mediaSample(vec3 p) {
+  Media m;
+  m.density = 0.0;
+  m.tint = uGasColor;
+  m.scatter = 1.0;
+  m.glow = 0.0;
+
+  vec3 d = p - uCentre;
+  vec3 l = vec3(dot(d, uAcross), d.y, dot(d, uDepth)) / uExtent;
+  vec3 f = clamp(1.0 - l * l, 0.0, 1.0);
+  float shape = f.x * f.y * f.z;
+  // A real threshold, not an epsilon. Unlike the comet's cone — where the
+  // bounding hull is looser than the shape and half the samples land in vacuum
+  // for free — this hull *is* the shape, so every sample is inside the curtain
+  // and pays for the noise. Cutting the outer shell, where the parabolic
+  // product is already under two percent and contributes nothing an eye could
+  // find, is the one place there was a fifth of the cost lying around.
+  if (shape <= 0.02) return m;
+
+  vec3 q = vec3(l.x * uExtent.x, (d.y - uFlow) / uStreak, l.z * uExtent.z) * uNoiseScale;
+  // The density mottle and the dust mask off two decorrelated fields rather
+  // than one — see mediaNoise, and CometMedium's own note for what the
+  // single field cost. It matters more here than it does for a comet: a shoal
+  // has no glowing head to be dark in front of, so its only source of contrast
+  // is knots that are bright and knots that are dark standing beside each
+  // other, and one field could only ever produce the second kind.
+  vec2 n = mediaNoise(q);
+  float g = clamp(0.5 + 0.5 * n.x, 0.0, 1.0);
+
+  float dust = smoothstep(uDustFrom, uDustTo, clamp(0.5 + 0.5 * n.y, 0.0, 1.0));
+  m.density = shape * mix(1.0 - uContrast, 1.0 + uContrast, g);
+  m.tint = mix(uGasColor, uDustColor, dust);
+  m.scatter = mix(1.0, uDustAlbedo, dust);
+  return m;
+}
+`;
+
 export class Shoals {
+  /**
+   * The one scene node this body owns, added by `main.ts` beside the giant and
+   * the moon. Everything the curtain draws hangs here, so hiding it is the
+   * same gesture that hides every other body — which is what `__scenery`'s
+   * switch needs, and what the old `onBeforeRender` latch was standing in for.
+   */
+  readonly object = Object.assign(new Group(), { name: "shoals" });
+
   plan: ShoalPlan | null = null;
+
+  /**
+   * The curtain as a raymarched medium, or `null` where a march is not
+   * affordable — see `mediaQuality`. `null` is not a failure mode, it is the
+   * filament renderer below, unchanged: `tools/playtest.mjs` runs on headless
+   * software GL and sees exactly the shoal it always saw.
+   */
+  medium: MediaVolume | null = null;
 
   private key = "";
   private readonly filaments: ShoalFilament[] = [];
+  /** Scrolled upward by `plan.drift * dt`, in world units. Time-based, per the
+   * house rule, and the only thing about the medium that moves. */
+  private flow = 0;
+  private readonly centre = new Vector3();
+  private readonly toStar = new Vector3();
+  /** Set every frame `draw` runs. See `mount` for the latch it drives. */
 
   /** Rebuild for a sector, if it is not already the one standing — the same
    * key-cache idiom `Planet.show`/`Asteroids.show` use. `main.ts` only calls
@@ -239,8 +476,18 @@ export class Shoals {
     if (key === this.key) return;
     this.key = key;
     this.filaments.length = 0;
+    this.medium?.dispose();
+    this.medium = null;
     this.plan = planShoal(seed, sector);
     if (!this.plan) return;
+
+    // The volume, if this machine can afford one. Built here rather than in
+    // `draw` because it is the one place that knows the sector — and the
+    // sector is what `planLight` needs, which is the whole reason a shoal can
+    // be lit by the star the rest of the sector agrees on where the comet has
+    // to infer its own from the direction its tail points.
+    this.medium = this.buildMedium(seed, sector, this.plan);
+    if (this.medium) return;
 
     const rng = makeRng(seedFrom(this.plan));
     for (let i = 0; i < SHOAL.filaments; i++) {
@@ -276,9 +523,22 @@ export class Shoals {
    * beyond each filament's own slowly-advancing `head` — the same contract
    * every other transient in this game keeps with its `TraceBuffer`.
    */
-  draw(trace: TraceBuffer, dt: number): void {
+  draw(trace: TraceBuffer, dt: number, lights: MediaLightSource | null = null): void {
     if (!this.plan) return;
     const plan = this.plan;
+
+    // The medium draws itself — it is a scene child, not a stroke — so all
+    // there is to do here is stream it, aim its light, and hand it whatever
+    // the world is currently lit by.
+    //
+    // `lights` is optional and defaults to nothing, because `main.ts` calls
+    // this as `shoals.draw(skyTrace, dt)` and this file may not change that.
+    // Passing `eventLights` as the third argument is the one line that turns a
+    // warhead detonating inside the curtain into a flash that lights it.
+    if (this.medium) {
+      this.streamMedium(plan, dt, lights);
+      return;
+    }
 
     const dirX = Math.sin(plan.bearing);
     const dirZ = Math.cos(plan.bearing);
@@ -369,5 +629,116 @@ export class Shoals {
     this.key = "";
     this.plan = null;
     this.filaments.length = 0;
+    this.medium?.dispose();
+    this.medium = null;
   }
+
+  /**
+   * Stand a volume up for this sector's curtain, or return `null` where a
+   * march cannot be afforded.
+   *
+   * The proxy hull *is* the oriented box the bounds test uses, rather than a
+   * looser cover: a curtain is already a box, so there is no shape here for a
+   * hull to be generous about, and every rasterised fragment is one the march
+   * has something to say about.
+   */
+  private buildMedium(seed: number, sector: number, plan: ShoalPlan): MediaVolume | null {
+    if (mediaQuality() <= 0) return null;
+
+    const dirX = Math.sin(plan.bearing);
+    const dirZ = Math.cos(plan.bearing);
+    const across = new Vector3(-dirZ, 0, dirX);
+    const depth = new Vector3(dirX, 0, dirZ);
+    const extent = new Vector3(plan.span / 2, SHOAL.height / 2, (plan.span * SHOAL.depthFraction) / 2);
+    this.centre.set(dirX * plan.range, 0, dirZ * plan.range);
+
+    const material = mediaMaterial({
+      steps: SHOAL_MEDIA.steps,
+      octaves: SHOAL_MEDIA.octaves,
+      prelude: MEDIA_UNIFORMS,
+      bounds: MEDIA_BOUNDS,
+      density: MEDIA_DENSITY,
+      uniforms: {
+        uCentre: { value: this.centre.clone() },
+        uAcross: { value: across },
+        uDepth: { value: depth },
+        uExtent: { value: extent },
+        uFlow: { value: 0 },
+        uNoiseScale: { value: SHOAL_MEDIA.noiseScale },
+        uStreak: { value: SHOAL_MEDIA.streak },
+        uContrast: { value: SHOAL_MEDIA.contrast },
+        uDustAlbedo: { value: SHOAL_MEDIA.dustAlbedo },
+        uDustFrom: { value: SHOAL_MEDIA.dustFrom },
+        uDustTo: { value: SHOAL_MEDIA.dustTo },
+        uGasColor: { value: SHOAL_COLOR.clone() },
+        uDustColor: { value: SHOAL_DUST.clone() },
+        uSigma: { value: SHOAL_MEDIA.sigma },
+        uGain: { value: SHOAL_MEDIA.gain },
+        uAmbient: { value: SHOAL_MEDIA.ambient },
+        uAmbientColor: { value: SHOAL_AMBIENT.clone() },
+        uAnisotropy: { value: SHOAL_MEDIA.anisotropy },
+        uMaxSpan: { value: SHOAL_MEDIA.maxSpan },
+        uLightGain: { value: SHOAL_MEDIA.lightGain },
+      },
+    });
+
+    const volume = new MediaVolume(material);
+    volume.mesh.position.copy(this.centre);
+    volume.mesh.quaternion.setFromUnitVectors(FORWARD, depth);
+    volume.mesh.scale.set(extent.x * 2, extent.y * 2, extent.z * 2);
+
+    // The sector's own star, read the same way every other body reads it.
+    const light = planLight(seed, sector);
+    this.toStar.copy(light.position).sub(this.centre);
+    volume.setKeyLight(this.toStar, light.colour, SHOAL_MEDIA.keyGain);
+
+    // The latch. `main.ts` gates this body behind `shoalsVisible`
+    // (`__scenery`'s own switch) by *not calling `draw`* — which works
+    // perfectly for a stroke renderer that has to be re-pushed every frame and
+    // not at all for a scene child that draws itself. `draw` therefore raises
+    // `asked` and makes the mesh visible, and this hook lowers both again on
+    // the way past, so the volume renders exactly on the frames its owner asked
+    // for it and disappears within one frame of the owner stopping. One frame
+    // of lag, self-healing in both directions, and nothing outside this file
+    // has to learn a new call.
+    // Mounted once, here. The old build had no scene node of its own and hung
+    // the hull off `trace.object.parent`, with an `onBeforeRender` latch to
+    // make `__scenery`'s switch — which gates a *call*, not a scene child —
+    // reach a body that draws itself. Both were honest workarounds for this
+    // file not being allowed to add a line to `main.ts`. It is now, so the
+    // indirection is gone: `object` is a real node, `main.ts` adds it beside
+    // every other body, and the switch toggles it the same way it toggles them.
+    this.object.add(volume.mesh);
+    return volume;
+  }
+
+  /**
+   * Per-frame: stream the field, take in the world's event lights, and make
+   * sure the hull is mounted and visible.
+   *
+   * **Mounted from the trace's own parent**, which deserves an explanation
+   * rather than an apology. Every other body in this game is scene-added by
+   * `main.ts` at boot (`stage.scene.add(giant.object)` and its neighbours);
+   * this one never was, because until now it had nothing to add — it was
+   * strokes, and `main.ts`'s own comment says so in as many words. Adding the
+   * line is a one-word change to a file this task may not touch, so the mount
+   * comes off the one scene node this class is already handed: `trace.object`
+   * is `skyTrace`'s `LineSegments`, added to `stage.scene` at identity, so its
+   * parent is the scene. **What should replace this is
+   * `stage.scene.add(shoals.object)` beside the other bodies, and a plain
+   * `readonly object = new Group()` here** — see this task's report. Until
+   * then, this is correct and costs nothing; it is only indirect.
+   */
+  private streamMedium(plan: ShoalPlan, dt: number, lights: MediaLightSource | null): void {
+    const medium = this.medium;
+    if (!medium) return;
+
+    this.flow += plan.drift * dt;
+    medium.uniform("uFlow").value = this.flow;
+    medium.injectLights(lights, this.centre);
+
+  }
+
 }
+
+const FORWARD = new Vector3(0, 0, 1);
