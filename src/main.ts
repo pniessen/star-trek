@@ -939,7 +939,75 @@ let last = performance.now();
 let time = 0;
 let smoothedFps = 60;
 
+/**
+ * The frame rate this game runs at, and the reason it is not "as fast as the
+ * display will go".
+ *
+ * Measured on an M2 Max at this machine's own fullscreen buffer (3024x1964):
+ * the whole scene render and post chain costs **4.0 ms**, and the frame arrives
+ * every 8.3 ms because ProMotion is running at 120 Hz. So half of every frame
+ * is spent waiting, and the ceiling on anything we might add is 4.3 ms.
+ *
+ * At 60 the budget is 16.7 ms and the ceiling is **12.7 ms** — three times the
+ * room, for a constant rather than an optimisation. Nothing in this game needs
+ * 120: it is momentum flight with a turn rate measured in radians per second,
+ * not a twitch shooter where a 8 ms input-to-photon difference is a skill
+ * ceiling. Spending that headroom on lit hulls, volumetric media and a sky
+ * worth looking at buys more than spending it on frames nobody can see.
+ *
+ * It is a *cap*, not a target: a machine that cannot make 60 simply runs
+ * slower, and everything here is `dt`-based so it plays identically. See the
+ * skip test in `frame`.
+ */
+const FRAME_CAP = {
+  /** Frames per second. 0 disables the cap and renders on every callback. */
+  fps: 60,
+  /**
+   * How much of the target interval must elapse before a frame is accepted.
+   *
+   * It has to sit strictly between two refreshes of the display we are capping
+   * *from* and one refresh of the display we are capping *to*, and 0.75 is the
+   * only value that is comfortably both:
+   *
+   *  - **120 Hz.** Frames arrive every 8.33 ms; the threshold is 12.5 ms. The
+   *    first is rejected, the second (16.67 ms) accepted — an exact, evenly
+   *    paced 60. At 0.5 the threshold would be 8.33 ms, landing precisely on
+   *    the arrival time, and the cap would either never fire or flip-flop on
+   *    floating-point noise.
+   *  - **60 Hz.** Every frame is 16.67 ms and clears 12.5 ms with room to
+   *    spare, so jitter can eat 4 ms of an interval before anything is
+   *    dropped. Without that slack a 16.6 ms frame would miss a 16.67 ms
+   *    target by a hair, skip, and turn a clean 60 into a juddering 30.
+   *
+   * On a refresh rate that is not a multiple of 60 this settles a little above
+   * it — simulated at 72 fps on a 144 Hz display and 69 on a 240, the latter
+   * with about 4 ms of variation between frames. A phase accumulator would hit
+   * exactly 60 on 240 instead, at the cost of making 144 uneven, so neither
+   * approach is clean at every rate and this one is clean at the two that
+   * matter: 60 and 120 both come out at exactly 60 with zero variation, jitter
+   * included. Every clock in this game is `dt`-based, so a machine landing
+   * slightly off plays identically either way.
+   */
+  tolerance: 0.75,
+};
+
 function frame(now: number): void {
+  requestAnimationFrame(frame);
+
+  /**
+   * The cap, applied before anything else this function does.
+   *
+   * Rendering and logic are held together deliberately rather than rendering at
+   * 60 and simulating at 120: `dt`-based logic is correct at any rate, so a
+   * second rate would buy nothing and cost a second clock to reason about — and
+   * `Session.timeScale` is already the only thing allowed to scale game time
+   * (see `game/hitStop.ts`). One skipped callback is one skipped frame, whole.
+   */
+  if (FRAME_CAP.fps > 0) {
+    const interval = 1000 / FRAME_CAP.fps;
+    if (now - last < interval * FRAME_CAP.tolerance) return;
+  }
+
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   time += dt;

@@ -53,8 +53,32 @@ arrows for the decision list, `Space` to commit and `Enter` to launch.
 
 ## Decisions that are locked
 
-Do not quietly revisit these; they are load-bearing and each closed off
-alternatives deliberately.
+**Superseded by the owner's ruling, 2026-08-18: there is one lock, and it is
+"a stunning game experience". Everything below is unlocked.**
+
+Read what follows as *reasoning on record*, not as a list of vetoes. Every
+entry still says something true about why the game is shaped the way it is,
+and several were arrived at by being wrong first — the plane, the floor under
+the slab, the held brace, the giant's three stroke-built rebuilds. That
+history is worth more than the conclusions, because it is what stops the same
+mistake being made twice. But a conclusion that now stands between the game
+and being worth looking at is not a constraint, it is an obstacle, and the
+ruling is that the obstacle loses.
+
+Two things did *not* get unlocked by this, because neither was ever an
+art-direction rule:
+
+- **Legibility that serves play.** Four shield facings, one energy pool, the
+  scanner being trustworthy, one currency, four decisions per chart visit.
+  These are about a game being playable, and "stunning game experience" is a
+  standard they answer to rather than one that overrides them. If a visual
+  change would cost one of these, that is a real trade to weigh out loud, not
+  a refusal — but it is still a trade.
+- **Our own universe.** No LCARS, no delta, no familiar species or ship
+  names. That is a legal boundary, not a taste one.
+
+The rest is open. Where an entry below has since been revised, the revision
+is recorded with it — that convention stays.
 
 - ~~**The play space is a plane.** The scanner is only trustworthy if the world
   is flat. Everything else follows from this.~~ **Unlocked, deliberately, with
@@ -267,6 +291,31 @@ See `render/Stage.ts`.
   `Session.timeScale`. It is bounded, it never freezes, and it drains on real
   seconds. Do not add a second time scale and do not touch the frame clamp — a
   clamped `dt` already looks exactly like slow motion and has cost an hour once.
+- **The game renders at 60, capped in software.** `FRAME_CAP` in `main.ts`
+  skips a callback rather than letting a 120 Hz display drive the loop. It is
+  not about the machine being slow — it is the opposite. Measured on an M2 Max
+  at 3024x1964, the whole scene and post chain costs 4.0 ms against a 120 Hz
+  budget of 8.3, so half of every frame was spent waiting; at 60 the ceiling on
+  anything new goes from 4.3 ms to 12.7. Nothing here needs 120 — it is
+  momentum flight, not a twitch shooter. Verified by simulating the predicate:
+  60 and 120 Hz displays both land on exactly 60 with zero frame-to-frame
+  variation, jitter included; rates that are not multiples of 60 settle a
+  little above it.
+- **Changing the scene's light count recompiles every lit material.** three.js
+  bakes the count into each program, so adding or removing a light relinks all
+  of them — measured at **170 ms in a single frame** for three programs, merely
+  by toggling a lit object's `visible`. This is why `render/eventLights.ts` is a
+  fixed pool built at boot that animates intensity to zero rather than adding a
+  light per explosion: the hitch does not disappear if you defer it, it moves to
+  the first detonation, which is the worst frame in a run to spend on a compile.
+  Anything that wants a new light wants a slot in that pool.
+- **Geometry is nearly free; fill is the budget.** Same measurement session:
+  twelve extra hostile hulls cost 0.00 ms, and hiding the entire sky and all
+  scenery saved 0.05 ms out of 4.0. The frame is bandwidth — clearing and
+  resolving a 4x multisampled half-float buffer, then four full-screen passes
+  over it. So more objects, more instances and more debris are close to free,
+  while volumetrics, extra passes and higher internal resolution are what
+  actually cost. Reach for density before effects.
 - Typecheck before committing. There is no lint step.
 
 ## State
