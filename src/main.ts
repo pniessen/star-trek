@@ -5,6 +5,9 @@ import { TraceBuffer } from "./render/TraceBuffer.js";
 import { Backdrop, backdrop } from "./render/Backdrop.js";
 import { Planet } from "./render/Planet.js";
 import { planLight, shadeAt, RIG, type SectorLight } from "./render/light.js";
+import { EventLights } from "./render/eventLights.js";
+import type { LightSink } from "./game/lightSink.js";
+import { drawWarpFx, resetWarpFx } from "./game/warpFx.js";
 import { GasGiant } from "./render/GasGiant.js";
 import { Moon } from "./render/Moon.js";
 import { SunHero } from "./render/SunHero.js";
@@ -29,7 +32,7 @@ import { DEFAULT_ERA, ERAS, eraSpec } from "./chart/eras.js";
 import { Ship } from "./game/Ship.js";
 import { ALTITUDE, flight } from "./game/altitude.js";
 import { drawBeacons } from "./game/beacons.js";
-import { drawShieldFx } from "./game/shieldFx.js";
+import { drawShieldFx, resetShieldFx } from "./game/shieldFx.js";
 import { Fleet, HOSTILE_COLORS, type HostileKind } from "./game/hostiles.js";
 import { Wing } from "./game/allies.js";
 import { LOOM, Loom, encounters } from "./game/loom.js";
@@ -321,6 +324,37 @@ sun.color.copy(sectorLight.colour);
  */
 const sunFill = new AmbientLight(0xffffff, RIG.ambient);
 stage.scene.add(sun, sunFill);
+/**
+ * The lights events cast, standing up at boot alongside the star.
+ *
+ * Here, and not lazily on the first explosion, because **constructing the pool
+ * is the shader recompile**: three.js bakes the scene's light count into every
+ * lit material's program, so the frame that first sees eight more `PointLight`s
+ * pays for relinking every one of them. A sibling measurement put the cost of
+ * merely toggling a lit object's `visible` at 170 ms in a single frame for
+ * three programs — so deferring this would not avoid the hitch, it would move
+ * it to the first torpedo detonation, which is the worst frame in the run to
+ * spend on a compile. Paid here, before anything is drawn, where nothing is
+ * happening.
+ *
+ * It is added to `stage.scene` rather than to any moving node because every
+ * position handed to `flash` is a world position; see the class's own note.
+ */
+const eventLights = new EventLights().addTo(stage.scene);
+
+/**
+ * How the game asks for light without knowing what a light is.
+ *
+ * `src/game/` draws with strokes and knows nothing about three.js materials or
+ * the scene graph, and it should stay that way — `weapons.ts`, `shieldFx.ts`
+ * and `warpFx.ts` all take this as an *optional* argument and degrade to
+ * strokes-only without it, which is what let three of them be written and
+ * verified before the pool they feed was wired up at all. The renderer's job
+ * is to decide that "a warhead went off here, this bright, for this long"
+ * becomes a `PointLight`; the game's job is only to say so.
+ */
+const emitLight: LightSink = (at, colour, intensity, seconds, curve) =>
+  void eventLights.flash(at, colour, intensity, seconds, { curve });
 
 /**
  * The one place the browser's storage is named. Everything below hands this to
@@ -365,6 +399,18 @@ let previousPresentationMode = presentation.mode;
 function adoptMode(): void {
   chartCursor = campaign.current;
   previousPresentationMode = presentation.mode;
+  // Every mode change is a discontinuity in the world — a run beginning, a
+  // death handing off to the chart, the demonstration taking over. A flash
+  // still decaying across one of those is light from an event that, as far as
+  // what is now on screen is concerned, never happened. Cheap: `clear` walks
+  // eight slots and costs no recompile, which is the whole reason the pool is
+  // fixed-size.
+  eventLights.clear();
+  // Both hold a rising-edge latch — "has this hit already fired its flash",
+  // "has this jump already been committed" — and a latch left set would eat
+  // the next run's first shield hit and its first jump commit.
+  resetShieldFx();
+  resetWarpFx();
 }
 
 /** Which of the four decisions is highlighted in the command view. */
@@ -1021,6 +1067,12 @@ function frame(now: number): void {
   // Real seconds, not `gameDt`: hit-stop scales the world and must not scale
   // the panel that is being used to tune hit-stop.
   tuner.update(dt, held);
+  // Game seconds, not real ones — unlike the tuning console above. A flash is
+  // a thing that happened in the world, so when hit-stop dilates the world the
+  // light from the impact dilates with it. That is the whole point of the beat:
+  // a detonation whose glow ran at real speed through a slow-motion frame would
+  // be the one element insisting the moment is over.
+  eventLights.update(gameDt);
 
   presentation.update(dt);
 
@@ -1232,6 +1284,8 @@ function frame(now: number): void {
     sectorLight = planLight(campaign.seed, campaign.current);
     sun.position.copy(sectorLight.position);
     sun.color.copy(sectorLight.colour);
+    // A hyperwarp does not carry the last sector's explosions with it.
+    eventLights.clear();
     sectorHero = planHero(campaign.seed, campaign.current);
   }
   // `show`/`follow` read `player.position` alone, not the camera, so unlike
@@ -1277,6 +1331,10 @@ function frame(now: number): void {
 
   trace.begin();
   session.ordnance.draw(trace);
+  // The only consumer of the queue `Ordnance` fills when a warhead detonates or
+  // a beam connects. Without this the queue simply self-caps and leaks nothing
+  // — and every detonation in the game is a stroke with no light behind it.
+  session.ordnance.drainFlashes(emitLight);
   session.mines.draw(trace, player);
   // The weave is a transient stroke like every other one here — a hundred and
   // twenty-six filaments as objects would be a hundred and twenty-six materials
@@ -1291,7 +1349,10 @@ function frame(now: number): void {
   session.docking.draw(trace, player);
   // The shields, where the ship actually is: the struck quarter's decaying
   // flash and the braced bow's steady overcharge aura. See `shieldFx.ts`.
-  drawShieldFx(trace, player);
+  drawShieldFx(trace, player, dt, emitLight);
+  // Nothing else draws the jump. The wind-up converges and the arrival expands;
+  // both are `TraceBuffer` strokes, and both hand the pool a flash.
+  drawWarpFx(trace, player, session.hyperwarp, emitLight);
   // The station's approach lights. Given the hull's own rotation so they turn
   // with the ring they sit on, and raised while the player is actually close
   // enough to dock — which is what makes them a guide rather than a garnish.
@@ -1359,7 +1420,11 @@ function frame(now: number): void {
   } else planet.hide();
   // The jump's own charge drives the tear, so the sky winds up with the drive
   // and stops the instant it lets go — no second clock to keep in step.
-  sky.warp(session.hyperwarp.phase === "charging" ? session.hyperwarp.progress : 0);
+  // `skyTear` rather than the charge: the wind-up drives it to 1 and the
+  // arrival releases it from exactly there, where the old phase test snapped it
+  // to zero on the single frame the jump fired — a tear that vanished at the
+  // moment it was most earned.
+  sky.warp(session.hyperwarp.skyTear);
   sky.update(dt);
   sky.follow(stage.camera);
 
@@ -1639,6 +1704,13 @@ if (DEBUG_PROBE) {
      * or waiting for a body to exist.
      */
     __light: { planLight, shadeAt },
+    /**
+     * The event-light pool, so a harness can prove a detonation actually lit
+     * something rather than merely drew a bloom. `inspect()` reports each
+     * slot's live intensity, remaining seconds and cutoff radius — state no
+     * screenshot can show, since the light itself is invisible and only its
+     * effect on lit geometry is on screen.
+     */
     /**
      * The hero gas giant, exposed as the bare instance rather than wrapped in
      * a `{ model, constants }` object the way `__comet`/`__loom` are — the
