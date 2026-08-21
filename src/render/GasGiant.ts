@@ -1,16 +1,16 @@
 import {
   AdditiveBlending,
-  Color,
   FrontSide,
   Group,
   Mesh,
   ShaderMaterial,
   SphereGeometry,
-  SRGBColorSpace,
   Vector3,
 } from "three";
 import { makeRng } from "../chart/rng.js";
 import { STAR, type SectorLight } from "./light.js";
+import { CELESTIAL_UTIL, LIMB_FRAGMENT, LIMB_VERTEX } from "./shaders/celestial.js";
+import { flowLadder } from "./shaders/noise.js";
 
 /**
  * The hero gas giant — `docs/environment.md` §1.5, the rebuild that replaced
@@ -69,6 +69,47 @@ import { STAR, type SectorLight } from "./light.js";
  * first and decorated after. See `flowPoint`'s own comment for the one line
  * doing most of the work, and `flow`'s for the warp.
  *
+ * **A fourth pass, and the first that is about *light and time* rather than
+ * about surface pattern.** The three rebuilds above all argued over the same
+ * question — what is painted on the sphere — and by the end of the third the
+ * answer was good enough that continuing to refine it would have been the
+ * mistake §8.1 records about the stroke build, one domain over: four of seven
+ * rounds spent improving an approach instead of asking what the approach was
+ * missing. What it was missing was everything a body does that a *texture*
+ * cannot. Three things landed, each with its own constant block below:
+ *
+ *  - **The limb reads the light.** It was a uniform view-space fresnel — dim
+ *    to bright at grazing angle, identical on the day side, the night side and
+ *    the terminator. That is a real term (path length through a shell) and it
+ *    is not an atmosphere: haze is *lit*, and it scatters forward, so a real
+ *    limb is faint when the star is behind the camera and blinding when the
+ *    star is behind the planet. `render/shaders/celestial.ts`'s `LIMB_FRAGMENT`
+ *    is the replacement and carries the argument in full; the disc's own
+ *    terminator now reddens to match, because the warm band at the day/night
+ *    boundary is the first thing an eye looks for in a photograph of a planet.
+ *  - **The bands shear.** `uRotation` used to be one number added to every
+ *    longitude, which rotates the weather rigidly — a photograph on a
+ *    turntable. Real jets run at different speeds by latitude, and the whole
+ *    reason a gas giant looks alive is that adjacent jets *slide past each
+ *    other* and tear the boundary between them differently every minute.
+ *    `uDiffPole`/`uJetDrift` make the sample coordinate's advance a function of
+ *    latitude, which costs one `mix` and buys a body that is never twice the
+ *    same.
+ *  - **The storms turn.** The vortex distortion was static: a fixed spiral
+ *    that rotated with the body. `uVortexPhase` (and `uOvalPhase`, for the
+ *    white oval this pass added beside the red one) advances on its own clock,
+ *    so the eye of each storm turns over roughly a minute and a half — slow
+ *    enough that it is never a signal, fast enough that a player who looks
+ *    twice sees it has moved. `docs/environment.md` §4.1's "pulse and flash
+ *    stay reserved for hostiles" is the constraint every motion constant here
+ *    is sized against: continuous and slow is licensed, anything that reads as
+ *    a blink is not.
+ *
+ * And a fourth, conditional on the first three: **aurorae**, additive rings at
+ * both poles, tinted from the sector light's own colour and visible only where
+ * the disc is unlit — which is the one thing that gives the night hemisphere
+ * something to be rather than merely something that is dark.
+ *
  * The sector's actual `DirectionalLight`/fill light are still owned by
  * `main.ts`, not this file — a light is a property of the *sector*, not of
  * one body in it (`docs/environment.md` §3.1: "every body obeys it") — but
@@ -99,10 +140,108 @@ export const GIANT = {
    * grid, and centring it on the horizon is what keeps the whole silhouette
    * inside a downward-pitched camera that cannot look up. */
   height: 0,
-  /** Radians per second the body turns. First-draft, unflown, same species as
-   * every other constant here — on the tuning list once there is something on
-   * screen to judge it against. */
+  /** Radians per second the body turns — the *equatorial* rate now that the
+   * rotation is differential (see `diffPole`). First-draft, unflown, same
+   * species as every other constant here — on the tuning list once there is
+   * something on screen to judge it against. */
   rotationRate: 0.035,
+
+  // ── differential rotation (the bands shear) ───────────────────────────────
+
+  /**
+   * The polar rotation rate as a fraction of `rotationRate`, the equator's.
+   *
+   * This one number is the difference between weather and a turntable. A
+   * single `uRotation` added to every longitude moves the entire painted
+   * field rigidly, so a player watching for a minute sees the same shapes
+   * arrive again in the same order — which is exactly what a texture on a
+   * spinning ball does and exactly what a gas giant does not. Jupiter's
+   * equatorial jet laps its own mid-latitudes; the boundary between two jets
+   * is therefore being continuously *torn along its length*, and that tearing
+   * is the whole visual difference.
+   *
+   * 0.72 rather than something more dramatic because the tear has to stay a
+   * tear. Push this far from 1 and adjacent latitudes decorrelate within
+   * seconds: the field stops reading as bands sliding past each other and
+   * starts reading as vertical smear, since `flowPoint`'s latitude stretch
+   * means a small longitude offset between neighbouring rows is a *large*
+   * step through the noise. The value is the point where a boundary visibly
+   * evolves over a run without any single band losing its identity.
+   */
+  diffPole: 0.72,
+  /**
+   * How much each jet's own alternating direction adds to that rate, on top
+   * of the smooth pole-to-equator profile above.
+   *
+   * The profile alone is monotonic — every band moves in the same direction,
+   * just at different speeds — and monotonic shear only ever stretches a
+   * boundary. Real jets *alternate*: adjacent belts run opposite ways, which
+   * is what makes a boundary curl and roll rather than merely lengthen.
+   * `sin(lat * jetFreq + jetPhase)` already supplies the alternation for the
+   * static shear (`shearAmpMin`/`Max`); this spends the same signal on the
+   * *rate*, so what was a fixed disagreement between neighbours becomes a
+   * growing one.
+   *
+   * Held below `1 - diffPole` on purpose: larger, and a jet could run
+   * backwards relative to the body, which is physically real on Jupiter but
+   * reads on a 25°-wide disc as the texture coming apart.
+   */
+  jetDrift: 0.18,
+
+  // ── the storms turn ───────────────────────────────────────────────────────
+
+  /**
+   * Radians per second the red storm's own interior turns, independent of the
+   * body's rotation.
+   *
+   * A vortex that only rotates *with* the planet is a sticker with a spiral
+   * printed on it — the distortion `vortexStrength` bends the sampling
+   * coordinate through was fixed in the body's frame, so the storm presented
+   * the same face forever. Advancing a phase into that rotation makes the eye
+   * turn, and because the rotation is applied to the *coordinate* the
+   * surrounding band's own texture is dragged around with it rather than
+   * sliding underneath a decal.
+   *
+   * 0.055 rad/s is one turn in about 114 seconds — comfortably longer than a
+   * glance and comfortably shorter than a run. The ceiling on this constant is
+   * not aesthetic, it is `docs/environment.md` §4.1's rule that pulse and
+   * flash stay reserved for hostiles: a storm turning fast enough to notice as
+   * *motion* rather than as *change* would be a moving light on a body, which
+   * is the one thing a body may not be.
+   */
+  vortexSpinRate: 0.055,
+
+  /** The white oval — a second, much smaller vortex, in the other hemisphere
+   * from the red storm. Jupiter's own white ovals are the reason to have one:
+   * a single storm reads as a blemish, two at different scales read as a
+   * weather system. It is built out of the same coordinate rotation the red
+   * storm uses, at its own size, its own spin and its own colour, which is
+   * what makes it a second instance of a mechanism rather than a second
+   * mechanism. */
+  ovalHalfLon: 0.17,
+  ovalHalfLat: 0.075,
+  /** How far from the equator the oval's centre is rolled — biased away from
+   * the red storm's own `stormLatRange` band and kept clear of the polar
+   * blend, so the two never overlap and neither has to fight the cap. */
+  ovalLatMin: 0.34,
+  ovalLatMax: 0.56,
+  /** Peak coordinate rotation, smaller than the red storm's: a white oval is
+   * a tighter, less violent feature and a large distortion at this size
+   * would read as a hole. */
+  ovalVortex: 1.6,
+  /** Its own spin, faster than the red storm's because it is smaller — a
+   * small vortex with a large one's angular rate looks frozen. Still an order
+   * of magnitude below anything that could read as a flash. */
+  ovalSpinRate: 0.11,
+  /** Hue offset, saturation, lightness. Bright and *near-neutral*, which is
+   * the whole character: the red storm is the disc's one saturated accent
+   * (palette relationship 3) and a second saturated feature would split the
+   * focal point, so this one is allowed to be the brightest thing on the body
+   * and is not allowed to be the most colourful. `assertPaletteContract`
+   * checks both halves of that. */
+  ovalHueOffset: 6,
+  ovalSaturation: 0.1,
+  ovalLightness: 0.93,
 
   /**
    * Latitude/longitude divisions on `body`. Dropped hard from the vertex-
@@ -218,8 +357,9 @@ export const GIANT = {
    * all; the brief's own suggested value is 8.
    */
   latStretch: 8.0,
-  /** Displacement strength in the domain warp (`flow`'s three nested `fbm3`
-   * calls) — the brief's own "displace the noise sample position by another
+  /** Displacement strength in the domain warp — `flow`'s three nested `fbm3`
+   * calls, in `render/shaders/noise.ts`, which take this as their `warp`
+   * argument — the brief's own "displace the noise sample position by another
    * noise field," the mechanism that turns smooth gradients into curls and
    * festoons. Too high and the warp overwhelms the latitude stretch above
    * and the bands dissolve back into blobs; this sits just under that
@@ -355,6 +495,100 @@ export const GIANT = {
    * rather than washing the tinted colour across the whole lit hemisphere. */
   scatterPower: 3.0,
 
+  // ── terminator scattering (item 2, the disc's half) ───────────────────────
+
+  /**
+   * How strongly the day/night boundary reddens, 0-1.
+   *
+   * The Lambertian term above is *correct* and it is not enough: a real
+   * terminator is not merely the place where a surface stops being lit, it is
+   * the place where every photon reaching your eye has taken the longest
+   * possible slant path through the atmosphere, which is the same geometry
+   * that makes a sunset red. Without this the boundary is a clean grey ramp —
+   * provably right, and the one part of the image an eye that has seen a
+   * photograph of Jupiter knows is wrong.
+   *
+   * Kept at roughly half strength because the warm band is *additional* to the
+   * band pattern it crosses, not a replacement for it: at 1 the sunset colour
+   * wins outright wherever it lands and takes the belts with it, which trades
+   * the third rebuild's whole achievement for the fourth's.
+   */
+  terminatorGlow: 0.55,
+  /** Width of the reddening band, in units of `dot(N, L)` — a Gaussian, so
+   * this is its standard deviation rather than an edge. 0.30 puts the visible
+   * falloff at roughly 35° either side of the geometric terminator, which is
+   * about where a real atmosphere's slant path stops being extreme. */
+  terminatorWidth: 0.3,
+  /** The sunset tint itself, multiplied by the star's own colour before use so
+   * a blue star cannot produce an orange sunset. Fixed rather than derived
+   * from `uHue`: the reddening is a property of *air*, not of the pigment
+   * underneath it, and deriving it from the body's own hue would make a
+   * blue-banded planet redden blue, which is exactly backwards. */
+  sunsetR: 1.0,
+  sunsetG: 0.52,
+  sunsetB: 0.28,
+
+  // ── aurorae (item 4) ──────────────────────────────────────────────────────
+
+  /**
+   * Where the auroral oval sits, as `absLat` — the same 0-1 fraction of a
+   * right angle `poleThreshold` uses. Inside the polar cap rather than at its
+   * edge, because the cap is the one region of the disc this shader
+   * deliberately makes calm and dim (see `poleThreshold`), and an emissive
+   * ring needs somewhere quiet to be seen against. A real auroral oval sits
+   * at the foot of the field lines rather than at the pole itself, which is
+   * why this is 0.84 and not 1.0: a glowing dot exactly on the axis reads as
+   * a specular highlight, and a *ring* reads as an aurora.
+   */
+  auroraLat: 0.84,
+  /** Gaussian half-width of that ring, in the same units. Narrow — an oval,
+   * not a polar wash — but widened from a first draft of 0.075 once measured
+   * rather than reasoned about. This game's camera sits essentially in the
+   * body's equatorial plane (the giant is at `height: 0` and the cockpit
+   * cameras ride a few units above `y = 0` a thousand units away), so a polar
+   * ring is *always* seen edge-on: a band 7° wide in latitude at 77° north
+   * projects to under twenty pixels of a seven-hundred-pixel disc, of which
+   * only the unlit part shows. The width and the strength below are both sized
+   * for that permanently foreshortened view rather than for the overhead one
+   * every photograph of a real aurora is taken from. */
+  auroraWidth: 0.1,
+  /** Peak additive brightness. Additive rather than a blend because an aurora
+   * is emission, not albedo: it has to be visible on the *unlit* hemisphere,
+   * which is the entire reason to have one — it gives the night side
+   * something to be rather than merely something that is dark. Raised from a
+   * first draft of 0.55 for the reason `auroraWidth` records: measured against
+   * the frame rather than reasoned about, the ring is a thin arc on the limb
+   * and needed the brightness a wide polar cap would not have. */
+  auroraStrength: 1.0,
+  /** Spatial frequency of the curtain structure around the ring. The
+   * brightness variation is a function of longitude, so it rides the body's
+   * rotation and never modulates the whole ring at once — the difference
+   * between a curtain and a throb, and §4.1's rule is that only the first is
+   * allowed. */
+  auroraDetail: 5.5,
+  /** How fast that structure drifts, in noise units per second. Slow: this is
+   * the aurora's own weather, and it must stay well under the threshold where
+   * a viewer reads change as flicker. */
+  auroraDriftRate: 0.045,
+  /** How far the aurora's colour is pulled from the sector light's own toward
+   * a fixed auroral tint, 0-1. The brief is "tinted by the sector light's own
+   * colour", and at 0 that is literal — but a warm star lighting a warm body
+   * would then paint a warm aurora onto tan cloud and produce nothing visible
+   * at all. Half-way keeps the star's contribution obvious (a blue star's
+   * aurora is unmistakably colder) while guaranteeing the ring separates from
+   * whatever it is drawn over. */
+  auroraShift: 0.5,
+  /** That fixed tint. Pale green-white, the real thing's own oxygen line, and
+   * deliberately low-saturation: `docs/environment.md` §4.1 exempts bodies
+   * from the hue rule, but the exemption is conditional on a body never being
+   * mistakable for a contact, and a saturated green ring is the one colour on
+   * this palette that could be argued at (Lance's acid green). Pale and mixed
+   * half-way to the star's own colour is comfortably clear of it, and the
+   * scanner — §4.1's named arbiter — never draws a body at all. */
+  auroraR: 0.55,
+  auroraG: 0.95,
+  auroraB: 0.8,
+
   // ── the limb halo (§3.2, "bloom is the atmosphere") ───────────────────────
 
   /** `limb`'s radius as a multiple of `body`'s. */
@@ -369,9 +603,46 @@ export const GIANT = {
    * ate the true silhouette instead of rimming it; the edge read as a halo
    * swallowing the planet rather than atmosphere sitting on top of one. 1.1
    * still blooms — the rim is still lit past the threshold — it just no
-   * longer dominates it. */
-  limbIntensity: 1.1,
+   * longer dominates it.
+   *
+   * **Raised to 1.35 with the shell's own rewrite.** The 1.1 above was tuned
+   * against a *uniform* fresnel that glowed everywhere at once; the shell now
+   * spends most of its brightness where the star actually puts it, so the same
+   * number produced a dimmer halo everywhere rather than the same halo
+   * redistributed. The white-ring failure that set the old ceiling is
+   * additionally no longer reachable the same way: the ring cannot be solid
+   * any more, because the night quarter of it is now dark by construction. */
+  limbIntensity: 1.35,
+  /** Gain on the shell's forward-scattering lobe — the multiplier on
+   * `henyeyGreenstein` in `LIMB_FRAGMENT`. This is the constant that decides
+   * how spectacular a backlit body is: at 0 the shell is a plain lit fresnel,
+   * and at this value a crescent's rim runs several times brighter than the
+   * same shell seen fully lit, which is the effect the whole term exists for
+   * and the one that reliably crosses bloom's threshold. */
+  limbForward: 0.55,
+  /** The lobe's asymmetry, `g` — how tightly the forward scattering is
+   * concentrated. 0.76 is the usual figure for a hazy atmosphere and gives a
+   * roughly 300:1 forward-to-backward ratio. Below about 0.5 the lobe is broad
+   * enough that a fully lit body starts glowing as brightly as a backlit one,
+   * which erases the asymmetry this replaced a uniform fresnel to get. */
+  limbAsymmetry: 0.76,
+  /** Width of the shell's own sunset band, in `dot(N, L)`. Wider than the
+   * disc's (`terminatorWidth`) on purpose: the shell is a *shell*, so the
+   * geometry at any given screen pixel of it spans a range of true surface
+   * normals, and a band as tight as the disc's would alias into a hard ring
+   * where the terminator crosses the silhouette. */
+  limbSunsetWidth: 0.4,
+  /** The shell's daylight tint — the cool blue-white of a lit haze layer seen
+   * from outside, and the colour the old uniform fresnel used for everything.
+   * It is now only what the *lit* part of the shell is, with the sunset tint
+   * (`sunsetR`/`G`/`B`) taking over across the terminator. */
+  limbDayR: 0.62,
+  limbDayG: 0.78,
+  limbDayB: 1.0,
 } as const;
+
+/** One turn, for the phase wraps in `update`. */
+const TAU = Math.PI * 2;
 
 /** Circular hue distance in degrees, 0-180. */
 function hueDistance(a: number, b: number): number {
@@ -449,6 +720,24 @@ function assertPaletteContract(): void {
   if (GIANT.stormSaturation < 0.65) {
     throw new Error(`GasGiant palette: storm saturation ${GIANT.stormSaturation} is no longer a clear accent`);
   }
+  // The white oval joins this relationship rather than getting an exemption
+  // from it. It is the *brightest* thing on the disc by design, which is a
+  // different axis from saturation and does not compete for the eye the same
+  // way — but a future tuning pass reaching for "make the oval read better"
+  // will reach for saturation first, and that is the change that would give
+  // the body two accents and therefore none.
+  if (GIANT.ovalSaturation >= 0.5) {
+    throw new Error(
+      `GasGiant palette: the white oval at s=${GIANT.ovalSaturation} rivals the storm — ` +
+        `it is meant to win on lightness, not on colour`,
+    );
+  }
+  if (GIANT.ovalLightness <= GIANT.brightLightness) {
+    throw new Error(
+      `GasGiant palette: the white oval at l=${GIANT.ovalLightness} is no brighter than the ` +
+        `brightest zone stop (${GIANT.brightLightness}) — it would read as a gap in the bands, not a storm`,
+    );
+  }
 
   // 4. Poles are cool against warm bands — a wide hue separation from the
   // body's own warm anchor, not merely "a different number".
@@ -500,37 +789,17 @@ const ON_LOCALHOST =
   typeof location !== "undefined" && (location.hostname === "127.0.0.1" || location.hostname === "localhost");
 if (ON_LOCALHOST) assertPaletteContract();
 
-/**
- * `limb`'s own material. A minimal fresnel shader rather than a stock
- * material — nothing in three.js's built-in roster multiplies by
- * `1 - dot(normal, viewDir)`, and that term is the entire effect. Computed in
- * view space so it needs no world-space camera position passed in, and reads
- * as "dim at centre, bright at the true edge" without depending on anything
- * this class tracks between frames.
- */
-const LIMB_VERTEX = `
-varying vec3 vNormal;
-varying vec3 vViewDir;
-void main() {
-  vNormal = normalize(normalMatrix * normal);
-  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-  vViewDir = normalize(-mvPosition.xyz);
-  gl_Position = projectionMatrix * mvPosition;
-}
-`;
-
-const LIMB_FRAGMENT = `
-uniform vec3 glowColor;
-uniform float power;
-uniform float intensity;
-varying vec3 vNormal;
-varying vec3 vViewDir;
-void main() {
-  float facing = max(dot(normalize(vNormal), normalize(vViewDir)), 0.0);
-  float fresnel = pow(1.0 - facing, power);
-  gl_FragColor = vec4(glowColor * intensity * fresnel, fresnel);
-}
-`;
+// `limb`'s material is `render/shaders/celestial.ts`'s `LIMB_VERTEX`/
+// `LIMB_FRAGMENT` now, imported at the top of this file rather than written
+// here. What used to live at this spot was a six-line fresnel — `pow(1 -
+// dot(normal, viewDir), power)` and nothing else — and the reason it moved
+// out is not that a second body wanted a copy of it (though `Planet.ts` now
+// does): it is that the term was *wrong about the physics* in a way no amount
+// of local tuning could reach, and the argument for what replaced it is long
+// enough to be worth writing once. See that file's own header for it. The
+// short version is that a fresnel measures path length through a shell and
+// says nothing at all about where the star is, so the old shell glowed
+// identically on the day side, the night side and the terminator.
 
 /**
  * `body`'s vertex stage, unchanged in shape from the swatch build though the
@@ -567,13 +836,19 @@ void main() {
 `;
 
 /**
- * `body`'s fragment shader. A plain template string now, not a builder
- * function — the swatch build's `buildBodyFragment` existed to stringify
+ * `body`'s fragment shader. Not a builder function — the swatch build's
+ * `buildBodyFragment` existed to stringify
  * `GIANT.zoneSwatches`/`beltSwatches` into compile-time array literals so a
  * strict GLSL ES loop bound would accept them; nothing here loops over a
  * per-sector-sized list any more; every `GIANT` number reaches the shader as
  * an ordinary uniform, set once per `show()` the same way the light and pole
  * constants always were.
+ *
+ * The one interpolation left is `flowLadder(4)`, and it is the same species
+ * of thing `buildBodyFragment` was — an octave count is a GLSL ES constant
+ * loop bound and so can never be a uniform — but it is *one* number, fixed
+ * for every sector, rather than a per-sector list, which is why this is
+ * still a module constant and not a function of the seed.
  */
 const BODY_FRAGMENT = `
 uniform float uHue;
@@ -585,6 +860,8 @@ uniform float uFlowContrast;
 uniform float uJetFreq;
 uniform float uJetPhase;
 uniform float uShearAmp;
+uniform float uDiffPole;
+uniform float uJetDrift;
 uniform float uEdgeEpsilon;
 uniform float uEdgeGain;
 uniform float uEdgeLow;
@@ -616,9 +893,19 @@ uniform float uStormLat;
 uniform float uStormHalfLon;
 uniform float uStormHalfLat;
 uniform float uVortexStrength;
+uniform float uVortexPhase;
 uniform float uStormHue;
 uniform float uStormSaturation;
 uniform float uStormLightness;
+uniform float uOvalLon;
+uniform float uOvalLat;
+uniform float uOvalHalfLon;
+uniform float uOvalHalfLat;
+uniform float uOvalVortex;
+uniform float uOvalPhase;
+uniform float uOvalHue;
+uniform float uOvalSaturation;
+uniform float uOvalLightness;
 uniform float uPoleThreshold;
 uniform float uPoleBlendWidth;
 uniform float uPoleHue;
@@ -630,104 +917,51 @@ uniform float uLimbDarkFloor;
 uniform float uLimbDarkPower;
 uniform float uScatterStrength;
 uniform float uScatterPower;
+uniform float uTerminatorGlow;
+uniform float uTerminatorWidth;
+uniform vec3 uSunsetColor;
+uniform float uLimbAsymmetry;
+uniform float uAuroraLat;
+uniform float uAuroraWidth;
+uniform float uAuroraStrength;
+uniform float uAuroraDetail;
+uniform float uAuroraDrift;
+uniform vec3 uAuroraColor;
+uniform float uAuroraShift;
 
 varying vec3 vObjectNormal;
 varying vec3 vViewNormal;
 varying vec3 vViewDir;
 varying vec3 vLightDirView;
 
-float hueFrac(float hDeg) {
-  return mod(mod(hDeg, 360.0) + 360.0, 360.0) / 360.0;
-}
+// hueFrac, hsl2rgb, smoothstepc, wrapAngle and henyeyGreenstein — from
+// render/shaders/celestial.ts, where they live now that a second lit body
+// (render/Planet.ts) wants the same vocabulary and the HSL conversion in
+// particular has to agree between them: assertPaletteContract below checks
+// this body's palette as *numbers*, and a second conversion that turned the
+// same numbers into slightly different colours would make one contract mean
+// two things.
+${CELESTIAL_UTIL}
 
-vec3 hsl2rgb(float h, float s, float l) {
-  float c = (1.0 - abs(2.0 * l - 1.0)) * s;
-  float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
-  float m = l - c * 0.5;
-  vec3 rgb;
-  if (h < 1.0 / 6.0) rgb = vec3(c, x, 0.0);
-  else if (h < 2.0 / 6.0) rgb = vec3(x, c, 0.0);
-  else if (h < 3.0 / 6.0) rgb = vec3(0.0, c, x);
-  else if (h < 4.0 / 6.0) rgb = vec3(0.0, x, c);
-  else if (h < 5.0 / 6.0) rgb = vec3(x, 0.0, c);
-  else rgb = vec3(c, 0.0, x);
-  return rgb + m;
-}
-
-float smoothstepc(float e0, float e1, float x) {
-  float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
-  return t * t * (3.0 - 2.0 * t);
-}
-
-float wrapAngle(float a) {
-  return mod(a + 3.14159265, 6.28318531) - 3.14159265;
-}
-
-/** Hash on an integer lattice point, three-dimensional rather than two —
- * flowPoint below embeds longitude on a unit circle (cos(lon),
- * sin(lon)) before it ever reaches here, so the flow field is periodic
- * across the lon = ±π seam by construction. The swatch build's own
- * boundary harmonics had to stay integer-frequency for the same closure;
- * embedding on a circle buys the same seamlessness without constraining
- * every frequency in this shader to an integer. */
-float hash31(vec3 p) {
-  p = fract(p * vec3(127.1, 311.7, 74.7));
-  p += dot(p, p.yzx + 34.45);
-  return fract((p.x + p.y) * p.z);
-}
-
-float noise3(vec3 p) {
-  vec3 i = floor(p);
-  vec3 f = fract(p);
-  vec3 u = f * f * (3.0 - 2.0 * f);
-  float n000 = hash31(i);
-  float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
-  float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
-  float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
-  float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
-  float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
-  float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
-  float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
-  float nx00 = mix(n000, n100, u.x);
-  float nx10 = mix(n010, n110, u.x);
-  float nx01 = mix(n001, n101, u.x);
-  float nx11 = mix(n011, n111, u.x);
-  float nxy0 = mix(nx00, nx10, u.y);
-  float nxy1 = mix(nx01, nx11, u.y);
-  return mix(nxy0, nxy1, u.z);
-}
-
-/** Four octaves, each half the amplitude and twice the frequency of the
- * last — item 1's own recipe, held to four rather than the usual five or
- * six because flow below evaluates this three times per fragment (once
- * per warp level) and a fifth octave buys detail this body's screen size
- * never keeps past the bloom pass. */
-float fbm3(vec3 p) {
-  float sum = 0.0;
-  float amp = 0.5;
-  float freq = 1.0;
-  for (int i = 0; i < 4; i++) {
-    sum += amp * (noise3(p * freq) * 2.0 - 1.0);
-    freq *= 2.0;
-    amp *= 0.5;
-  }
-  return sum;
-}
-
-/** Domain warping — item 4, fbm(p + fbm(p + fbm(p))) literally: each
- * nested call displaces the next along all three axes by the same scalar,
- * which is what turns a smooth gradient into curls and festoons instead of
- * a blob. Three nested fbm3 calls rather than the more usual
- * vector-valued warp (a vec2/vec3 built from two or three extra fbm3
- * evaluations per level) — this is the same picture at roughly a third of
- * the cost, and at a sphere's worth of fragments the cost is what capped
- * the octave count above, not visual quality. */
-float flow(vec3 p) {
-  float a = fbm3(p);
-  float b = fbm3(p + uWarpStrength * a + vec3(3.1, 1.7, 5.9));
-  float c = fbm3(p + uWarpStrength * b + vec3(7.2, 4.1, 2.3));
-  return c;
-}
+// The noise ladder — hash31, noise3, fbm3, flow — from
+// render/shaders/noise.ts, where it lives now that Nebula.ts and this file
+// had each grown a copy of it. Every rung's own reasoning moved with it;
+// the two decisions that are *this body's* rather than the ladder's are
+// recorded here, because they are arguments about a gas giant and not
+// about noise:
+//
+// Four octaves, item 1's own recipe, held to four rather than the usual
+// five or six because flow evaluates this three times per fragment (once
+// per warp level) and a fifth octave buys detail this body's screen size
+// never keeps past the bloom pass.
+//
+// The field is periodic across the lon = ±π seam because flowPoint below
+// embeds longitude on a unit circle (cos(lon), sin(lon)) before it ever
+// reaches hash31 — nothing in the ladder itself supplies that. The swatch
+// build's own boundary harmonics had to stay integer-frequency for the same
+// closure; embedding on a circle buys the same seamlessness without
+// constraining every frequency in this shader to an integer.
+${flowLadder(4)}
 
 /** Maps a longitude/latitude pair to the 3D point flow actually samples.
  * uLatStretch is item 2 of the brief and does more than anything else in
@@ -754,37 +988,89 @@ void main() {
   // rounds to. The offset breaks the tie toward a fixed, arbitrary lon
   // there instead of a NaN that would otherwise propagate through flow(p)
   // into the poleT blend already built to hide exactly this seam.
-  float lon = atan(n.x, n.z + 1e-6) + uRotation;
+  float lon0 = atan(n.x, n.z + 1e-6);
   float latNorm = clamp(lat / 1.5707963, -0.9999, 0.9999);
   float absLat = abs(latNorm);
 
-  // Shear — item 3: alternating jet direction per latitude band, offset
-  // straight into the longitude the flow field samples at. Two adjacent
-  // bands now read the field from different, sliding offsets and disagree
-  // exactly where they meet, which is what tears a boundary instead of
-  // merely bending it.
   float jet = sin(lat * uJetFreq + uJetPhase);
-  float shearedLon = lon + jet * uShearAmp;
+
+  // Differential rotation. 'uRotation' is still the one advancing number, but
+  // it no longer advances every longitude by the same amount: 'spinRate'
+  // scales it by latitude, fastest at the equator ('cos(lat)^2' → 1) and
+  // slowest at the poles (→ uDiffPole), with each jet's own alternating sign
+  // added on top. Two adjacent bands therefore accumulate *different*
+  // longitude offsets as the run goes on, so the boundary between them is
+  // continuously drawn out and folded rather than translated rigidly. See
+  // GIANT.diffPole for why this one 'mix' is the difference between weather
+  // and a photograph on a turntable.
+  float cl = cos(lat);
+  float lonFlow = lon0 + uRotation * (mix(uDiffPole, 1.0, cl * cl) + uJetDrift * jet);
+
+  // Each storm rides its *own* band, which means it needs its own frame: the
+  // same spin rate evaluated at the storm's fixed latitude rather than at
+  // this fragment's. Without this a storm placed at a fixed longitude in a
+  // differentially-rotating frame would be sheared apart by the very
+  // mechanism above — its top edge outrunning its bottom edge — within
+  // seconds. Evaluating the rate at the storm's centre keeps it rigid, and
+  // because the two expressions agree exactly at 'lat = uStormLat', the
+  // vortex's own blend into the surrounding flow stays continuous: the frames
+  // differ only where the blend weight has already fallen away.
+  float clS = cos(uStormLat);
+  float lonStorm = lon0 + uRotation * (mix(uDiffPole, 1.0, clS * clS) + uJetDrift * sin(uStormLat * uJetFreq + uJetPhase));
+  float clO = cos(uOvalLat);
+  float lonOval = lon0 + uRotation * (mix(uDiffPole, 1.0, clO * clO) + uJetDrift * sin(uOvalLat * uJetFreq + uJetPhase));
+
+  // Shear — item 3 of the third rebuild: alternating jet direction per
+  // latitude band, offset straight into the longitude the flow field samples
+  // at. This is the *static* disagreement between neighbours; the rate term
+  // above is the growing one, and the two are complementary — without the
+  // static offset a fresh body would start with every band identical, and
+  // without the rate term it would keep whatever tear it started with
+  // forever.
+  float shearedLon = lonFlow + jet * uShearAmp;
 
   // The storm — item 5: bend the *sampling coordinate* rotationally around
   // its own centre before the flow field ever sees it, rather than draw an
   // oval and stop. The surrounding bands' own texture spirals into the
   // distortion the way real weather wraps around a vortex, instead of a
   // patch of different-coloured noise sitting on top like a sticker.
-  float dLon = wrapAngle(lon - uStormLon);
+  //
+  // 'uVortexPhase' is what makes it turn. It is added to the rotation angle
+  // rather than multiplied into it, so the spiral rotates *rigidly* — a phase
+  // folded into 'uVortexStrength' instead would wind the eye tighter every
+  // second until the storm was a drill hole. Rigid rotation is also the
+  // honest picture: a vortex's shape is quasi-stable and it is the whole
+  // structure that turns.
+  float dLon = wrapAngle(lonStorm - uStormLon);
   float dLat = lat - uStormLat;
   vec2 rel = vec2(dLon / uStormHalfLon, dLat / uStormHalfLat);
   float stormR = length(rel);
   float vortexT = smoothstepc(1.3, 0.0, stormR);
-  float ang = vortexT * uVortexStrength;
+  float ang = vortexT * uVortexStrength + uVortexPhase;
   float ca = cos(ang);
   float sa = sin(ang);
   vec2 relRot = vec2(rel.x * ca - rel.y * sa, rel.x * sa + rel.y * ca);
   float lonEff = mix(shearedLon, uStormLon + relRot.x * uStormHalfLon, vortexT);
   float latEff = mix(lat, uStormLat + relRot.y * uStormHalfLat, vortexT);
 
+  // The white oval — the same mechanism at a different size, spin and colour,
+  // in the other hemisphere. Layered *after* the red storm rather than beside
+  // it so the two can never fight over the same fragment: the oval's own
+  // latitude range is kept clear of the storm's, so in practice one of the
+  // two weights is always zero, and layering makes that a guarantee rather
+  // than an assumption about two rolls.
+  float oDLon = wrapAngle(lonOval - uOvalLon);
+  vec2 oRel = vec2(oDLon / uOvalHalfLon, (lat - uOvalLat) / uOvalHalfLat);
+  float ovalT = smoothstepc(1.25, 0.0, length(oRel));
+  float oAng = ovalT * uOvalVortex + uOvalPhase;
+  float oCa = cos(oAng);
+  float oSa = sin(oAng);
+  vec2 oRelRot = vec2(oRel.x * oCa - oRel.y * oSa, oRel.x * oSa + oRel.y * oCa);
+  lonEff = mix(lonEff, uOvalLon + oRelRot.x * uOvalHalfLon, ovalT);
+  latEff = mix(latEff, uOvalLat + oRelRot.y * uOvalHalfLat, ovalT);
+
   vec3 p = flowPoint(lonEff, latEff);
-  float f = flow(p);
+  float f = flow(p, uWarpStrength);
 
   // A second sample, offset along the latitude axis only, turned into a
   // gradient magnitude. The belt/zone boundary is not a *value* on this
@@ -835,6 +1121,9 @@ void main() {
   vec3 stormColor = hsl2rgb(hueFrac(uHue + uStormHue), uStormSaturation, uStormLightness);
   albedo = mix(albedo, stormColor, vortexT * 0.85);
 
+  vec3 ovalColor = hsl2rgb(hueFrac(uHue + uOvalHue), uOvalSaturation, uOvalLightness);
+  albedo = mix(albedo, ovalColor, ovalT * 0.8);
+
   // Poles blend to a fixed grey-blue and drop the flow signal's own hue and
   // saturation entirely — "essentially bandless and dim" — for the reason
   // flowPoint's own comment gives: the embedding that closes the
@@ -854,7 +1143,11 @@ void main() {
   // first pass.
   vec3 wn = normalize(vViewNormal);
   vec3 ld = normalize(vLightDirView);
-  float ndotl = max(dot(wn, ld), 0.0);
+  // Kept signed as well as clamped: the clamped form is the Lambertian term,
+  // but every scattering term below is a function of *how far from the
+  // terminator* a fragment is, which needs to know which side of it we are on.
+  float ndlRaw = dot(wn, ld);
+  float ndotl = max(ndlRaw, 0.0);
   float lit = uAmbientFloor + (1.0 - uAmbientFloor) * ndotl;
 
   // Limb darkening: a *view*-angle falloff, independent of the light — the
@@ -866,12 +1159,75 @@ void main() {
 
   vec3 color = albedo * uLightColor * lit * limbDark;
 
+  // Terminator scattering, the disc's own half of item 2. The Lambertian
+  // ramp above is right and it is grey: it says the boundary is where light
+  // stops, and says nothing about the fact that every photon arriving from
+  // near that boundary has crossed the atmosphere at the shallowest possible
+  // angle. That long slant path is what reddens a sunset, and it is the first
+  // thing an eye looks for in a photograph of a lit planet.
+  //
+  // Three factors, and dropping any one of them breaks it in a different way:
+  // a Gaussian on 'ndlRaw' pins the band to the terminator itself rather than
+  // washing it across the day side; the forward-scattering lobe makes a
+  // backlit body's terminator far brighter than a front-lit one's, which is
+  // the asymmetry the shell above exists for and is just as true down here;
+  // and the '1 - facing' weighting biases it toward the silhouette, where the
+  // path through the atmosphere really is longest, instead of laying a stripe
+  // across the middle of the disc when the terminator happens to run through
+  // it.
+  float mu = clamp(-dot(vd, ld), -1.0, 1.0);
+  float forward = henyeyGreenstein(mu, uLimbAsymmetry);
+  float band = exp(-(ndlRaw * ndlRaw) / (uTerminatorWidth * uTerminatorWidth));
+  float bandWeight = band * uTerminatorGlow * (0.35 + 0.65 * (1.0 - facing));
+  color = mix(color, uSunsetColor * uLightColor * (0.45 + forward * 0.45), bandWeight);
+
   // A thin scattering falloff toward the true silhouette, on top of (not
   // instead of) the terminator above — item 6's second half. Tinted rather
   // than merely dimmed, the way a real atmosphere's Rayleigh scattering
   // brightens and cools the limb instead of only darkening it.
-  float scatter = pow(1.0 - facing, uScatterPower) * uScatterStrength;
+  //
+  // Gated on the lit side now. It was unconditional, which put a cool
+  // blue-white rim right around the *night* limb too — a halo the star has no
+  // way of producing, and the exact reading the shell's own rewrite exists to
+  // stop: an atmosphere that glows where nothing is lighting it looks like a
+  // lamp rather than a planet.
+  float scatter = pow(1.0 - facing, uScatterPower) * uScatterStrength * smoothstepc(-0.1, 0.4, ndlRaw);
   color = mix(color, vec3(0.68, 0.78, 0.88) * uLightColor, scatter);
+
+  // Aurorae — item 4, and the only emissive thing on this body. Additive, so
+  // it is visible precisely where nothing else is: 'night' is a reversed
+  // smoothstep on the same signed Lambertian, so the ring fades out across the
+  // terminator and is at full strength only on the unlit hemisphere, which is
+  // what a real aurora does and also what gives the night side something to
+  // be.
+  //
+  // Branched rather than multiplied out. The curtain needs its own 'fbm3'
+  // evaluation — a sixth on top of the five this shader already runs — and
+  // the polar band is a few per cent of the disc's fragments, so the branch
+  // is coherent across essentially every warp that takes it. This is the one
+  // place in the file where an 'if' is cheaper than the arithmetic it guards.
+  float auroraBand = exp(-pow((absLat - uAuroraLat) / uAuroraWidth, 2.0));
+  if (auroraBand > 0.004) {
+    // The ring turns with the body at the polar rate — the aurora is anchored
+    // to the field, not to the clouds, but it is anchored to *something* that
+    // rotates, and a ring pinned to the camera instead would be the single
+    // most obvious tell that this is a shader.
+    float lonAur = lon0 + uRotation * uDiffPole;
+    // Structure as a function of longitude, embedded on a circle so it closes
+    // at the seam the way flowPoint's own coordinates do. uAuroraDrift is the
+    // only time input: it walks the third axis, so the curtain's shape
+    // changes without the ring's overall brightness ever moving as one — the
+    // difference between weather and a throb, and §4.1 permits only the first.
+    float curtain = 0.35 + 0.65 * (fbm3(vec3(cos(lonAur), sin(lonAur), uAuroraDrift) * uAuroraDetail) * 0.5 + 0.5);
+    float night = smoothstepc(0.30, -0.25, ndlRaw);
+    // Brighter at the limb: an auroral curtain seen edge-on is a long column
+    // of emission and seen face-on is a thin sheet, which is why every
+    // photograph of one from orbit shows the ring brightest where it crosses
+    // the horizon.
+    float edgeOn = 0.5 + 0.5 * (1.0 - facing);
+    vec3 auroraTint = mix(uLightColor, uAuroraColor, uAuroraShift);
+    color += auroraTint * (auroraBand * curtain * night * edgeOn * uAuroraStrength);
+  }
 
   gl_FragColor = vec4(color, 1.0);
 }
@@ -928,6 +1284,15 @@ export class GasGiant {
     // pixels (see `GIANT.stormLatRange`'s own comment).
     const stormLon = (rng.next() * 2 - 1) * Math.PI;
     const stormLat = (rng.next() * 2 - 1) * GIANT.stormLatRange;
+    // The white oval, deliberately in the *opposite* hemisphere from the red
+    // storm and outside its own latitude range, so the two features never
+    // land on top of each other however the rolls fall. Two storms sharing a
+    // patch of disc would not merely look wrong, they would cancel: each one
+    // bends the sampling coordinate, and a coordinate bent twice around two
+    // centres is noise.
+    const ovalLon = (rng.next() * 2 - 1) * Math.PI;
+    const ovalSide = stormLat >= 0 ? -1 : 1;
+    const ovalLat = ovalSide * (GIANT.ovalLatMin + rng.next() * (GIANT.ovalLatMax - GIANT.ovalLatMin));
 
     const geometry = new SphereGeometry(GIANT.radius, GIANT.widthSegments, GIANT.heightSegments);
 
@@ -952,6 +1317,8 @@ export class GasGiant {
           uJetFreq: { value: jetFreq },
           uJetPhase: { value: jetPhase },
           uShearAmp: { value: shearAmp },
+          uDiffPole: { value: GIANT.diffPole },
+          uJetDrift: { value: GIANT.jetDrift },
           uEdgeEpsilon: { value: GIANT.edgeEpsilon },
           uEdgeGain: { value: GIANT.edgeGain },
           uEdgeLow: { value: GIANT.edgeLow },
@@ -983,9 +1350,21 @@ export class GasGiant {
           uStormHalfLon: { value: GIANT.stormHalfLon },
           uStormHalfLat: { value: GIANT.stormHalfLat },
           uVortexStrength: { value: GIANT.vortexStrength },
+          // Seeded, not zero — two sectors' storms should not all be caught
+          // mid-turn at the same angle, the same reason `rotation0` exists.
+          uVortexPhase: { value: rng.next() * Math.PI * 2 },
           uStormHue: { value: GIANT.stormHueOffset },
           uStormSaturation: { value: GIANT.stormSaturation },
           uStormLightness: { value: GIANT.stormLightness },
+          uOvalLon: { value: ovalLon },
+          uOvalLat: { value: ovalLat },
+          uOvalHalfLon: { value: GIANT.ovalHalfLon },
+          uOvalHalfLat: { value: GIANT.ovalHalfLat },
+          uOvalVortex: { value: GIANT.ovalVortex },
+          uOvalPhase: { value: rng.next() * Math.PI * 2 },
+          uOvalHue: { value: GIANT.ovalHueOffset },
+          uOvalSaturation: { value: GIANT.ovalSaturation },
+          uOvalLightness: { value: GIANT.ovalLightness },
           uPoleThreshold: { value: GIANT.poleThreshold },
           uPoleBlendWidth: { value: GIANT.poleBlendWidth },
           uPoleHue: { value: GIANT.poleHue },
@@ -998,6 +1377,19 @@ export class GasGiant {
           uLimbDarkPower: { value: GIANT.limbDarkPower },
           uScatterStrength: { value: GIANT.scatterStrength },
           uScatterPower: { value: GIANT.scatterPower },
+          uTerminatorGlow: { value: GIANT.terminatorGlow },
+          uTerminatorWidth: { value: GIANT.terminatorWidth },
+          uSunsetColor: { value: new Vector3(GIANT.sunsetR, GIANT.sunsetG, GIANT.sunsetB) },
+          uLimbAsymmetry: { value: GIANT.limbAsymmetry },
+          uAuroraLat: { value: GIANT.auroraLat },
+          uAuroraWidth: { value: GIANT.auroraWidth },
+          uAuroraStrength: { value: GIANT.auroraStrength },
+          uAuroraDetail: { value: GIANT.auroraDetail },
+          // Seeded so two sectors' curtains are not the same curtain; advanced
+          // by `update` from there.
+          uAuroraDrift: { value: rng.next() * 40 },
+          uAuroraColor: { value: new Vector3(GIANT.auroraR, GIANT.auroraG, GIANT.auroraB) },
+          uAuroraShift: { value: GIANT.auroraShift },
         },
         vertexShader: BODY_VERTEX,
         fragmentShader: BODY_FRAGMENT,
@@ -1016,12 +1408,6 @@ export class GasGiant {
     // everything nearer.
     this.body.renderOrder = -1.98;
 
-    const haloColor = new Color().setHSL(
-      hue / 360,
-      Math.min(0.5, GIANT.beltSaturation + 0.1),
-      0.74,
-      SRGBColorSpace,
-    );
     this.limb = new Mesh(
       new SphereGeometry(
         GIANT.radius * GIANT.limbScale,
@@ -1030,9 +1416,22 @@ export class GasGiant {
       ),
       new ShaderMaterial({
         uniforms: {
-          glowColor: { value: haloColor },
-          power: { value: GIANT.limbPower },
-          intensity: { value: GIANT.limbIntensity },
+          // The shell's *daylight* tint is now a cool blue-white rather than
+          // the body's own hue: `haloColor` above described a halo that glowed
+          // the same colour everywhere, and a lit haze layer seen from outside
+          // is not the colour of the cloud deck underneath it. The body's hue
+          // still reaches the shell — through `uLightColor`, and through the
+          // fact that the shell only ever appears against the body's own
+          // silhouette.
+          uGlowColor: { value: new Vector3(GIANT.limbDayR, GIANT.limbDayG, GIANT.limbDayB) },
+          uSunsetColor: { value: new Vector3(GIANT.sunsetR, GIANT.sunsetG, GIANT.sunsetB) },
+          uLightColor: { value: light.colour.clone() },
+          uLightDirWorld: { value: lightDir },
+          uPower: { value: GIANT.limbPower },
+          uIntensity: { value: GIANT.limbIntensity },
+          uForward: { value: GIANT.limbForward },
+          uAsymmetry: { value: GIANT.limbAsymmetry },
+          uSunsetWidth: { value: GIANT.limbSunsetWidth },
         },
         vertexShader: LIMB_VERTEX,
         fragmentShader: LIMB_FRAGMENT,
@@ -1096,6 +1495,22 @@ export class GasGiant {
     if (!this.body) return;
     const material = this.body.material as ShaderMaterial;
     material.uniforms.uRotation.value += GIANT.rotationRate * dt;
+    // The three clocks the fourth pass added, all `dt`-driven for the house
+    // rule's own reason and all wrapped rather than left to grow. `uRotation`
+    // is *not* wrapped and does not want to be: it is deliberately unbounded
+    // because the differential rate multiplies it, so wrapping it would snap
+    // every latitude's accumulated offset back into agreement at once and
+    // erase the shear the whole mechanism exists to build. These three are
+    // pure phases, used only inside a `cos`/`sin` or a noise lookup, so
+    // wrapping is free and keeps float precision from degrading over a long
+    // session — a phase at 1e5 radians resolves to about a hundredth of a
+    // turn in a float32 uniform, which reads as the storm juddering.
+    material.uniforms.uVortexPhase.value = (material.uniforms.uVortexPhase.value + GIANT.vortexSpinRate * dt) % TAU;
+    material.uniforms.uOvalPhase.value = (material.uniforms.uOvalPhase.value + GIANT.ovalSpinRate * dt) % TAU;
+    // The aurora's drift walks a noise axis rather than an angle, so it has no
+    // natural period; 1024 is an arbitrary large multiple of the noise
+    // lattice's own unit spacing, which makes the wrap invisible.
+    material.uniforms.uAuroraDrift.value = (material.uniforms.uAuroraDrift.value + GIANT.auroraDriftRate * dt) % 1024;
   }
 
   /** Empty the group and forget the sector, so the next `show` rebuilds. */

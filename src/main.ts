@@ -1415,8 +1415,14 @@ function frame(now: number): void {
   // leash that stops the player flying into it. Only shows when it is the
   // sector's hero — see the giant's own version of this comment above.
   if (sectorHero === "ringed") {
-    planet.show(campaign.seed, campaign.current);
+    planet.show(campaign.seed, campaign.current, sectorLight);
     planet.follow(player.position);
+    // The cloud pattern's own clock. `Planet.update` has existed since the body
+    // was rebuilt as a lit mesh and nothing called it, so the planet was drawing
+    // a still frame — the shadows were unaffected (they are a function of the
+    // light and the tilt, neither of which moves) and only the drift was
+    // missing, which is exactly the kind of absence nothing looks wrong about.
+    planet.update(dt);
   } else planet.hide();
   // The jump's own charge drives the tear, so the sky winds up with the drive
   // and stops the instant it lets go — no second clock to keep in step.
@@ -1711,6 +1717,14 @@ if (DEBUG_PROBE) {
      * screenshot can show, since the light itself is invisible and only its
      * effect on lit geometry is on screen.
      */
+    __eventLights: eventLights,
+    /**
+     * The ringed planet, beside `__giant` and for the same reason: it is a lit
+     * mesh now, with a ring shadow on its body and its own shadow on the rings,
+     * and none of that is assertable from a screenshot. `.body`/`.ring`/`.limb`
+     * are public for exactly this.
+     */
+    __planet: planet,
     /**
      * The hero gas giant, exposed as the bare instance rather than wrapped in
      * a `{ model, constants }` object the way `__comet`/`__loom` are — the
