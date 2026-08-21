@@ -9,6 +9,20 @@ import { mkdirSync } from "node:fs";
 
 import { existsSync } from "node:fs";
 
+import {
+  checkEventLightPool,
+  checkEventLightsInCombat,
+  checkForcedMediaPath,
+  checkFrameCap,
+  checkLitBodies,
+  checkLitHulls,
+  checkNebula,
+  checkPostChain,
+  checkRendererGuards,
+  checkRocks,
+  checkTuningPages,
+} from "./renderChecks.mjs";
+
 /**
  * This container ships a Chromium that Playwright's own version lookup does not
  * match, so it has to be pointed at explicitly. Anywhere else — a laptop with
@@ -39,6 +53,27 @@ page.on("console", (m) => {
   if (m.type() === "error" && !m.text().includes("404")) problems.push(`[console] ${m.text()}`);
 });
 
+/**
+ * Vite's HMR client, stubbed out.
+ *
+ * A save anywhere in `src/` — by a person, an editor's autosave, or another
+ * agent working the same checkout — makes the dev server push a full reload,
+ * and a full reload in the middle of this file is fatal in a way that reads
+ * like a bug in the game: every `page.evaluate` after it dies with "Execution
+ * context was destroyed", and the run state a hundred assertions were built on
+ * is simply gone. There is nothing to retry, because the thing being measured
+ * no longer exists.
+ *
+ * Serving an empty module in place of `/@vite/client` means the HMR websocket
+ * is never opened and the page cannot be reloaded out from under the harness.
+ * Nothing is lost: a headless assertion run wants the build it loaded and
+ * nothing else, and the one deliberate reload below is Playwright's own
+ * `page.reload()`, which is unaffected.
+ */
+await page.route("**/@vite/client", (route) =>
+  route.fulfill({ status: 200, contentType: "application/javascript", body: "export {};\n" }),
+);
+
 const probe = () => page.evaluate(() => window.__probe);
 const check = (label, ok, detail) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? `  — ${detail}` : ""}`);
@@ -62,6 +97,41 @@ const waitFor = async (predicate, timeout = 25000) => {
   return state;
 };
 
+/**
+ * Wait on *progress* rather than on a wall-clock budget.
+ *
+ * The third flake in `docs/todo.md` §6.2 is a fixed 45000 ms budget against a
+ * fixed 2.45 *game*-seconds of death drift. Those are different clocks: how much
+ * game time a wall-clock second buys depends on what SwiftShader is being asked
+ * to draw, and a long-lived tab several hundred assertions deep is drawing more
+ * of it. Widening the budget once did not fix it and cannot — there is no number
+ * that is generous on a loaded machine and still fails fast on a hung one.
+ *
+ * `progress` reads a monotonic clock the thing under test advances itself (here,
+ * `DeathSequence.time`, which is driven by `dt` and by nothing else). The wait
+ * ends when `predicate` is satisfied, or when that clock has stopped moving for
+ * `stallMs` — so a slow machine simply takes longer and a *stuck* one still
+ * fails promptly, which is the property a timeout was standing in for.
+ */
+const waitForProgress = async (predicate, progress, { stallMs = 8000, ceilingMs = 180000 } = {}) => {
+  const started = Date.now();
+  let state = await probe();
+  let seen = await page.evaluate(progress);
+  let movedAt = Date.now();
+  while (!predicate(state) && Date.now() - started < ceilingMs) {
+    await page.waitForTimeout(100);
+    state = await probe();
+    const now = await page.evaluate(progress);
+    if (now !== seen) {
+      seen = now;
+      movedAt = Date.now();
+    } else if (Date.now() - movedAt > stallMs) {
+      break;
+    }
+  }
+  return state;
+};
+
 // 5173 is only the default, and overridable because several checkouts of this
 // repo can be running dev servers at once — a worktree cannot have the default
 // port, since the checkout it was branched from is usually still holding it. A
@@ -72,6 +142,24 @@ await page.evaluate(() => {
   window.__stage.bloom.enabled = false;
   window.__stage.phosphor.enabled = false;
   window.__stage.crt.enabled = false;
+  // The three above are the original chain. These are the passes that landed
+  // with the renderer overhaul, switched off for exactly the same reason and
+  // written defensively so a later rename drops the line rather than the run:
+  // every one of them is a full-screen pass or a second render of the scene,
+  // and on SwiftShader that is the difference between a frame and a second.
+  //
+  // This is not tidiness. Leaving them on was measured here: it starves the
+  // game clock badly enough that a 1.5-second reserve-drain window advances the
+  // reserve by nothing, a Lance never reaches its own fire cadence, and a
+  // keypress lands between frames — nine assertions failing at once, all of
+  // them about game rules, none of them about the renderer that caused it.
+  if (window.__stage.taa) window.__stage.taa.enabled = false;
+  if (window.__stage.godRays) window.__stage.godRays.enabled = false;
+  // A shadow map is a whole extra render of the scene per frame. Flipping this
+  // invalidates every lit material's program once (`render/shadows.ts` says so
+  // in as many words), which is one slow frame here against a second scene
+  // render on every frame for the rest of the file.
+  window.__stage.renderer.shadowMap.enabled = false;
 });
 // The hero giant's body is a hand-written domain-warped-noise ShaderMaterial
 // (`render/GasGiant.ts`) — the single biggest per-fragment cost of anything
@@ -168,12 +256,22 @@ check("a page turn changes block and resets the row", paged.block === 1 && paged
 
 // Back to the first block, then put the knob back — the rest of this file
 // flies the ship and must fly the one the source describes.
-await page.keyboard.press("/");
-await page.keyboard.press("/");
-await page.keyboard.press("/");
-await page.keyboard.press("/");
-await page.keyboard.press("/");
-await page.keyboard.press("/");
+//
+// Cycled until it arrives rather than pressed a fixed number of times. The
+// fixed count was six, correct for the seven pages that existed when this was
+// written, and it broke silently the day an eighth was added: `/` wraps, so
+// six presses landed on the last page instead of the first and `0` reset a
+// knob nobody had moved. The assertion that failed was the reset one, which
+// pointed at the console rather than at the test — the expensive kind of
+// wrong. Nothing here should know how many pages there are.
+for (let i = 0; i < 32 && (await page.evaluate(() => window.__tuning.tuner.block)) !== 0; i++) {
+  await page.keyboard.press("/");
+}
+check(
+  "the page cycle returns to the first block",
+  (await page.evaluate(() => window.__tuning.tuner.block)) === 0,
+  `block=${await page.evaluate(() => window.__tuning.tuner.block)}`,
+);
 await page.keyboard.press("0");
 check("reset puts the knob back to what the file says",
   (await page.evaluate(() => window.__tuning.patch())).includes("nothing moved"),
@@ -183,6 +281,48 @@ check("reset puts the knob back to what the file says",
 await page.keyboard.press("`");
 check("backquote closes it again", (await page.evaluate(() => window.__tuning.tuner.open)) === false);
 check("...and the title screen is still the title screen", (await probe()).mode === "title", (await probe()).mode);
+
+/**
+ * Put the shell back on a fresh title, and reset the clock that would otherwise
+ * take it away.
+ *
+ * `TIMING.title` is thirteen seconds, after which an unattended cabinet falls
+ * through to the attract demo — which is the feature working, and which every
+ * block below that reads `mode === "title"` is quietly relying on not happening
+ * yet. Display keys do not reset that clock (they are not attention), so a
+ * stretch of title-screen assertions long enough to outlast it silently changes
+ * what the *next* block is testing: the demo binds the throwaway campaign, so a
+ * check that forces `__campaign.current` stops moving the sector the sky is
+ * drawing, and a check that presses `L` finds itself in a run.
+ *
+ * Called around the renderer blocks below, which are long — they are the reason
+ * this helper exists, and they are legitimately title-screen work. Cheaper and
+ * more honest than shortening them until they happen to fit.
+ */
+const holdTitle = async () => {
+  await page.evaluate(() => window.__presentation.enter("title"));
+  return waitFor((s) => s.mode === "title" && !s.briefing, 5000);
+};
+
+// One lap of the page key, measured against the registry rather than against a
+// number written down here. See `checkTuningPages` for the regression this is.
+await checkTuningPages({ page, check });
+
+// ── the renderer, before a run exists ───────────────────────────────────────
+// `tools/renderChecks.mjs` owns these; its header carries the whole argument
+// about what a software-GL harness can and cannot say about a renderer that
+// deliberately falls back on software GL. They live here, on the title screen,
+// beside the other blocks that need no session — the post chain, the light rig,
+// the light pool and the frame cap are all standing before the first wave and
+// none of them is a phase of combat.
+await holdTitle();
+await checkRendererGuards({ page, check });
+await checkPostChain({ page, check });
+await checkLitHulls({ page, check });
+await holdTitle();
+await checkEventLightPool({ page, check });
+await checkFrameCap({ page, check });
+await holdTitle();
 
 // ── the sector's star is pure and seeded ────────────────────────────────────
 // `planLight`/`shadeAt` (`render/light.ts`) are pure functions with nothing
@@ -469,6 +609,22 @@ if (!shoalWiring.skip) {
   }, shoalWiring.sectorBefore);
 }
 
+// ── the renderer's bodies, and the path this harness does not normally take ──
+// Placed after the scenery blocks above rather than beside the title-screen
+// renderer checks, because every one of these forces a body to stand for a
+// sector the campaign is not in — and the checks above are about what the
+// campaign's own seed produces. Each block puts the sector it borrowed back.
+await holdTitle();
+await checkNebula({ page, check });
+await holdTitle();
+await checkRocks({ page, check });
+await checkLitBodies({ page, check });
+await checkForcedMediaPath({ page, check });
+// The shell has to arrive at the deck-log block below on a title it has only
+// just entered, or the thirteen-second fall-through decides what that block is
+// testing. See `holdTitle`.
+await holdTitle();
+
 // ── forcing a sector changes the room within a frame ────────────────────────
 // Unlike the shoal block just above (pure rendering, no gesture needed),
 // `__sound.room` is legitimately `null` until the first real gesture:
@@ -507,13 +663,33 @@ const roomSectors = await page.evaluate(async () => {
   }
   return { sectorBefore, bareSector, rockSector };
 });
-async function forceRoomSector(sector, expectedKind) {
+/**
+ * `expectedName` is the room's *whole* name, not a prefix, and that is the fix
+ * for the fourth flake `docs/todo.md` §6.2 records as already closed — it was
+ * not.
+ *
+ * `Sound.room.name` is `hero + (shoal ? "+shoal" : "")`, so `"bare+shoal"`
+ * satisfies `startsWith("bare")`. The block above this one forces a sector that
+ * *has* a shoal and then restores; whenever the sector it restores to happens to
+ * cast `bare`, the standing room is `bare+shoal` — and the prefix poll accepted
+ * that stale room on its first read, before the sector this function just forced
+ * had a frame to land, and then failed the `wet === 0` assertion underneath it.
+ * Skipping shoal-carrying sectors in the search was the right half of the fix
+ * and it could not work on its own, because the room being matched against was
+ * never the forced sector's in the first place.
+ *
+ * Both sectors handed here are guaranteed shoal-free, so their whole name is
+ * exactly the hero's — which makes an exact match both available and correct,
+ * and makes the poll wait for the sector it asked for rather than for anything
+ * that merely starts the same way.
+ */
+async function forceRoomSector(sector, expectedName) {
   await page.evaluate((s) => {
     window.__campaign.current = s;
   }, sector);
   const deadline = Date.now() + 5000;
   let room = await page.evaluate(() => window.__sound.room);
-  while ((!room || !room.name.startsWith(expectedKind)) && Date.now() < deadline) {
+  while ((!room || room.name !== expectedName) && Date.now() < deadline) {
     await page.waitForTimeout(50);
     room = await page.evaluate(() => window.__sound.room);
   }
@@ -523,7 +699,7 @@ if (roomSectors.bareSector >= 0) {
   const bareRoom = await forceRoomSector(roomSectors.bareSector, "bare");
   check(
     "forcing a bare sector leaves the room bone dry within a frame",
-    bareRoom !== null && bareRoom.name.startsWith("bare") && bareRoom.wet === 0,
+    bareRoom !== null && bareRoom.name === "bare" && bareRoom.wet === 0,
     JSON.stringify(bareRoom),
   );
 }
@@ -531,7 +707,7 @@ if (roomSectors.rockSector >= 0) {
   const rockRoom = await forceRoomSector(roomSectors.rockSector, "rocks");
   check(
     "forcing a rocks sector gives the room something to answer back with",
-    rockRoom !== null && rockRoom.name.startsWith("rocks") && rockRoom.wet > 0,
+    rockRoom !== null && rockRoom.name === "rocks" && rockRoom.wet > 0,
     JSON.stringify(rockRoom),
   );
 }
@@ -594,6 +770,10 @@ check(
   stern.starboard === 1,
   `sternSign(π/2, 0)=${stern.starboard}`,
 );
+
+// One last reset before the shell's own assertions begin: everything from here
+// down reads `mode`, and the blocks above it are long. See `holdTitle`.
+await holdTitle();
 
 // ── the deck log ────────────────────────────────────────────────────────────
 // `L` is a display key, so it must reach the switch without launching anything
@@ -798,15 +978,27 @@ check(
 // `!= null` deliberately, not `!== null`: before this field exists at all,
 // `window.__sound.lastPing` reads back `undefined`, and `undefined !== null`
 // is true — a strict check would report a ping before the feature exists.
+//
+// The wave is waited for explicitly rather than assumed. "With hostiles up" is
+// this block's own precondition and it was not being checked, so an empty
+// scanner — nothing to sweep across, nothing to paint, nothing to ping —
+// reported itself as the ear not hearing the sweep. The budget is wider than
+// one revolution for the same reason every other wait here is: the sweep is
+// `dt`-driven and a wall-clock second is not a fixed number of them.
+const pingWave = await waitFor((s) => s.hostiles > 0, 20000);
 let pingSeen = await page.evaluate(() => window.__sound.lastPing != null);
 {
-  const deadline = Date.now() + 6000;
+  const deadline = Date.now() + 20000;
   while (!pingSeen && Date.now() < deadline) {
     await page.waitForTimeout(100);
     pingSeen = await page.evaluate(() => window.__sound.lastPing != null);
   }
 }
-check("the scanner's own sweep reaches the ear: lastPing records after a wave is up", pingSeen);
+check(
+  "the scanner's own sweep reaches the ear: lastPing records after a wave is up",
+  pingSeen,
+  `hostiles=${pingWave.hostiles}`,
+);
 
 // ── shoot something ─────────────────────────────────────────────────────────
 // Park a hostile dead ahead at close range rather than sweeping and hoping:
@@ -836,6 +1028,18 @@ const before = (await probe()).torpedoes;
 await page.keyboard.press("x");
 state = await waitFor((s) => s.torpedoes === before - 1, 5000);
 check("torpedo consumes ammunition", state.torpedoes === before - 1, `${before} → ${state.torpedoes}`);
+
+// ── event lights, in a real firefight ───────────────────────────────────────
+// The pool's own contract is asserted on the title screen (`checkEventLightPool`);
+// this is the other half — that the *game* reaches it. `weapons.ts`,
+// `shieldFx.ts` and `warpFx.ts` all take the sink as an optional argument and
+// degrade silently to strokes-only without it, which is exactly the shape of
+// wiring that can be quietly disconnected with nothing on screen looking wrong:
+// the bloom and the debris carry the explosion either way, and only the lit
+// hulls around it stop answering.
+await page.keyboard.down(" ");
+await checkEventLightsInCombat({ page, check }, 90);
+await page.keyboard.up(" ");
 
 // ── debris ──────────────────────────────────────────────────────────────────
 // Kill something outright and confirm the hull comes apart into strokes.
@@ -913,7 +1117,12 @@ await page.screenshot({ path: `${OUT}/altitude.png` });
 // a starved ship sinks on its own, and a check taken after that would pass
 // whether or not releasing does anything.
 await page.keyboard.up("q");
-state = await waitFor((s) => s.altitude < 0.05, 8000);
+// A longer budget than the climb's, and the asymmetry is the ceiling: the climb
+// only has to *pass* 3 units, while this has to come all the way back from 14 —
+// and the return eases in rather than dropping at a constant rate, so the last
+// unit is the slowest part of it. Observed at 1.63 after eight seconds, which
+// is the descent working and the stopwatch too short.
+state = await waitFor((s) => s.altitude < 0.05, 25000);
 check("releasing returns the ship to the floor", state.altitude < 0.05, `alt=${state.altitude}`);
 
 // Hostiles use the slab too — one the player alone could reach would make
@@ -973,13 +1182,22 @@ const hq = await page.evaluate(async () => {
   const between = { line: d.line, hostiles: window.__fleet.hostiles.length };
 
   // And speaks once a wave is up. The wave arrives on its own after the break.
+  //
+  // Waited for in two stages rather than one, because the single loop below
+  // conflated them: "HQ has not spoken" and "there is nothing for HQ to speak
+  // over" both look like `!d.line`, and when the spawn was the slow half the
+  // failure reported was the dispatch. The wave first, on its own budget, and
+  // only then the clock.
   s.wave = 6;
-  for (let i = 0; i < 120 && !d.line; i++) {
+  for (let i = 0; i < 400 && window.__fleet.hostiles.length === 0; i++) await wait(50);
+  const spawned = window.__fleet.hostiles.length;
+  for (let i = 0; i < 200 && !d.line; i++) {
     d.next = 0;
     await wait(50);
   }
   return {
     between,
+    spawned,
     line: d.line,
     timer: d.timer,
     hostiles: window.__fleet.hostiles.length,
@@ -993,7 +1211,7 @@ check(
 check(
   "...and cuts in during one",
   typeof hq.line === "string" && hq.line.startsWith("HQ:") && hq.hostiles > 0,
-  `line=${hq.line} hostiles=${hq.hostiles}`,
+  `line=${hq.line} hostiles=${hq.hostiles} (spawned=${hq.spawned})`,
 );
 // Its own row, its own clock: the message line is free to carry something else
 // at the same time, which is the change that let this land mid-fight at all.
@@ -1050,7 +1268,37 @@ check(
 );
 // The load-bearing one. A brace charged to the single pool would be a fifth
 // claimant on it, and unaffordable exactly when it is wanted.
-check("...and costs no energy", brace.energy >= 0.6, `energy=${brace.energy}`);
+//
+// Measured in the tick the brace happens, not across the 120 ms above, and that
+// is what makes it deterministic — this is the flake `docs/todo.md` §6.2 records
+// as "missed by as little as 0.0003", and it was never scheduling sensitivity.
+// It is a real interaction: the brace empties three facings, passive shield
+// regen immediately starts refilling them, and shield regen draws on the same
+// single pool. So over any elapsed time at all, `energy` is the sum of the
+// reserve's own regen and a draw the brace *caused but did not charge for*, and
+// which of the two wins depends on how many frames landed in the window. That
+// is the game working, and it is not what "the brace costs no energy" means.
+//
+// `Ship.brace()` is a pure method with no clock in it, so calling it inside one
+// `evaluate` — no frame between the two reads — measures exactly the claim: the
+// tap itself is free. The keyboard path is still what the two checks above
+// exercise, so the `Z` binding is not left untested.
+const braceCost = await page.evaluate(() => {
+  const p = window.__player;
+  p.energy = 0.6;
+  p.shields.fore = 0.5;
+  p.shields.starboard = 1;
+  p.shields.aft = 1;
+  p.shields.port = 1;
+  const energyBefore = p.energy;
+  const result = p.brace();
+  return { result, energyBefore, energyAfter: p.energy, fore: p.shields.fore };
+});
+check(
+  "...and costs no energy — exactly none, in the tick it happens",
+  braceCost.result === "braced" && braceCost.energyAfter === braceCost.energyBefore,
+  `${braceCost.result}: ${braceCost.energyBefore} → ${braceCost.energyAfter}, fore=${braceCost.fore}`,
+);
 await page.screenshot({ path: `${OUT}/braced.png` });
 
 // The surplus leaks, which is what keeps this a panic button and not a stance.
@@ -1260,8 +1508,30 @@ await page.screenshot({ path: `${OUT}/cloaked.png` });
 // for the same reason the HQ dispatch check above does: real seconds, not
 // simulated ones, are what `dt`-scaled decay runs against.
 const shroudTest = await page.evaluate(async () => {
-  const target = window.__fleet.hostiles.find((h) => h.hidden);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Selected by *class*, not by `hidden`, and that is the fix for the second
+  // flake in `docs/todo.md` §6.2 — the one that "wears three names".
+  //
+  // `hidden` is `cloak > HIDDEN_AT`, and a Shroud spends part of every 3.4s
+  // cycle at `cloak = 0` while it decloaks to strike. So a search on `hidden`
+  // is a search on the phase the one Shroud on the board happens to be in at
+  // the instant the previous block's `waitFor` returned and this `evaluate`
+  // round-tripped — which is a coin flip, and when it comes up empty all three
+  // assertions below fail together. `spec.cloak` is the class, not the phase,
+  // and it is true of a Shroud at every point in its cycle.
+  //
+  // Polled for as well, so a Shroud that has not spawned yet is waited for
+  // rather than missed; and once found it is *set* hidden, so the strip below
+  // is a real observation and cannot pass by the accident of catching one
+  // mid-strike with the cloak already down.
+  let target = null;
+  for (let i = 0; i < 40 && target === null; i++) {
+    target = window.__fleet.hostiles.find((h) => h.spec.cloak) ?? null;
+    if (!target) await wait(100);
+  }
   if (!target) return { found: false };
+  target.cloak = 1;
 
   const tmpl = window.__player.velocity;
   window.__session.comet.show({
@@ -1275,7 +1545,6 @@ const shroudTest = await page.evaluate(async () => {
     drift: tmpl.clone().set(0, 0, 0),
   });
 
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   let cloak = target.cloak;
   let hidden = target.hidden;
   for (let i = 0; i < 60 && cloak >= 0.05; i++) {
@@ -2268,6 +2537,13 @@ await page.evaluate(() => {
   window.__stage.bloom.enabled = true;
   window.__stage.phosphor.enabled = true;
   window.__stage.crt.enabled = true;
+  // "Every effect on" now includes the three the overhaul added, which the
+  // setup at the top of this file switches off for the assertions. A beauty
+  // shot taken without them is a picture of the harness rather than of the
+  // game.
+  if (window.__stage.taa) window.__stage.taa.enabled = true;
+  if (window.__stage.godRays) window.__stage.godRays.enabled = true;
+  window.__stage.renderer.shadowMap.enabled = true;
   window.__stage.setSize(1280, 800);
 });
 await page.waitForTimeout(2500);
@@ -2326,6 +2602,11 @@ await page.evaluate(() => {
   window.__stage.bloom.enabled = false;
   window.__stage.phosphor.enabled = false;
   window.__stage.crt.enabled = false;
+  // The overhaul's own three, put back down for the same reason and with the
+  // same defensiveness as the setup at the top of this file.
+  if (window.__stage.taa) window.__stage.taa.enabled = false;
+  if (window.__stage.godRays) window.__stage.godRays.enabled = false;
+  window.__stage.renderer.shadowMap.enabled = false;
   window.__stage.setSize(640, 400);
 });
 await page.waitForTimeout(2200);
@@ -2484,13 +2765,19 @@ const theirsAfterForce = await page.evaluate(
 check("the board is forced to a win", theirsAfterForce === 0, `theirs remaining=${theirsAfterForce}`);
 
 await page.evaluate(() => { window.__player.hull = 0; });
-// A longer budget than the identical wait near the top of this file: this is
-// the same 2.45 game-second drift by the same dt-clamped clock, but by now
-// the page has been running one long-lived tab through everything above —
-// hundreds of debris shards, a reload, several restarts — and SwiftShader's
-// per-frame cost has grown with it, so real time buys less game time here
-// than it did at the top of the run.
-state = await waitFor((s) => s.death === "tally", 45000);
+// Waited on the death sequence's own clock rather than on a wall-clock budget —
+// see `waitForProgress`. This is `docs/todo.md` §6.2's third flake, and the
+// diagnosis recorded there is right and the remedy was not: the budget was
+// widened from 20 s to 45 s and it recurred anyway, because 2.45 *game* seconds
+// costs whatever SwiftShader charges for them, and by this point in the file
+// that price is nobody's constant. `DeathSequence.time` is `dt`-driven and
+// monotonic, so a machine that is merely slow keeps advancing it and gets as
+// long as it needs; one that has actually stopped advancing it fails in eight
+// seconds instead of forty-five.
+state = await waitForProgress(
+  (s) => s.death === "tally",
+  () => window.__session.death.time,
+);
 check("the forced win still reaches the tally", state.death === "tally", `phase=${state.death}`);
 check(
   "...with no epilogue yet — it opens at the command handoff, not at death",

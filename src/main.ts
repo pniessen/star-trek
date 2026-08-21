@@ -7,6 +7,7 @@ import { Nebula } from "./render/Nebula.js";
 import { Planet } from "./render/Planet.js";
 import { planLight, shadeAt, RIG, type SectorLight } from "./render/light.js";
 import { EventLights } from "./render/eventLights.js";
+import { governor } from "./render/governor.js";
 import { installShadows } from "./render/shadows.js";
 import type { LightSink } from "./game/lightSink.js";
 import { drawWarpFx, resetWarpFx } from "./game/warpFx.js";
@@ -44,7 +45,7 @@ import { Presentation } from "./game/presentation.js";
 import { sound } from "./audio/sound.js";
 import type { DeathSequence } from "./game/death.js";
 import { contacts, drawHud } from "./hud/draw.js";
-import { BLOCKS, Tuner, patch } from "./game/tuning.js";
+import { BLOCKS, Tuner, patch, registerPasses } from "./game/tuning.js";
 import { load, save } from "./chart/persistence.js";
 import { colOf, indexOf, inBounds, neighbours, rowOf } from "./chart/sectors.js";
 import { DECISIONS, decide } from "./chart/command.js";
@@ -69,6 +70,22 @@ try {
 } catch (error) {
   fail(error);
 }
+
+/**
+ * The frame-budget governor, attached to the live GL context.
+ *
+ * Handed the context so it can use `EXT_disjoint_timer_query_webgl2` and
+ * measure *work* rather than wall-clock. That distinction is the whole reason
+ * this can exist at all: `FRAME_CAP` below holds 60 by skipping callbacks, so
+ * the interval between frames is ~16.67 ms whether the GPU spent 4 ms or 16 —
+ * a governor reading the interval would conclude every machine is permanently
+ * exactly at budget and never move a dial.
+ *
+ * Dials are registered as the systems that own them land. Nothing is
+ * registered yet, and an unregistered governor is inert apart from measuring,
+ * which is the correct state for it to ship in until each dial has been flown.
+ */
+governor.attach(stage.renderer.getContext() as WebGL2RenderingContext);
 
 // ── world ──────────────────────────────────────────────────────────────────
 
@@ -498,6 +515,10 @@ const settings = {
  * numbers it moves are the game's, not a run's.
  */
 const tuner = new Tuner();
+
+// The post chain's numbers are instances rather than module constants, so the
+// console can only be told about them once `stage` exists. See `registerPasses`.
+registerPasses(stage);
 
 const held = new Set<string>();
 
@@ -1092,6 +1113,10 @@ function frame(now: number): void {
     if (now - last < interval * FRAME_CAP.tolerance) return;
   }
 
+  // After the cap's own early return, so a skipped callback is not a frame the
+  // governor thinks it measured.
+  governor.beginFrame(now);
+
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   time += dt;
@@ -1652,8 +1677,13 @@ function frame(now: number): void {
   warpStretch += (wantStretch - warpStretch) * (1 - Math.exp(-rate * dt));
   starfield.stretch(warpStretch, player.heading);
 
+  // Bracketing the render alone, not the whole frame body: the GPU timer
+  // measures the span between two markers in the command stream, so opening it
+  // around game logic that issues no GL commands would fold that idle time into
+  // the measurement — the wall-clock trap coming back in by the side door.
+  governor.beginRender();
   stage.render(dt);
-  requestAnimationFrame(frame);
+  governor.endFrame();
 }
 
 if (DEBUG_PROBE) {
@@ -1875,6 +1905,15 @@ const sceneryHandles = [giant, planet, moon, sunHero, asteroids, shoals] as cons
  * assert the console's keyboard does not overlap the ship's, which is the one
  * property of this feature that could regress without anything looking wrong.
  */
+/**
+ * The governor, on every host for the reason `__tuning` and `__scenery` are:
+ * the playtest harness is a consumer and does not run on `localhost`. It needs
+ * `pin(4)` in particular — software GL makes every frame hundreds of
+ * milliseconds, and an honest governor would correctly but uselessly collapse
+ * to minimum before the harness could assert anything about what is drawn.
+ */
+(window as unknown as Record<string, unknown>).__governor = governor;
+
 (window as unknown as Record<string, unknown>).__tuning = {
   tuner,
   patch,

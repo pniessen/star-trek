@@ -6,6 +6,15 @@ import { HIT_STOP } from "./hitStop.js";
 import { LOOM } from "./loom.js";
 import { BRACE, Ship } from "./Ship.js";
 import { NEAR_MISS, PACING } from "./session.js";
+import { GIANT } from "../render/GasGiant.js";
+import { NEBULA } from "../render/Nebula.js";
+import { PLANET } from "../render/Planet.js";
+import { SKY } from "../render/Backdrop.js";
+import { COMET_MEDIA } from "../render/CometMedium.js";
+import { SKY_BODY } from "../render/SkyBodies.js";
+import { MEDIA } from "../render/shaders/media.js";
+import { SHADOWS } from "../render/shadows.js";
+import { SHOAL_MEDIA } from "../render/Shoals.js";
 import { PHASER } from "./weapons.js";
 
 /**
@@ -152,7 +161,7 @@ function decimalsFor(step: number): number {
  * the one encounter whose entire character rests on a single number (`rise`).
  * The mix is its own page because it is judged with the eyes shut.
  */
-export const BLOCKS: readonly Block[] = [
+const BLOCK_LIST: Block[] = [
   {
     title: "FLIGHT MODEL",
     knobs: [
@@ -471,6 +480,402 @@ export const BLOCKS: readonly Block[] = [
     ],
   },
   {
+    title: "THE SKY",
+    knobs: [
+      knob("src/render/Nebula.ts", NEBULA, "brightness", {
+        label: "BRIGHTNESS",
+        min: 0,
+        max: 2,
+        step: 0.02,
+        question: "Glows, or blooms and washes the HUD out. 0.5 linear is the line.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "bandWidth", {
+        label: "BAND WIDTH",
+        min: 0.05,
+        max: 1.2,
+        step: 0.02,
+        question: "A galactic plane, or an evenly foggy sky.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "laneDepth", {
+        label: "LANE DEPTH",
+        min: 0,
+        max: 1,
+        step: 0.02,
+        question: "THE number. The dark half is what makes it read as dust.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "laneWidth", {
+        label: "LANE WIDTH",
+        min: 0.05,
+        max: 1,
+        step: 0.02,
+        question: "A cut through the glow, or a second band of its own.",
+      }),
+    ],
+  },
+  {
+    title: "SKY BODIES",
+    knobs: [
+      knob("src/render/SkyBodies.ts", SKY_BODY, "distanceDim", {
+        label: "DISTANCE DIM",
+        min: 0.4, max: 1, step: 0.02,
+        question: "Further away, or the same body twice? Also what keeps the sky under bloom.",
+      }),
+      knob("src/render/SkyBodies.ts", SKY_BODY, "fullAt", {
+        label: "FULL AT",
+        min: 3, max: 12, step: 0.25,
+        question: "How big must a body be before it may wear full hero saturation?",
+      }),
+      knob("src/render/SkyBodies.ts", SKY_BODY, "mutedAt", {
+        label: "MUTED BELOW",
+        min: 0.5, max: 3, step: 0.1,
+        question: "Below what size is a body indistinguishable from an unresolved return?",
+      }),
+      knob("src/render/SkyBodies.ts", SKY_BODY, "minSaturation", {
+        label: "MIN SAT",
+        min: 0.1, max: 1, step: 0.02,
+        question: "How grey a small moon has to be. The axis the colour rule actually cares about.",
+      }),
+      knob("src/render/SkyBodies.ts", SKY_BODY, "minBrightness", {
+        label: "MIN BRIGHT",
+        min: 0.3, max: 1, step: 0.02,
+        question: "The counterweight — present but invisible through phosphor and CRT is the failure mode.",
+      }),
+      knob("src/render/SkyBodies.ts", SKY_BODY, "warpTimeScale", {
+        label: "WARP WIND-UP",
+        min: 0, max: 20, step: 0.5,
+        question: "Should a body's own weather wind up with the drive?",
+      }),
+      knob("src/render/Backdrop.ts", SKY, "minElevation", {
+        label: "BAND FLOOR",
+        min: 2, max: 8, step: 0.5,
+        question: "Newly load-bearing: bodies now sit where the scanner overlay does, and they are bright.",
+      }),
+      knob("src/render/Backdrop.ts", SKY, "maxElevation", {
+        label: "BAND CEILING",
+        min: 14, max: 24, step: 0.5,
+        question: "The other edge of that band. The HUD still reads over them — this decides it.",
+      }),
+      knob("src/render/Backdrop.ts", SKY, "separation", {
+        label: "SEPARATION",
+        min: 25, max: 60, step: 1,
+        question: "Unchanged in meaning, but sky bodies are physically large objects now.",
+      }),
+    ],
+  },
+  {
+    title: "THE NEBULA",
+    knobs: [
+      knob("src/render/Nebula.ts", NEBULA, "detail", {
+        label: "DETAIL",
+        // Widened from 0.4-12 when the bake landed. This used to set the
+        // frequency of the *whole* nebula; it now sets only the live
+        // high-frequency layer laid over the baked cube, which wants a far
+        // finer field — the default moved 2.4 to 9 in the same change, and a
+        // range whose default sits three quarters of the way along it is a
+        // range that has stopped being about the thing it names.
+        min: 2,
+        max: 40,
+        step: 0.5,
+        question: "Sharp at screen resolution, or the bake's own resolution showing.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "detailAmount", {
+        label: "DETAIL MIX",
+        min: 0,
+        max: 1.5,
+        step: 0.02,
+        question: "How much live layer over the soft bake. Zero is the cube alone.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "depth", {
+        label: "EXTINCTION",
+        min: 0,
+        max: 3,
+        step: 0.05,
+        question: "THE number. Dust in front of gas, or a sum. At 0 it is the old painted look.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "emission", {
+        label: "EMISSION",
+        min: 0,
+        max: 3,
+        step: 0.05,
+        question: "How loud the ionised gas is.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "scatter", {
+        label: "SCATTER",
+        min: 0,
+        max: 3,
+        step: 0.05,
+        question: "How much blue haze the dust throws back.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "teal", {
+        label: "O III",
+        min: 0,
+        max: 1,
+        step: 0.02,
+        question: "Teal against H-alpha. Subtle at the default — most wants a human eye.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "filament", {
+        label: "FILAMENT",
+        min: 0,
+        max: 2.5,
+        step: 0.05,
+        question: "Gas that has been sheared, or weather.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "starPower", {
+        label: "STAR",
+        min: 0,
+        max: 4,
+        step: 0.05,
+        question: "Does the embedded star light its own cavity walls, or just sit there.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "cavity", {
+        label: "CAVITY",
+        min: 0,
+        max: 1.2,
+        step: 0.02,
+        question: "A blown hole, or a star in fog.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "warp", {
+        label: "WARP",
+        min: 0,
+        max: 4,
+        step: 0.05,
+        question: "Curls and festoons at height; a smudge at zero.",
+      }),
+      knob("src/render/Nebula.ts", NEBULA, "ambient", {
+        label: "AMBIENT",
+        min: 0,
+        max: 0.5,
+        step: 0.01,
+        question: "Deep sky away from the plane. Zero makes the band's edge a seam.",
+      }),
+    ],
+  },
+  {
+    title: "THE GIANT",
+    knobs: [
+      knob("src/render/GasGiant.ts", GIANT, "diffPole", {
+        label: "SHEAR",
+        min: 0.4, max: 1, step: 0.01,
+        question: "Belts sliding past each other, or the texture coming apart.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "jetDrift", {
+        label: "JET DRIFT",
+        min: 0, max: 0.28, step: 0.01,
+        question: "Do adjacent belts disagree in direction, or only in speed?",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "vortexSpinRate", {
+        label: "STORM SPIN",
+        min: 0, max: 0.2, step: 0.005,
+        question: "Motion, or a pulse. The ceiling is the no-blink rule, not taste.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "ovalSpinRate", {
+        label: "OVAL SPIN",
+        min: 0, max: 0.3, step: 0.005,
+        question: "A second storm reading as weather, or as a blemish.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "terminatorGlow", {
+        label: "SUNSET",
+        min: 0, max: 1, step: 0.02,
+        question: "Does the sunset band beat the belts it crosses?",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "terminatorWidth", {
+        label: "SUNSET WIDTH",
+        min: 0.12, max: 0.5, step: 0.01,
+        question: "A line, or half the lit face.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "limbIntensity", {
+        label: "LIMB",
+        min: 0.6, max: 2, step: 0.02,
+        question: "How spectacular a backlit body gets before bloom eats the silhouette.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "limbForward", {
+        label: "LIMB SCATTER",
+        min: 0, max: 1.5, step: 0.02,
+        question: "Forward scattering — the reason a crescent glows.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "limbAsymmetry", {
+        label: "LIMB PHASE",
+        min: 0.4, max: 0.9, step: 0.01,
+        question: "How tightly the scatter hugs the star's own direction.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "auroraStrength", {
+        label: "AURORA",
+        min: 0, max: 2.5, step: 0.05,
+        question: "Worth its brightness on a body always seen edge-on from the pole?",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "auroraWidth", {
+        label: "AURORA WIDTH",
+        min: 0.04, max: 0.2, step: 0.005,
+        question: "A polar band projects to almost nothing from the equatorial plane.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "auroraLat", {
+        label: "AURORA LAT",
+        min: 0.7, max: 0.95, step: 0.01,
+        question: "How far down from the pole the curtain reaches.",
+      }),
+      knob("src/render/GasGiant.ts", GIANT, "auroraShift", {
+        label: "AURORA HUE",
+        min: 0, max: 1, step: 0.02,
+        question: "The one place a body leans toward a hue the HUD reserves. Wants a ruling.",
+      }),
+    ],
+  },
+  {
+    title: "THE RINGS",
+    knobs: [
+      knob("src/render/Planet.ts", PLANET, "ringDepth", {
+        label: "RING DEPTH",
+        min: 0.5, max: 3, step: 0.05,
+        question: "Opaque B ring and a black shadow, or a system you see the planet through.",
+      }),
+      knob("src/render/Planet.ts", PLANET, "ambientFloor", {
+        label: "ECLIPSE FLOOR",
+        min: 0.1, max: 0.4, step: 0.01,
+        question: "How black an eclipse may be before the night side is a hole.",
+      }),
+      knob("src/render/Planet.ts", PLANET, "ringshine", {
+        label: "RINGSHINE",
+        min: 0, max: 0.6, step: 0.02,
+        question: "Weakest measured effect in the pass. Worth keeping, or cut?",
+      }),
+      knob("src/render/Planet.ts", PLANET, "shadowSoft", {
+        label: "SHADOW EDGE",
+        min: 0.01, max: 0.2, step: 0.005,
+        question: "A hard cast edge, or a penumbra.",
+      }),
+      knob("src/render/Planet.ts", PLANET, "ringForward", {
+        label: "RING SCATTER",
+        min: 0, max: 1.5, step: 0.02,
+        question: "Backlit rings lighting up — the Cassini shot's other half.",
+      }),
+      knob("src/render/Planet.ts", PLANET, "ringBackscatter", {
+        label: "RING FRONT",
+        min: 0.4, max: 1.5, step: 0.02,
+        question: "How bright the rings are seen from the star's own side.",
+      }),
+      knob("src/render/Planet.ts", PLANET, "rotationRate", {
+        label: "SPIN",
+        min: 0, max: 0.08, step: 0.002,
+        question: "Alive, or spinning visibly enough to notice it is a loop.",
+      }),
+      knob("src/render/Planet.ts", PLANET, "diffPole", {
+        label: "SHEAR",
+        min: 0.5, max: 1, step: 0.01,
+        question: "The giant's own question, on a smaller body.",
+      }),
+    ],
+  },
+  {
+    title: "THE GAS",
+    knobs: [
+      knob("src/render/shaders/media.ts", MEDIA, "msFalloff", {
+        label: "MULTI-SCATTER",
+        min: 0.2, max: 0.8, step: 0.02,
+        question: "Low is single-scatter's sharp searchlight lobe; high is flat and evenly lit.",
+      }),
+      knob("src/render/shaders/media.ts", MEDIA, "msEccentricity", {
+        label: "MS SPREAD",
+        min: 0.3, max: 0.9, step: 0.02,
+        question: "How fast bounced light forgets its direction. Decides whether anisotropy can go physical.",
+      }),
+      knob("src/render/shaders/media.ts", MEDIA, "anisotropy", {
+        label: "PHASE",
+        min: 0, max: 0.8, step: 0.02,
+        question: "The forward lobe, before it reads as a searchlight from one heading and nothing from the other.",
+      }),
+      knob("src/render/shaders/media.ts", MEDIA, "lights", {
+        label: "LIGHTS",
+        min: 0, max: 6, step: 1,
+        question: "Four lights roughly triple the shader. This is the lever before `steps`, not after.",
+      }),
+      knob("src/render/shaders/media.ts", MEDIA, "growth", {
+        label: "STEP GROWTH",
+        min: 1, max: 1.2, step: 0.005,
+        question: "Does the far end dissolve gracefully, or shed detail?",
+      }),
+      knob("src/render/shaders/media.ts", MEDIA, "cutoff", {
+        label: "CUTOFF",
+        min: 0.001, max: 0.05, step: 0.001,
+        question: "How early may a dense medium stop marching itself.",
+      }),
+      knob("src/render/CometMedium.ts", COMET_MEDIA, "sigma", {
+        label: "TAIL DENSITY",
+        min: 0.005, max: 0.08, step: 0.001,
+        question: "Haze you fly through, or a wall. The one here that touches play.",
+      }),
+      knob("src/render/CometMedium.ts", COMET_MEDIA, "keyGain", {
+        label: "TAIL KEY",
+        min: 0, max: 6, step: 0.1,
+        question: "How much does turning toward the star change the tail?",
+      }),
+      knob("src/render/CometMedium.ts", COMET_MEDIA, "dustFrom", {
+        label: "TAIL DUST LO",
+        min: 0.3, max: 0.7, step: 0.01,
+        question: "Dust is a decorrelated field now — dark lane no longer coincides with density.",
+      }),
+      knob("src/render/CometMedium.ts", COMET_MEDIA, "dustTo", {
+        label: "TAIL DUST HI",
+        min: 0.7, max: 1, step: 0.01,
+        question: "The other end of that range. Worth re-judging by eye since the fields split.",
+      }),
+      knob("src/render/CometMedium.ts", COMET_MEDIA, "noiseScale", {
+        label: "TAIL SCALE",
+        min: 0.06, max: 0.2, step: 0.005,
+        question: "The coarse row now puts a 127-unit feature in frame; the old best scale may not hold.",
+      }),
+      knob("src/render/Shoals.ts", SHOAL_MEDIA, "sigma", {
+        label: "SHOAL DENSITY",
+        min: 0.005, max: 0.06, step: 0.001,
+        question: "A curtain that hides a hull, or one you barely notice.",
+      }),
+      knob("src/render/Shoals.ts", SHOAL_MEDIA, "dustFrom", {
+        label: "SHOAL DUST LO",
+        min: 0.3, max: 0.7, step: 0.01,
+        question: "A shoal has no glowing head — bright knot beside dark knot is its only contrast.",
+      }),
+      knob("src/render/Shoals.ts", SHOAL_MEDIA, "dustTo", {
+        label: "SHOAL DUST HI",
+        min: 0.7, max: 1, step: 0.01,
+        question: "The other end. Matters more here than on the comet.",
+      }),
+    ],
+  },
+  {
+    title: "SHADOWS",
+    knobs: [
+      knob("src/render/shadows.ts", SHADOWS, "extent", {
+        label: "EXTENT",
+        min: 60, max: 400, step: 5,
+        question: "Where does the cutoff show while you are still shooting at what is inside it?",
+      }),
+      knob("src/render/shadows.ts", SHADOWS, "mapSize", {
+        label: "MAP SIZE",
+        min: 1024, max: 4096, step: 1024,
+        question: "Can you see 2048 against 4096 at combat range? 2048 gives back 0.25 ms.",
+      }),
+      knob("src/render/shadows.ts", SHADOWS, "normalBias", {
+        label: "NORMAL BIAS",
+        min: 0, max: 0.5, step: 0.01,
+        question: "Measured acne is zero at 0 and shadows shrink as this rises. Is any of it earned?",
+      }),
+      knob("src/render/shadows.ts", SHADOWS, "bias", {
+        label: "BIAS",
+        min: -0.002, max: 0, step: 0.0001,
+        question: "Backstop for star-grazing facets. Does anything stripe at 0?",
+      }),
+      knob("src/render/shadows.ts", SHADOWS, "radius", {
+        label: "SOFTNESS",
+        min: 0, max: 4, step: 0.1,
+        question: "A softer edge, or a small rock's shadow dissolving into nothing.",
+      }),
+      knob("src/render/shadows.ts", SHADOWS, "depthPad", {
+        label: "DEPTH PAD",
+        min: 100, max: 800, step: 25,
+        question: "Effectively fixed. Only interesting if a caster gets clipped out of the depth window.",
+      }),
+    ],
+  },
+  {
     title: "THE MIX",
     knobs: [
       busKnob("weapon", {
@@ -548,7 +953,162 @@ export const BLOCKS: readonly Block[] = [
  * written again. Keyed by the knob object, which is stable for the process.
  */
 const BASELINE = new Map<Knob, number>();
-for (const block of BLOCKS) for (const k of block.knobs) BASELINE.set(k, k.read());
+function captureBaseline(block: Block): void {
+  for (const k of block.knobs) BASELINE.set(k, k.read());
+}
+for (const block of BLOCK_LIST) captureBaseline(block);
+
+/**
+ * The pages, including any registered after module load. See `registerPasses`.
+ */
+export const BLOCKS: readonly Block[] = BLOCK_LIST;
+
+/**
+ * Add the post chain's own numbers, once the passes exist.
+ *
+ * Everything else on this console is a module-level constant, reachable by
+ * importing it. The post chain is not: `bloom`, `phosphor` and `toneMap` are
+ * *instances* built by `Stage` against a live renderer, so there is nothing to
+ * import until `main.ts` has made one. A registration call is the honest shape
+ * for that — the alternative was a lazy getter per knob, which would have made
+ * every other knob on the list look like it might also be lazy.
+ *
+ * Baselines are captured here rather than at module load for the same reason:
+ * these knobs did not exist then. `patch()` therefore reports them against the
+ * values their own files declare, exactly like every other knob.
+ *
+ * These are the numbers the pass that introduced them says to fly first —
+ * `octaveGain` above all, which decides whether the bloom is a redistribution
+ * of the frame's light or a fog laid over it.
+ */
+export function registerPasses(passes: {
+  bloom: { octaveGain: number; strength: number };
+  phosphor: { decay: number; historyCeiling: number };
+  toneMap: { exposure: number; desaturation: number };
+  taa: { feedback: number; clampGamma: number; jitterScale: number; jumpDistance: number };
+  godRays: {
+    strength: number;
+    threshold: number;
+    decay: number;
+    occluderNear: number;
+    occluderFar: number;
+    eventStrength: number;
+    eventFalloff: number;
+  };
+}): void {
+  const block: Block = {
+    title: "THE GLASS",
+    knobs: [
+      knob("src/render/BloomPass.ts", passes.bloom, "octaveGain", {
+        label: "BLOOM GAIN",
+        min: 0,
+        max: 2,
+        step: 0.02,
+        question: "Redistributes the frame's light, or fogs it. 0.9 matched the old total.",
+      }),
+      knob("src/render/BloomPass.ts", passes.bloom, "strength", {
+        label: "BLOOM",
+        min: 0,
+        max: 3,
+        step: 0.02,
+        question: "How much glow a stroke throws before it stops being a stroke.",
+      }),
+      knob("src/render/PhosphorPass.ts", passes.phosphor, "decay", {
+        label: "PHOSPHOR",
+        min: 0,
+        max: 0.98,
+        step: 0.01,
+        question: "A vector monitor's trail, or a smear that never clears.",
+      }),
+      knob("src/render/PhosphorPass.ts", passes.phosphor, "historyCeiling", {
+        label: "TRAIL CEILING",
+        min: 1,
+        max: 12,
+        step: 0.25,
+        question: "How long a detonation burns in the trail. Reasoned, never flown.",
+      }),
+      knob("src/render/ToneMapPass.ts", passes.toneMap, "exposure", {
+        label: "EXPOSURE",
+        min: 0.2,
+        max: 4,
+        step: 0.02,
+        question: "Deliberately constant, not adaptive — brightness is information here.",
+      }),
+      knob("src/render/ToneMapPass.ts", passes.toneMap, "desaturation", {
+        label: "WHITE POINT",
+        min: 0,
+        max: 1,
+        step: 0.02,
+        question: "How hard a hot core goes white. Costs class-hue legibility as it climbs.",
+      }),
+    ],
+  };
+  const temporal: Block = {
+    title: "TAA & RAYS",
+    knobs: [
+      knob("src/render/TaaPass.ts", passes.taa, "feedback", {
+        label: "TAA HISTORY",
+        min: 0.6, max: 0.95, step: 0.01,
+        question: "Where does more history stop being a cleaner edge and start being drag?",
+      }),
+      knob("src/render/TaaPass.ts", passes.taa, "clampGamma", {
+        label: "TAA CLAMP",
+        min: 0.6, max: 2, step: 0.05,
+        question: "Tighten until crawl returns — that is where the ghost threshold really is.",
+      }),
+      knob("src/render/TaaPass.ts", passes.taa, "jitterScale", {
+        label: "TAA JITTER",
+        min: 0, max: 1.5, step: 0.05,
+        question: "Is one pixel too soft for a tube, or is softness what a tube is? Zero is a bypass.",
+      }),
+      knob("src/render/TaaPass.ts", passes.taa, "jumpDistance", {
+        label: "TAA CUT",
+        min: 10, max: 120, step: 5,
+        question: "Does a hyperwarp arrival smear — and does lowering it make ordinary flight pop?",
+      }),
+      knob("src/render/GodRayPass.ts", passes.godRays, "strength", {
+        label: "GOD RAYS",
+        min: 0, max: 1, step: 0.02,
+        question: "With a sun on screen, when does the void stop being black?",
+      }),
+      knob("src/render/GodRayPass.ts", passes.godRays, "threshold", {
+        label: "RAY SOURCE",
+        min: 0.1, max: 1, step: 0.02,
+        question: "Measured: the frame has two populations with a gap. Does a giant's limb fall below it?",
+      }),
+      knob("src/render/GodRayPass.ts", passes.godRays, "decay", {
+        label: "RAY REACH",
+        min: 0.9, max: 1, step: 0.005,
+        question: "Long even shafts, or a tight flare at the source.",
+      }),
+      knob("src/render/GodRayPass.ts", passes.godRays, "occluderNear", {
+        label: "OCCLUDE FROM",
+        min: 20, max: 600, step: 10,
+        question: "How close must a hull be to cut a shaft?",
+      }),
+      knob("src/render/GodRayPass.ts", passes.godRays, "occluderFar", {
+        label: "OCCLUDE TO",
+        min: 20, max: 600, step: 10,
+        question: "Can a hero body at its 335-unit minimum ever be mistaken for an occluder?",
+      }),
+      knob("src/render/GodRayPass.ts", passes.godRays, "eventStrength", {
+        label: "BLAST RAYS",
+        min: 0, max: 0.2, step: 0.005,
+        question: "Does a warhead throw enough through gas to earn the term, or just fog the blast?",
+      }),
+      knob("src/render/GodRayPass.ts", passes.godRays, "eventFalloff", {
+        label: "BLAST REACH",
+        min: 0.15, max: 0.8, step: 0.01,
+        question: "How far from a detonation should its own shafts reach?",
+      }),
+    ],
+  };
+  BLOCK_LIST.push(temporal);
+  captureBaseline(temporal);
+
+  BLOCK_LIST.push(block);
+  captureBaseline(block);
+}
 
 /** What the file still says, for a knob that has been moved. */
 export function baselineOf(k: Knob): number {
